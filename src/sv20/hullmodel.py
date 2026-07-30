@@ -162,6 +162,10 @@ class Boundary(object):
         return self.transom_a + self.transom_b * z
 
 
+def _same(a, b, tol=0.02):
+    return all(abs(a[k] - b[k]) <= tol for k in range(3))
+
+
 def fit_transom(points):
     """Плоскость транца: X = a + b·Z методом наименьших квадратов.
 
@@ -262,6 +266,104 @@ class Hull(object):
                               idx[(j + 1, i + 1)], idx[(j + 1, i)]])
         return {"verts": verts, "quads": quads, "rows": rows,
                 "transom_edge": transom_edge}
+
+    def closed_mesh(self, n_station=120, n_girth=28, crown_frac=0.045,
+                    ramp_mm=500.0):
+        """Замкнутое тело корпуса: обшивка, палуба и крышки на транце и в носу.
+
+        Для расчёта плавучести оболочки мало — нужен объём, а значит замкнутая
+        поверхность. Палуба на чертеже не разобрана, поэтому она строится
+        параметрически: погибь `crown_frac` от полушироты, сходящая к нулю у
+        транца, чтобы верхняя кромка транца осталась прямой, как на Ф1.
+        """
+        m = self.mesh(n_station, n_girth)
+        rows = m["rows"]                      # rows[j][i], j снизу вверх
+        ns, ng = n_station, n_girth
+
+        verts, tris = [], []
+
+        def push(p):
+            verts.append([p[0], p[1], p[2]])
+            return len(verts) - 1
+
+        stbd = [[push(rows[j][i]) for i in range(ns + 1)] for j in range(ng + 1)]
+        port = [[push((rows[j][i][0], -rows[j][i][1], rows[j][i][2]))
+                 for i in range(ns + 1)] for j in range(ng + 1)]
+
+        for j in range(ng):
+            for i in range(ns):
+                a, b = stbd[j][i], stbd[j][i + 1]
+                c, d = stbd[j + 1][i + 1], stbd[j + 1][i]
+                tris += [[d, c, b], [d, b, a]]
+                a, b = port[j][i], port[j][i + 1]
+                c, d = port[j + 1][i + 1], port[j + 1][i]
+                tris += [[a, b, c], [a, c, d]]
+
+        # --- палуба: поперечные дуги между линиями борта
+        x0 = rows[ng][0][0]
+        deck = []
+        for k in range(ng + 1):
+            u = -1.0 + 2.0 * k / ng
+            line = []
+            for i in range(ns + 1):
+                x, ys, zs = rows[ng][i]
+                ramp = min(1.0, max(0.0, (x - x0) / ramp_mm))
+                crown = crown_frac * ys * ramp
+                line.append(push((x, u * ys, zs + crown * (1.0 - u * u))))
+            deck.append(line)
+
+        for k in range(ng):
+            for i in range(ns):
+                a, b = deck[k][i], deck[k][i + 1]
+                c, d = deck[k + 1][i + 1], deck[k + 1][i]
+                tris += [[a, b, c], [a, c, d]]
+
+        # --- крышки: транец в корме и клин в носу
+        aft = ([stbd[j][0] for j in range(ng + 1)]
+               + [deck[k][0] for k in range(ng, -1, -1)]
+               + [port[j][0] for j in range(ng, -1, -1)])
+        fwd = ([stbd[j][ns] for j in range(ng + 1)]
+               + [deck[k][ns] for k in range(ng, -1, -1)]
+               + [port[j][ns] for j in range(ng, -1, -1)])
+        def dedupe(loop):
+            """Убрать соседние совпадающие точки.
+
+            Углы палубы и обшивки описаны дважды — линией борта и краем
+            палубного настила. После склейки это одна вершина, и веер по
+            такому контуру выдал бы пару рёбер, пройденных дважды в одну
+            сторону: формально дыр нет, а ориентация ломается.
+            """
+            out = []
+            for i in loop:
+                if out and _same(verts[out[-1]], verts[i]):
+                    continue
+                out.append(i)
+            while len(out) > 1 and _same(verts[out[0]], verts[out[-1]]):
+                out.pop()
+            return out
+
+        # Ориентацию крышек не задаём руками, а выводим: нормаль веера должна
+        # смотреть прочь от середины корпуса. Иначе крышка оказывается вывернутой
+        # относительно обшивки, и это не ловится проверкой на дыры — только на
+        # согласованность обхода.
+        mid_x = 0.5 * (rows[0][0][0] + rows[0][ns][0])
+        aft, fwd = dedupe(aft), dedupe(fwd)
+        for loop in (aft, fwd):
+            cx = sum(verts[i][0] for i in loop) / len(loop)
+            cy = sum(verts[i][1] for i in loop) / len(loop)
+            cz = sum(verts[i][2] for i in loop) / len(loop)
+            nx = 0.0
+            for n in range(len(loop)):
+                p, q = verts[loop[n]], verts[loop[(n + 1) % len(loop)]]
+                nx += (p[1] - cy) * (q[2] - cz) - (p[2] - cz) * (q[1] - cy)
+            outward = 1.0 if cx > mid_x else -1.0
+            flip = nx * outward < 0
+            c = push((cx, cy, cz))
+            for n in range(len(loop)):
+                a, b = loop[n], loop[(n + 1) % len(loop)]
+                tris.append([c, b, a] if flip else [c, a, b])
+
+        return {"verts": verts, "tris": tris}
 
     def station_curves(self, xs, n_girth=48):
         """Настоящие шпангоуты в плоскостях X = const — для чертежа и проверки."""

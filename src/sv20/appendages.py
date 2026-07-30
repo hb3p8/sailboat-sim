@@ -18,14 +18,20 @@ import math
 
 LEAD_DENSITY = 11340.0     # кг/м³
 STEEL_DENSITY = 7850.0
+
+# Приведённая плотность пера. Диапазон 2600–3600 назвал владелец лодки,
+# исходя из того, как перо ощущается при подъёме; берём середину.
+FIN_DENSITY = 3100.0
+FIN_DENSITY_RANGE = (2600.0, 3600.0)
 MM3_PER_M3 = 1.0e9
 
 ASSUMPTIONS = [
     "Заявленные 250 кг балласта — это вся подъёмная конструкция целиком: "
     "перо плюс бульб. Другого прочтения у цифры из обзора нет.",
     "Перо — стальной сердечник в композитной обшивке; приведённая плотность "
-    "3600 кг/м³. Сплошная сталь оставила бы бульбу три десятка килограммов, "
-    "что бессмысленно; чистый композит не даёт нужной прочности на изгиб.",
+    "3100 кг/м³. Сплошная сталь оставила бы бульбу три десятка килограммов, "
+    "что бессмысленно. Диапазон 2600–3600 указан владельцем лодки по тому, "
+    "как перо ощущается при подъёме; 3100 — середина этого диапазона.",
     "Бульб — свинцовая торпеда с удлинением 6, максимальный диаметр совмещён "
     "с наибольшей толщиной пера.",
     "Площадь пера руля принята в 1.0% обмерной парусности в бейдевинд — "
@@ -57,6 +63,26 @@ def section_area_ratio(half):
         area += 0.5 * (half[i][1] + half[i + 1][1]) * (half[i + 1][0] - half[i][0])
     tmax = max(t for _, t in half)
     return (2.0 * area) / (2.0 * tmax) if tmax > 0 else 0.0
+
+
+def resample_half(half, n):
+    """Пересчитать половину профиля на n точек со сгущением к кромкам."""
+    if n >= len(half):
+        return half
+    src = sorted(half)
+    out = []
+    for i in range(n):
+        s = (1.0 - math.cos(math.pi * i / (n - 1))) / 2.0
+        t = 0.0
+        for k in range(len(src) - 1):
+            if src[k][0] <= s <= src[k + 1][0]:
+                dx = src[k + 1][0] - src[k][0]
+                u = 0.0 if dx == 0 else (s - src[k][0]) / dx
+                t = src[k][1] + u * (src[k + 1][1] - src[k][1])
+                break
+        out.append((s, t))
+    out[-1] = (1.0, 0.0)
+    return out
 
 
 def outline(half, chord, x_le, sign_axis="y"):
@@ -108,13 +134,18 @@ class Foil(object):
         mean_sq = (c0 * c0 + c0 * c1 + c1 * c1) / 3.0
         return k * mean_sq * self.span
 
-    def mesh(self, n_span=20, n_chord=None):
-        """Замкнутая оболочка: кольца сечений плюс крышки на корне и конце."""
+    def mesh(self, n_span=20, n_chord=32):
+        """Замкнутая оболочка: кольца сечений плюс крышки на корне и конце.
+
+        Профиль пересчитывается на n_chord точек: снятый с чертежа контур
+        описан сотней вершин, и в сетке это лишний вес без пользы для формы.
+        """
+        half = resample_half(self.half, n_chord)
         rings = []
         for i in range(n_span + 1):
             v = i / float(n_span)
             c, x_le, z = self.at(v)
-            rings.append([(px, py, z) for px, py in outline(self.half, c, x_le)])
+            rings.append([(px, py, z) for px, py in outline(half, c, x_le)])
         return _loft(rings, cap_first=True, cap_last=True)
 
 
@@ -201,7 +232,7 @@ class Bulb(object):
 # ------------------------------------------------------------------ сборка
 
 def build_keel(features, z_hull_bottom, draft_max_mm, ballast_kg,
-               fin_density=3600.0, fineness=6.0):
+               fin_density=FIN_DENSITY, fineness=6.0):
     """Киль по обмеренному сечению и заявленным осадке с балластом."""
     sec = features["keel_section"]
     half = [(s, t) for s, t in sec["half_profile"]]
@@ -222,9 +253,14 @@ def build_keel(features, z_hull_bottom, draft_max_mm, ballast_kg,
             break
         fin = Foil(half, chord, chord, x_le, x_le, z_hull_bottom, z_tip)
 
+    # Смоченное перо задаёт площадь и размах для гидродинамики; полное —
+    # то, что выгружается и весит, включая уходящую в колодец часть.
+    fin_full = Foil(half, chord, chord, x_le, x_le, TRUNK_TOP_MM, fin.z_tip)
+
     return {
         "section": sec,
         "fin": fin,
+        "fin_full": fin_full,
         "bulb": bulb,
         "bulb_x_nose_mm": x_tmax + bulb.nose_frac * bulb.length,
         "fin_mass_kg": fin_kg,
@@ -237,14 +273,16 @@ def build_keel(features, z_hull_bottom, draft_max_mm, ballast_kg,
     }
 
 
+TRUNK_TOP_MM = 650.0   # верх колодца над КВЛ, примерно уровень палубы там
+
+
 def _fin_length_factor(fin, z_hull_bottom):
     """Перо длиннее смоченной части: оно уходит в колодец до палубы.
 
     Долю считаем по высоте: конструктивная длина от конца пера до верха
     колодца, смоченная — от конца до днища.
     """
-    trunk_top = 650.0     # мм над КВЛ, примерно уровень палубы в этом сечении
-    total = trunk_top - fin.z_tip
+    total = TRUNK_TOP_MM - fin.z_tip
     wet = z_hull_bottom - fin.z_tip
     return total / wet if wet > 0 else 1.0
 
@@ -280,8 +318,7 @@ def build_rudder(features, sail_area_m2, area_frac=0.010, z_top=50.0,
 def ballast_vcg_mm(keel):
     """Высота центра тяжести балласта над КВЛ (отрицательная — ниже)."""
     fin = keel["fin"]
-    trunk_top = 650.0
-    z_fin = 0.5 * (trunk_top + fin.z_tip)
+    z_fin = 0.5 * (TRUNK_TOP_MM + fin.z_tip)
     z_bulb = -keel["draft_mm"] + keel["bulb"].radius
     m = keel["fin_mass_kg"] + keel["bulb_mass_kg"]
     if m <= 0:

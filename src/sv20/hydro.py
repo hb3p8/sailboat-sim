@@ -77,6 +77,7 @@ def hydrostatics(hull, z_wl=0.0, n=160, rho=RHO_SEA):
     area = [2.0 * s.half_area_below(z_wl) for s in secs]          # мм²
     halfb = [s.half_beam_at(z_wl) for s in secs]                  # мм
     girth = [2.0 * s.girth_below(z_wl) for s in secs]             # мм
+    amom = [2.0 * s.half_area_moment_below(z_wl) for s in secs]   # мм³
 
     vol = _simpson(xs, area)                                      # мм³
     if vol <= 0:
@@ -86,6 +87,10 @@ def hydrostatics(hull, z_wl=0.0, n=160, rho=RHO_SEA):
     lcf = (_simpson(xs, [2.0 * y * x for y, x in zip(halfb, xs)]) / awp
            if awp > 0 else 0.0)
     wetted = _simpson(xs, girth)                                  # мм²
+    vcb = _simpson(xs, amom) / vol                                # мм от КВЛ
+    # поперечный момент инерции площади ватерлинии: 2/3 ∫ y³ dx
+    it = _simpson(xs, [(2.0 / 3.0) * y ** 3 for y in halfb])      # мм⁴
+    bm = it / vol                                                 # мм
 
     am = max(area)
     x_am = xs[area.index(am)]
@@ -108,6 +113,10 @@ def hydrostatics(hull, z_wl=0.0, n=160, rho=RHO_SEA):
         "midship_x_mm": x_am,
         "waterplane_area_m2": awp / MM2_PER_M2,
         "wetted_area_m2": wetted / MM2_PER_M2,
+        "vcb_mm": vcb,
+        "bm_mm": bm,
+        "kb_plus_bm_mm": vcb + bm,
+        "i_transverse_m4": it / 1.0e12,
         "lcb_mm": lcb,
         "lcb_pct_lwl_from_aft": 100.0 * (lcb - xa) / lwl,
         "lcf_mm": lcf,

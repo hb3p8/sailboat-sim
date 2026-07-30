@@ -38,9 +38,17 @@ scene.add(fill);
 const layers = [];
 const themed = [];   // материалы, которые надо перекрасить при смене темы
 
+// Лодка живёт в поворотной подвеске, чтобы её можно было качать вокруг
+// продольной оси через ЦТ. Вода и сетка КВЛ остаются в сцене неподвижно —
+// качается лодка, а не мир.
+const pivot = new Group();
+const boat = new Group();
+pivot.add(boat);
+scene.add(pivot);
+
 function add(spec, object, cssVar) {
   object.visible = spec.on;
-  scene.add(object);
+  (spec.static ? scene : boat).add(object);
   layers.push(Object.assign({ object }, spec));
   if (cssVar) themed.push([object, cssVar]);
   return object;
@@ -188,12 +196,12 @@ const grid = [];
 for (let x = 0; x <= 6000; x += 1000) grid.push([[x, -1300, 0], [x, 1300, 0]]);
 for (let y = -1000; y <= 1000; y += 1000) grid.push([[0, y, 0], [6100, y, 0]]);
 lineLayer({ id: 'grid', label: 'Плоскость КВЛ, сетка 1 м', group: 'Служебное',
-            on: true, color: '--c-draw2' }, grid, '--c-draw2', 0.5);
+            on: true, color: '--c-draw2', static: true }, grid, '--c-draw2', 0.5);
 
 const waterGeo = new PlaneGeometry(7400, 3000);
 waterGeo.translate(3050, 0, 0);
 add({ id: 'water', label: 'Вода на КВЛ', group: 'Служебное', on: true,
-      color: '--c-measured' },
+      color: '--c-measured', static: true },
     new Mesh(waterGeo, new MeshBasicMaterial({
       color: new Color(css('--c-measured')), transparent: true, opacity: 0.07,
       side: DoubleSide, depthWrite: false })),
@@ -254,6 +262,11 @@ function resize() {
 }
 
 function frame() {
+  if (roll.on && roll.period > 0) {
+    const t = (performance.now() - roll.t0) / 1000;
+    pivot.rotation.x = roll.amp * Math.sin(2 * Math.PI * t / roll.period);
+    needsDraw = true;
+  }
   if (needsDraw) {
     needsDraw = false;
     applyCamera();
@@ -421,6 +434,97 @@ toolButton('Тема', false, () => {
   }
 });
 
+// ------------------------------------------------------------- качка
+
+const ST = HULL && HULL.stability;
+const roll = { on: false, amp: 14 * RAD, t0: 0, period: 0 };
+let stabState = null;
+
+function lerpRows(rows, key, x, fields) {
+  const sorted = rows.slice().sort((a, b) => a[key] - b[key]);
+  if (x <= sorted[0][key]) return sorted[0];
+  if (x >= sorted[sorted.length - 1][key]) return sorted[sorted.length - 1];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = sorted[i], b = sorted[i + 1];
+    if (x >= a[key] && x <= b[key]) {
+      const u = (x - a[key]) / (b[key] - a[key] || 1);
+      const out = {};
+      for (const f of fields) out[f] = a[f] + u * (b[f] - a[f]);
+      return out;
+    }
+  }
+  return sorted[sorted.length - 1];
+}
+
+const ctrl = ST ? {
+  finDensity: ST.defaults.fin_density || 3100,
+  rigMass: ST.defaults.rig_mass_kg,
+  rigVcg: ST.defaults.rig_vcg_mm,
+  crew: 0,
+  added: ST.defaults.added_inertia,
+} : null;
+
+function computeStability() {
+  if (!ST) return null;
+  const b = lerpRows(ST.ballast, 'fin_density', ctrl.finDensity,
+    ['fin_mass_kg', 'bulb_mass_kg', 'fin_ixx_kg_m2', 'bulb_ixx_kg_m2']);
+  const bz = lerpRows(ST.ballast, 'fin_density', ctrl.finDensity, ['ballast_vcg_mm']);
+  // высоты ЦТ пера и бульба интерполируем отдельно: они лежат в векторах com
+  const rows = ST.ballast.slice().sort((a, c) => a.fin_density - c.fin_density);
+  let lo = rows[0], hi = rows[rows.length - 1];
+  for (let i = 0; i < rows.length - 1; i++)
+    if (ctrl.finDensity >= rows[i].fin_density &&
+        ctrl.finDensity <= rows[i + 1].fin_density) { lo = rows[i]; hi = rows[i + 1]; }
+  const u = (ctrl.finDensity - lo.fin_density) /
+            ((hi.fin_density - lo.fin_density) || 1);
+  const mix = (a, c) => a + u * (c - a);
+  const finComZ = mix(lo.fin_com_mm[2], hi.fin_com_mm[2]);
+  const bulbComZ = mix(lo.bulb_com_mm[2], hi.bulb_com_mm[2]);
+
+  const d = ST.defaults;
+  const gear = d.gear_mass_kg;
+  const shellMass = ST.total_kg - b.fin_mass_kg - b.bulb_mass_kg
+                    - ctrl.rigMass - gear;
+  const items = [
+    { m: shellMass, y: 0, z: ST.shell.com_mm[2],
+      i: ST.shell.ixx_per_kg_kg_m2 * shellMass },
+    { m: b.fin_mass_kg, y: 0, z: finComZ, i: b.fin_ixx_kg_m2 },
+    { m: b.bulb_mass_kg, y: 0, z: bulbComZ, i: b.bulb_ixx_kg_m2 },
+    { m: ctrl.rigMass, y: 0, z: ctrl.rigVcg,
+      i: ctrl.rigMass * Math.pow(d.rig_length_mm / 1000, 2) / 12 },
+    { m: gear, y: 0, z: d.gear_vcg_mm, i: 0 },
+  ];
+  for (let k = 0; k < ctrl.crew; k++)
+    items.push({ m: d.crew_mass_kg, y: d.crew_half_beam_mm,
+                 z: d.crew_vcg_mm, i: 0 });
+
+  let M = 0, my = 0, mz = 0;
+  for (const it of items) { M += it.m; my += it.m * it.y; mz += it.m * it.z; }
+  const cy = my / M, cz = mz / M;
+  let ixx = 0;
+  for (const it of items) {
+    const dy = (it.y - cy) / 1000, dz = (it.z - cz) / 1000;
+    ixx += it.i + it.m * (dy * dy + dz * dz);
+  }
+  const hy = lerpRows(ST.table, 'd', M, ['wl', 'vcb', 'bm']);
+  const gm = hy.vcb + hy.bm - cz;
+  const T = gm > 0
+    ? 2 * Math.PI * Math.sqrt(ixx * ctrl.added / (M * 9.80665 * gm / 1000))
+    : null;
+  return { mass: M, cy, cz, ixx, gm, kb: hy.vcb, bm: hy.bm, wl: hy.wl,
+           period: T, ballastVcg: bz.ballast_vcg_mm,
+           fin: b.fin_mass_kg, bulb: b.bulb_mass_kg, shell: shellMass };
+}
+
+function applyStability() {
+  stabState = computeStability();
+  if (!stabState) return;
+  pivot.position.set(0, stabState.cy, stabState.cz);
+  boat.position.set(0, -stabState.cy, -stabState.cz);
+  roll.period = stabState.period || 0;
+  needsDraw = true;
+}
+
 // ---------------------------------------------------------------- панель
 
 const P = document.getElementById('panel');
@@ -459,6 +563,104 @@ for (const L of layers) {
   if (L.note) txt.title = L.note;
   lab.append(cb, sw, txt);
   P.appendChild(lab);
+}
+
+if (ST) {
+  h2('Бортовая качка');
+  const note = document.createElement('p');
+  note.className = 'note';
+  note.textContent = ST.note;
+  P.appendChild(note);
+
+  const readout = document.createElement('table');
+  P.appendChild(readout);
+
+  const rollBtn = document.createElement('button');
+  rollBtn.textContent = 'Качать';
+  rollBtn.style.margin = '8px 0';
+  rollBtn.onclick = () => {
+    roll.on = !roll.on;
+    rollBtn.classList.toggle('on', roll.on);
+    if (roll.on) roll.t0 = performance.now();
+    else { pivot.rotation.x = 0; needsDraw = true; }
+  };
+  P.appendChild(rollBtn);
+
+  const SLIDERS = [
+    ['finDensity', 'Плотность пера киля', 2600, 7850, 50, 'кг/м³', 0],
+    ['rigMass', 'Масса рангоута и парусов', 20, 90, 1, 'кг', 0],
+    ['rigVcg', 'ЦТ рангоута над КВЛ', 2000, 5200, 50, 'мм', 0],
+    ['crew', 'Экипаж на борту', 0, 4, 1, 'чел', 0],
+    ['added', 'Присоединённая инерция', 1.0, 1.5, 0.01, '×', 2],
+  ];
+  for (const [key, label, lo, hi, step, unit, prec] of SLIDERS) {
+    const wrap = document.createElement('label');
+    wrap.className = 'row';
+    wrap.style.display = 'block';
+    const cap = document.createElement('div');
+    cap.style.cssText = 'display:flex;justify-content:space-between;font-size:11.5px';
+    const nm = document.createElement('span');
+    nm.textContent = label;
+    const val = document.createElement('span');
+    val.style.color = 'var(--dim)';
+    val.style.fontVariantNumeric = 'tabular-nums';
+    cap.append(nm, val);
+    const inp = document.createElement('input');
+    inp.type = 'range';
+    inp.min = lo; inp.max = hi; inp.step = step; inp.value = ctrl[key];
+    inp.style.width = '100%';
+    const show = () => { val.textContent = (+ctrl[key]).toFixed(prec) + ' ' + unit; };
+    inp.oninput = () => {
+      ctrl[key] = parseFloat(inp.value);
+      show(); applyStability(); refresh();
+    };
+    show();
+    wrap.append(cap, inp);
+    P.appendChild(wrap);
+  }
+
+  const reset = document.createElement('button');
+  reset.textContent = 'Вернуть по умолчанию';
+  reset.style.marginTop = '4px';
+  reset.onclick = () => {
+    ctrl.finDensity = 3100; ctrl.rigMass = ST.defaults.rig_mass_kg;
+    ctrl.rigVcg = ST.defaults.rig_vcg_mm; ctrl.crew = 0;
+    ctrl.added = ST.defaults.added_inertia;
+    P.querySelectorAll('input[type=range]').forEach((el, i) => {
+      el.value = [ctrl.finDensity, ctrl.rigMass, ctrl.rigVcg,
+                  ctrl.crew, ctrl.added][i];
+      el.dispatchEvent(new Event('input'));
+    });
+  };
+  P.appendChild(reset);
+
+  window.refresh = function () {
+    const s = stabState;
+    if (!s) return;
+    const rows = [
+      ['Период качки', s.period ? s.period.toFixed(2) : '—', 'с'],
+      ['GM', s.gm.toFixed(0), 'мм'],
+      ['KG', s.cz.toFixed(0), 'мм'],
+      ['KB + BM', (s.kb + s.bm).toFixed(0), 'мм'],
+      ['Момент инерции', s.ixx.toFixed(0), 'кг·м²'],
+      ['Полная масса', s.mass.toFixed(0), 'кг'],
+      ['Осадка от КВЛ', s.wl.toFixed(0), 'мм'],
+      ['Перо / бульб', s.fin.toFixed(0) + ' / ' + s.bulb.toFixed(0), 'кг'],
+    ];
+    readout.textContent = '';
+    for (const [k, v, u] of rows) {
+      const tr = readout.insertRow();
+      tr.insertCell().textContent = k;
+      const c = tr.insertCell(); c.className = 'v'; c.textContent = v;
+      const uc = tr.insertCell(); uc.className = 'u'; uc.textContent = u;
+      if (k === 'Период качки') {
+        c.style.fontWeight = '700';
+        c.style.color = css('--c-derived');
+      }
+    }
+  };
+  applyStability();
+  refresh();
 }
 
 if (HULL && HULL.appendages) {

@@ -326,18 +326,37 @@ def ballast_vcg_mm(keel):
     return (keel["fin_mass_kg"] * z_fin + keel["bulb_mass_kg"] * z_bulb) / m
 
 
-def sensitivity(features, z_hull_bottom, draft_mm, ballast_kg, densities):
-    """Как меняется бульб и центр тяжести балласта от плотности пера."""
+def sensitivity(features, z_hull_bottom, draft_mm, ballast_kg, densities,
+                meshops=None):
+    """Как меняется бульб и центр тяжести балласта от плотности пера.
+
+    Если передан `meshops`, к каждой строке добавляются настоящие центры
+    тяжести и моменты инерции тел — их потом двигает ползунок во вьювере.
+    """
     out = []
     for rho in densities:
         k = build_keel(features, z_hull_bottom, draft_mm, ballast_kg,
                        fin_density=rho)
-        out.append({
+        row = {
             "fin_density": rho,
             "fin_mass_kg": k["fin_mass_kg"],
             "bulb_mass_kg": k["bulb_mass_kg"],
             "bulb_diameter_mm": 2.0 * k["bulb"].radius,
             "bulb_length_mm": k["bulb"].length,
             "ballast_vcg_mm": ballast_vcg_mm(k),
-        })
+        }
+        if meshops is not None:
+            for name, mesh, mass in (
+                    ("fin", k["fin_full"].mesh(n_span=8, n_chord=20),
+                     k["fin_mass_kg"]),
+                    ("bulb", k["bulb"].mesh(k["bulb_x_nose_mm"],
+                                            -k["draft_mm"] + k["bulb"].radius,
+                                            n_len=18, n_rad=12),
+                     k["bulb_mass_kg"])):
+                v, t, _ = meshops.prepare(mesh["verts"], mesh["tris"])
+                pr = meshops.solid_properties(v, t, 1.0)
+                scale = mass / max(1e-9, pr["mass_kg"])
+                row[name + "_com_mm"] = pr["com_mm"]
+                row[name + "_ixx_kg_m2"] = pr["inertia_kg_m2"][0][0] * scale
+        out.append(row)
     return out

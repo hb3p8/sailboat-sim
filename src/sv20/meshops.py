@@ -205,6 +205,54 @@ def solid_properties(verts, tris, density=1.0):
     }
 
 
+def shell_properties(verts, tris):
+    """Свойства тонкой оболочки постоянной поверхностной плотности.
+
+    Корпус — не монолит, а скорлупа: его массу нельзя считать по объёму.
+    Центр тяжести здесь совпадает с центроидом площади, а момент инерции
+    возвращается на килограмм, чтобы масштабироваться любой массой.
+    """
+    s = 1.0 / MM_PER_M
+    canon = [[2.0, 1.0, 1.0], [1.0, 2.0, 1.0], [1.0, 1.0, 2.0]]
+    area = 0.0
+    cen = [0.0, 0.0, 0.0]
+    cov = [[0.0] * 3 for _ in range(3)]
+    for t in tris:
+        p = [[verts[t[i]][k] * s for k in range(3)] for i in range(3)]
+        ux, uy, uz = (p[1][k] - p[0][k] for k in range(3))
+        vx, vy, vz = (p[2][k] - p[0][k] for k in range(3))
+        nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+        a = 0.5 * math.sqrt(nx * nx + ny * ny + nz * nz)
+        if a <= 0:
+            continue
+        area += a
+        for k in range(3):
+            cen[k] += a * (p[0][k] + p[1][k] + p[2][k]) / 3.0
+        # второй момент треугольной пластинки относительно начала координат
+        ssum = [p[0][k] + p[1][k] + p[2][k] for k in range(3)]
+        for i in range(3):
+            for j in range(3):
+                acc = 0.0
+                for m in range(3):
+                    for n in range(3):
+                        acc += p[m][i] * canon[m][n] * p[n][j]
+                cov[i][j] += a * acc / 12.0
+    if area <= 0:
+        return None
+    cen = [k / area for k in cen]
+    for i in range(3):
+        for j in range(3):
+            cov[i][j] = cov[i][j] / area - cen[i] * cen[j]
+    trace = cov[0][0] + cov[1][1] + cov[2][2]
+    return {
+        "area_m2": area,
+        "com_mm": [k * MM_PER_M for k in cen],
+        "ixx_per_kg_kg_m2": trace - cov[0][0],
+        "iyy_per_kg_kg_m2": trace - cov[1][1],
+        "izz_per_kg_kg_m2": trace - cov[2][2],
+    }
+
+
 def normals(verts, tris):
     """Усреднённые по площади нормали в вершинах."""
     n = [[0.0, 0.0, 0.0] for _ in verts]

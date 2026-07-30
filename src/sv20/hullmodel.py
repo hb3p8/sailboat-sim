@@ -30,6 +30,19 @@ SHAPE_STATIONS = [0.0, 900.0, 1900.0, 2900.0, 3900.0, 4800.0, 5500.0, 6100.0]
 # Контрольные абсциссы линии киля между известными концами.
 KEEL_STATIONS = [900.0, 1500.0, 2200.0, 3000.0, 3800.0, 4600.0, 5300.0, 5750.0]
 
+# Палуба. Плановая раскладка снята с чертежа, высоты — свободная
+# интерпретация: на виде сбоку они не разобраны, а для плавучести и инерции
+# важны слабо. Уровень пайола выбран выше подошвы транца (+65 мм), чтобы
+# кокпит был самоотливным.
+DECK = {
+    "crown_frac": 0.045,        # погибь палубы в долях полушироты
+    "crown_ramp_mm": 500.0,     # к транцу погибь сходит на нет: кромка прямая
+    "coaming_height_mm": 55.0,
+    "sole_z_mm": 180.0,         # пайол кокпита над КВЛ
+    "cabin_height_mm": 110.0,
+    "blend_mm": 220.0,          # на этой длине кокпит сходит к переборке
+}
+
 
 SHAPE_LAWS = ("beta", "w", "b0", "b1", "r")
 
@@ -157,6 +170,21 @@ class Boundary(object):
         self.transom_a, self.transom_b, self.transom_rms = fit_transom(cur["transom"])
         self.metrics = m
 
+        # Раскладка палубы: комингс кокпита, кромка рецесса и рубка сняты
+        # с вида сверху (features.py). Высоты и погибь — свободная
+        # интерпретация, см. DECK.
+        f = frame_doc.get("features") or {}
+        d = f.get("deck_layout")
+        self.deck = None
+        if d:
+            self.deck = {
+                "coaming_outer": curves.Polyline([(p[0], p[1]) for p in d["coaming_outer"]]),
+                "coaming_inner": curves.Polyline([(p[0], p[1]) for p in d["coaming_inner"]]),
+                "recess_edge": curves.Polyline([(p[0], p[1]) for p in d["recess_edge"]]),
+                "x_fwd": d["x_fwd_mm"],
+                "cabin": f.get("cabin"),
+            }
+
     def transom_x(self, z):
         """Абсцисса плоскости транца на высоте z."""
         return self.transom_a + self.transom_b * z
@@ -267,14 +295,59 @@ class Hull(object):
         return {"verts": verts, "quads": quads, "rows": rows,
                 "transom_edge": transom_edge}
 
-    def closed_mesh(self, n_station=120, n_girth=28, crown_frac=0.045,
-                    ramp_mm=500.0):
+    def deck_ring(self, x, ys, zs, n_camber=7):
+        """Поперечный профиль палубы на абсциссе x: от левого борта к правому.
+
+        Комингс кокпита, его внутренняя грань и кромка рецесса сняты с чертежа.
+        Высоты — свободная интерпретация в пределах DECK: погибь палубы, высота
+        комингса, уровень пайола. У переборки ширины и глубина рецесса сходят
+        на нет за DECK["blend_mm"], чтобы поверхность осталась непрерывной.
+        """
+        d = self.b.deck
+        crown_ramp = min(1.0, max(0.0, (x - self.b.x_deck_aft) / DECK["crown_ramp_mm"]))
+        crown = DECK["crown_frac"] * ys * crown_ramp
+
+        def z_deck(y):
+            u = 0.0 if ys <= 0 else y / ys
+            z = zs + crown * (1.0 - u * u)
+            cab = d and d.get("cabin")
+            if cab and cab["x_aft_mm"] <= x <= cab["x_fwd_mm"]:
+                fy = max(0.0, 1.0 - (abs(y) / cab["half_width_mm"]) ** 2)
+                span = cab["x_fwd_mm"] - cab["x_aft_mm"]
+                t = min(x - cab["x_aft_mm"], cab["x_fwd_mm"] - x) / (0.25 * span)
+                z += DECK["cabin_height_mm"] * fy * min(1.0, max(0.0, t))
+            return z
+
+        half = []
+        if d and x <= d["x_fwd"]:
+            k = min(1.0, max(0.0, (d["x_fwd"] - x) / DECK["blend_mm"]))
+            y_co = min(d["coaming_outer"](x), 0.96 * ys) * k
+            y_ci = min(d["coaming_inner"](x), y_co) * k
+            y_re = min(d["recess_edge"](x), y_ci) * k
+            z_seat = z_deck(y_ci)
+            z_top = z_seat + DECK["coaming_height_mm"] * k
+            z_sole = z_seat + (DECK["sole_z_mm"] - z_seat) * k
+            half = [(0.0, z_sole), (y_re, z_sole), (y_re, z_seat),
+                    (y_ci, z_seat), (y_ci, z_top), (y_co, z_top),
+                    (y_co, z_deck(y_co))]
+        else:
+            z0 = z_deck(0.0)
+            half = [(0.0, z0)] * 7
+            y_co = 0.0
+
+        for i in range(1, n_camber + 1):
+            y = y_co + (ys - y_co) * i / float(n_camber)
+            half.append((y, z_deck(y)))
+
+        ring = [(-y, z) for y, z in reversed(half[1:])] + half
+        return ring
+
+    def closed_mesh(self, n_station=120, n_girth=28, ramp_mm=500.0):
         """Замкнутое тело корпуса: обшивка, палуба и крышки на транце и в носу.
 
         Для расчёта плавучести оболочки мало — нужен объём, а значит замкнутая
-        поверхность. Палуба на чертеже не разобрана, поэтому она строится
-        параметрически: погибь `crown_frac` от полушироты, сходящая к нулю у
-        транца, чтобы верхняя кромка транца осталась прямой, как на Ф1.
+        поверхность. Палуба строится по `deck_ring`: раскладка кокпита снята
+        с чертежа, высоты назначены.
         """
         m = self.mesh(n_station, n_girth)
         rows = m["rows"]                      # rows[j][i], j снизу вверх
@@ -299,20 +372,13 @@ class Hull(object):
                 c, d = port[j + 1][i + 1], port[j + 1][i]
                 tris += [[a, b, c], [a, c, d]]
 
-        # --- палуба: поперечные дуги между линиями борта
-        x0 = rows[ng][0][0]
-        deck = []
-        for k in range(ng + 1):
-            u = -1.0 + 2.0 * k / ng
-            line = []
-            for i in range(ns + 1):
-                x, ys, zs = rows[ng][i]
-                ramp = min(1.0, max(0.0, (x - x0) / ramp_mm))
-                crown = crown_frac * ys * ramp
-                line.append(push((x, u * ys, zs + crown * (1.0 - u * u))))
-            deck.append(line)
+        # --- палуба: поперечные профили между линиями борта
+        rings = [self.deck_ring(*rows[ng][i]) for i in range(ns + 1)]
+        nd = len(rings[0]) - 1
+        deck = [[push((rows[ng][i][0], rings[i][k][0], rings[i][k][1]))
+                 for i in range(ns + 1)] for k in range(nd + 1)]
 
-        for k in range(ng):
+        for k in range(nd):
             for i in range(ns):
                 a, b = deck[k][i], deck[k][i + 1]
                 c, d = deck[k + 1][i + 1], deck[k + 1][i]
@@ -320,10 +386,10 @@ class Hull(object):
 
         # --- крышки: транец в корме и клин в носу
         aft = ([stbd[j][0] for j in range(ng + 1)]
-               + [deck[k][0] for k in range(ng, -1, -1)]
+               + [deck[k][0] for k in range(nd, -1, -1)]
                + [port[j][0] for j in range(ng, -1, -1)])
         fwd = ([stbd[j][ns] for j in range(ng + 1)]
-               + [deck[k][ns] for k in range(ng, -1, -1)]
+               + [deck[k][ns] for k in range(nd, -1, -1)]
                + [port[j][ns] for j in range(ng, -1, -1)])
         def dedupe(loop):
             """Убрать соседние совпадающие точки.

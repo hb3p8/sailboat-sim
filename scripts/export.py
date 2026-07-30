@@ -24,7 +24,7 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from sv20 import (appendages, calibrate, exporters, features, hullmodel,  # noqa: E402
-                  hydro, meshops, pdf_paths)
+                  hydro, meshops, pdf_paths, stability)
 
 LODS = [("hull", 140, 32), ("hull_lod1", 70, 18)]
 
@@ -131,6 +131,7 @@ def build_manifest(hull, keel, rudder, bodies, feats):
                       "displacement_kg": hh["displacement_kg"],
                       "volume_m3": hh["volume_m3"],
                       "waterplane_area_m2": hh["waterplane_area_m2"],
+                      "vcb_mm": hh["vcb_mm"], "bm_mm": hh["bm_mm"],
                       "lcb_mm": hh["lcb_mm"], "lcf_mm": hh["lcf_mm"],
                       "wetted_area_m2": hh["wetted_area_m2"]})
 
@@ -195,6 +196,7 @@ def build_manifest(hull, keel, rudder, bodies, feats):
             "vcg_mm": appendages.ballast_vcg_mm(keel),
             "fin_density_kg_m3": keel["fin_density"],
             "fin_density_range": list(appendages.FIN_DENSITY_RANGE)},
+        "stability": stability_payload(hull, keel, bodies, feats, h),
         "hydrostatics_at_dwl": h,
         "hydrostatic_table": table,
         "checks": {
@@ -210,6 +212,33 @@ def build_manifest(hull, keel, rudder, bodies, feats):
                 "analytic": keel["bulb_mass_kg"]},
         },
         "assumptions": appendages.ASSUMPTIONS,
+    }
+
+
+def stability_payload(hull, keel, bodies, feats, h):
+    by = dict((b["name"], b) for b in bodies)
+    shell = meshops.shell_properties(by["hull"]["verts"], by["hull"]["tris"])
+    grid = [2600.0, 3100.0, 3600.0, 4300.0, 5000.0, 6400.0, 7850.0]
+    rows = appendages.sensitivity(
+        feats, keel["fin"].z_root, keel["draft_mm"],
+        calibrate.TARGET["ballast_kg"], grid, meshops=meshops)
+
+    items, o = stability.budget(
+        keel, by["keel_fin"]["props"], by["bulb"]["props"], shell,
+        calibrate.TARGET["displacement_kg"])
+    ref = stability.evaluate(items, h, o)
+    return {
+        "shell": shell,
+        "ballast_by_fin_density": rows,
+        "defaults": stability.BUDGET_DEFAULTS,
+        "total_kg": calibrate.TARGET["displacement_kg"],
+        "items_at_defaults": items,
+        "reference": ref,
+        "note": ("GM и период считаются по обводам плюс весовая сводка. "
+                 "Обводы проверены гидростатикой, сводка — нет: рангоут, "
+                 "палубное железо и плотность пера киля оценены. Поэтому "
+                 "период — это то место, где реконструкцию можно поймать "
+                 "на несоответствии памяти."),
     }
 
 
@@ -271,6 +300,30 @@ def render(m, bodies):
              "прикладываются силы. Балласт %.0f кг с ЦТ на %.0f мм от КВЛ."
              % (m["ballast"]["total_kg"], m["ballast"]["vcg_mm"]))
     L.append("")
+
+    st = m.get("stability")
+    if st and st["reference"]:
+        r = st["reference"]
+        L.append("## Бортовая качка\n")
+        L.append("| Величина | Значение |")
+        L.append("|---|---:|")
+        L.append("| Аппликата ЦТ, KG | %+.0f мм |" % r["kg_mm"])
+        L.append("| Аппликата ЦВ, KB | %+.0f мм |" % r["kb_mm"])
+        L.append("| Метацентрический радиус, BM | %.0f мм |" % r["bm_mm"])
+        L.append("| Метацентрическая высота, GM | **%.0f мм** |" % r["gm_mm"])
+        L.append("| Момент инерции при качке | %.0f кг·м² |" % r["ixx_kg_m2"])
+        L.append("| Радиус инерции | %.0f мм |" % r["gyradius_mm"])
+        L.append("| Присоединённая инерция | ×%.2f |" % r["added_inertia"])
+        L.append("| **Период бортовой качки** | **%.2f с** |" % r["roll_period_s"])
+        L.append("")
+        L.append("Весовая сводка:\n")
+        L.append("| Статья | Масса | ЦТ по высоте | Откуда |")
+        L.append("|---|---:|---:|---|")
+        for it in st["items_at_defaults"]:
+            L.append("| %s | %.1f кг | %+.0f мм | %s |"
+                     % (it["name"], it["mass_kg"], it["com_mm"][2], it["note"]))
+        L.append("")
+        L.append(st["note"] + "\n")
 
     L.append("## Гидростатическая таблица\n")
     L.append("Чтобы движку не интегрировать сетку на каждом шаге: осадка → "

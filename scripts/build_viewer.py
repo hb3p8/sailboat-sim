@@ -119,6 +119,28 @@ def appendage_payload(ap):
     }
 
 
+def stability_payload(out):
+    """Данные для интерактивного расчёта качки: считает уже сам просмотрщик."""
+    path = os.path.join(out, "export", "sv20.json")
+    if not os.path.exists(path):
+        return None
+    m = json.load(open(path))
+    st = m.get("stability")
+    if not st:
+        return None
+    return {
+        "shell": st["shell"],
+        "ballast": st["ballast_by_fin_density"],
+        "defaults": st["defaults"],
+        "total_kg": st["total_kg"],
+        "reference": st["reference"],
+        "note": st["note"],
+        "table": [{"d": r["displacement_kg"], "wl": r["waterline_mm"],
+                   "vcb": r["vcb_mm"], "bm": r["bm_mm"]}
+                  for r in m["hydrostatic_table"]],
+    }
+
+
 def source_note(hl):
     fr = hl.get("fit_report")
     if fr:
@@ -159,6 +181,7 @@ def main():
             "chine_line": hl.get("chine_line", []),
             "source_note": source_note(hl),
             "appendages": appendage_payload(hl.get("appendages")),
+            "stability": stability_payload(out),
             "hydroRows": [[label, "%.*f" % (prec, h[key]), unit]
                           for key, label, unit, prec in HYDRO_ROWS],
         }

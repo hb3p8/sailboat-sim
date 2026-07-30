@@ -152,6 +152,93 @@ def find_keel_trunk(subpaths, datum, section, pad=200.0):
             "half_width_mm": max(abs(Y0), abs(Y1))}
 
 
+def find_deck_layout(subpaths, datum, plan_box, min_span=2000.0, tol=0.6):
+    """Кокпит на виде сверху: комингс, кромка сидений, носовая переборка.
+
+    Три зеркальные пары длинных кривых идут от транца вперёд и обрываются в
+    одном и том же месте — это наружная и внутренняя грани комингса и кромка
+    рецесса. Поперечная линия там же, где они обрываются, — переборка.
+    """
+    px0, py0, px1, py1 = plan_box
+    runs = []
+    for s in subpaths:
+        bx0, by0, bx1, by1 = s.bbox
+        # Комингс дочерчен до самой кромки транца и на несколько пунктов
+        # вылезает за габарит линии борта — отсюда запас по корме.
+        if not (px0 - 12.0 <= bx0 and bx1 <= px1 and py0 <= by0 and by1 <= py1):
+            continue
+        if len(s.points) < 4 or abs(s.width - 0.84) > 1e-6:
+            continue
+        pts = sorted(datum.plan(p) for p in s.points)
+        if pts[-1][0] - pts[0][0] < min_span:
+            continue
+        if pts[0][0] > 200.0:            # должна начинаться у транца
+            continue
+        if pts[-1][0] > 5000.0:          # это сама линия борта, а не комингс
+            continue
+        ys = [p[1] for p in pts]
+        if min(ys) * max(ys) < 0:
+            continue
+        runs.append(pts)
+
+    right = [r for r in runs if sum(p[1] for p in r) > 0]
+    if len(right) < 3:
+        return None
+    # чем дальше от ДП, тем наружнее: комингс снаружи, рецесс внутри
+    right.sort(key=lambda r: -sum(p[1] for p in r) / len(r))
+    outer, inner, seat = right[0], right[1], right[2]
+    x_fwd = min(max(p[0] for p in r) for r in (outer, inner, seat))
+
+    bulkhead = None
+    for s in subpaths:
+        bx0, by0, bx1, by1 = s.bbox
+        if not (px0 - 12.0 <= bx0 and bx1 <= px1 and py0 <= by0 and by1 <= py1):
+            continue
+        if len(s.points) < 2 or abs(s.width - 0.84) > 1e-6:
+            continue
+        pts = [datum.plan(p) for p in s.points]
+        xs = [p[0] for p in pts]
+        if max(xs) - min(xs) > 20.0 or abs(min(xs) - x_fwd) > 120.0:
+            continue
+        ys = [abs(p[1]) for p in pts]
+        if not (250.0 <= max(ys) <= 900.0):
+            continue
+        if bulkhead is None or max(ys) > bulkhead["half_width_mm"]:
+            bulkhead = {"x_mm": sum(xs) / len(xs), "half_width_mm": max(ys)}
+
+    def curve(pts):
+        return [[round(p[0], 1), round(abs(p[1]), 1)] for p in pts]
+
+    return {
+        "coaming_outer": curve(outer),
+        "coaming_inner": curve(inner),
+        "recess_edge": curve(seat),
+        "x_fwd_mm": x_fwd,
+        "bulkhead": bulkhead,
+        "coaming_width_mm": (sum(p[1] for p in outer) / len(outer)
+                             - sum(p[1] for p in inner) / len(inner)),
+    }
+
+
+def find_cabin(subpaths, datum, x_from, x_to=4200.0, tol=0.84):
+    """Рубка-гараж впереди переборки: прямоугольник с закруглениями."""
+    best = None
+    for s in subpaths:
+        if abs(s.width - tol) > 1e-6:
+            continue
+        pts = [datum.plan(p) for p in s.points]
+        xs = [p[0] for p in pts]
+        ys = [abs(p[1]) for p in pts]
+        if min(xs) < x_from - 60.0 or max(xs) > x_to:
+            continue
+        if max(xs) - min(xs) < 200.0 or max(ys) < 150.0 or max(ys) > 600.0:
+            continue
+        if best is None or max(xs) > best["x_fwd_mm"]:
+            best = {"x_aft_mm": min(xs), "x_fwd_mm": max(xs),
+                    "half_width_mm": max(ys)}
+    return best
+
+
 def find_rudder_pintles(subpaths, datum, x_max=30.0, min_len=100.0):
     """Гудгенсы: горизонтальные отрезки в корму от транца, попарно по высоте."""
     horiz = []
@@ -239,6 +326,8 @@ def extract(subpaths, datum, plan_box):
     """Все следы приложений, какие есть на чертеже."""
     section = find_keel_section(subpaths, datum, plan_box)
     trunk = find_keel_trunk(subpaths, datum, section)
+    deck = find_deck_layout(subpaths, datum, plan_box)
+    cabin = find_cabin(subpaths, datum, deck["x_fwd_mm"]) if deck else None
     pintles = find_rudder_pintles(subpaths, datum)
     stock = None
     if pintles:
@@ -249,6 +338,8 @@ def extract(subpaths, datum, plan_box):
         "keel_section": section,
         "keel_section_family": naca_match(section),
         "keel_trunk": trunk,
+        "deck_layout": deck,
+        "cabin": cabin,
         "rudder_pintles": pintles,
         "rudder_stock": stock,
         "lifts_vertically": bool(

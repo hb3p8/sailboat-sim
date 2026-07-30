@@ -204,6 +204,31 @@ class Section(object):
                 break
         return area
 
+    def half_area_moment_below(self, z_wl=0.0):
+        """Момент погружённой площади относительно КВЛ: ∫ y·z dz, мм³.
+
+        Делённый на площадь, даёт высоту центра тяжести погружённого сечения —
+        из этого набирается аппликата центра величины.
+        """
+        if self.zk >= z_wl:
+            return 0.0
+        moment = 0.0
+        p = self.pts
+        prev = p[0]
+        for cur in p[1:]:
+            z0, z1 = prev[1], cur[1]
+            if z0 >= z_wl:
+                break
+            if z1 > z_wl:
+                u = (z_wl - z0) / (z1 - z0)
+                cur = (prev[0] + u * (cur[0] - prev[0]), z_wl)
+                z1 = z_wl
+            moment += 0.5 * (prev[0] * z0 + cur[0] * z1) * (z1 - z0)
+            prev = cur
+            if z1 >= z_wl:
+                break
+        return moment
+
     def half_beam_at(self, z_wl=0.0):
         if self.zk >= z_wl:
             return 0.0

@@ -54,6 +54,37 @@ for (const c of F.curves) {
   });
 }
 
+// ------------------------------------------------------------ корпус Ф2
+
+const HULL = DATA.hull || null;
+if (HULL) {
+  const V = HULL.mesh.verts, Q = HULL.mesh.quads;
+  const verts = V.concat(V.map(p => [p[0], -p[1], p[2]]));
+  const off = V.length;
+  // Обход в сетке идёт снизу вверх и с кормы в нос — нормаль такой рамки
+  // смотрит внутрь корпуса. Разворачиваем, чтобы отсечение изнанки работало.
+  const quads = Q.map(q => [q[3], q[2], q[1], q[0]])
+                 .concat(Q.map(q => [q[0] + off, q[1] + off, q[2] + off, q[3] + off]));
+  layers.push({
+    id: 'surface', label: 'Поверхность корпуса', kind: 'surface',
+    color: '--c-hull', group: 'Обводы Ф2', on: true, verts, quads
+  });
+  layers.push({
+    id: 'stations', label: 'Шпангоуты, шаг 305 мм', color: '--c-hull',
+    width: 1.3, dash: [], group: 'Обводы Ф2', on: false,
+    polys: HULL.stations.concat(HULL.stations.map(p => p.map(q => [q[0], -q[1], q[2]])))
+  });
+  layers.push({
+    id: 'chine', label: 'Линия скулы', color: '--c-projected',
+    width: 2.0, dash: [], group: 'Обводы Ф2', on: true,
+    polys: [HULL.chine_line, HULL.chine_line.map(q => [q[0], -q[1], q[2]])]
+  });
+  layers.push({
+    id: 'keelline', label: 'Линия киля в ДП', color: '--c-hull',
+    width: 2.0, dash: [], group: 'Обводы Ф2', on: true, polys: [HULL.keel_line]
+  });
+}
+
 // ------------------------------------------------- служебная геометрия
 
 const grid = [];
@@ -69,7 +100,7 @@ const gapPoly = [[xa, 0, 0], [xf, 0, 0], [xf, 0, T], [xa, 0, T], [xa, 0, 0]];
 const gapHatch = [gapPoly];
 for (let x = xa; x <= xf; x += 120) gapHatch.push([[x, 0, 0], [x + 120, 0, T]]);
 layers.push({ id: 'gap', label: 'Подводная часть: пробел', color: '--c-gap',
-              width: 1.0, dash: [], group: 'Служебное', on: true, polys: gapHatch, alpha: .45 });
+              width: 1.0, dash: [], group: 'Служебное', on: !HULL, polys: gapHatch, alpha: .45 });
 
 const NOTES = DATA.notes;
 
@@ -79,8 +110,9 @@ const NOTES = DATA.notes;
 const BB = (() => {
   const lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
   for (const L of layers) {
-    if (L.group !== 'Каркас Ф1' && L.id !== 'gap') continue;
-    for (const poly of L.polys) for (const p of poly)
+    if (L.group !== 'Каркас Ф1' && L.id !== 'gap' && L.id !== 'surface') continue;
+    const polys = L.kind === 'surface' ? [L.verts] : L.polys;
+    for (const poly of polys) for (const p of poly)
       for (let i = 0; i < 3; i++) {
         if (p[i] < lo[i]) lo[i] = p[i];
         if (p[i] > hi[i]) hi[i] = p[i];
@@ -172,6 +204,39 @@ function strokeLayer(L, B) {
   ctx.globalAlpha = 1;
 }
 
+function drawSurface(L, B) {
+  const V = L.verts, base = css('--c-surface');
+  const items = [];
+  for (const q of L.quads) {
+    const a = toCam(V[q[0]], B), b = toCam(V[q[1]], B);
+    const c = toCam(V[q[2]], B), d = toCam(V[q[3]], B);
+    if (a[2] <= NEAR || b[2] <= NEAR || c[2] <= NEAR || d[2] <= NEAR) continue;
+    const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+    const vx = d[0] - a[0], vy = d[1] - a[1], vz = d[2] - a[2];
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const nl = Math.hypot(nx, ny, nz) || 1;
+    nx /= nl; ny /= nl; nz /= nl;
+    const cz = (a[2] + b[2] + c[2] + d[2]) / 4;
+    const cx = (a[0] + b[0] + c[0] + d[0]) / 4, cy = (a[1] + b[1] + c[1] + d[1]) / 4;
+    if (nx * cx + ny * cy + nz * cz > 0) continue;     // отсекаем изнанку
+    // фонарик из камеры плюс мягкая подсветка сверху
+    const lam = 0.30 + 0.55 * Math.abs(nz) + 0.15 * Math.max(0, ny);
+    items.push([cz, lam, a, b, c, d]);
+  }
+  items.sort((p, q) => q[0] - p[0]);
+  for (const [, lam, a, b, c, d] of items) {
+    const s0 = screenOf(a, B), s1 = screenOf(b, B);
+    const s2 = screenOf(c, B), s3 = screenOf(d, B);
+    ctx.fillStyle = 'rgba(' + base + ',' + (0.35 + 0.65 * lam).toFixed(3) + ')';
+    ctx.strokeStyle = ctx.fillStyle;
+    ctx.lineWidth = 0.6;
+    ctx.beginPath();
+    ctx.moveTo(s0[0], s0[1]); ctx.lineTo(s1[0], s1[1]);
+    ctx.lineTo(s2[0], s2[1]); ctx.lineTo(s3[0], s3[1]); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+  }
+}
+
 let showNotes = true;
 
 function drawNotes(B) {
@@ -238,6 +303,8 @@ function draw() {
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   for (const L of layers) if (L.on && L.group === 'Служебное') strokeLayer(L, B);
   for (const L of layers) if (L.on && L.group === 'Подложка — исходный чертёж') strokeLayer(L, B);
+  for (const L of layers) if (L.on && L.kind === 'surface') drawSurface(L, B);
+  for (const L of layers) if (L.on && L.group === 'Обводы Ф2' && !L.kind) strokeLayer(L, B);
   for (const L of layers) if (L.on && L.group === 'Каркас Ф1') strokeLayer(L, B);
   if (showNotes) drawNotes(B);
   document.getElementById('hud').textContent =
@@ -359,6 +426,17 @@ for (const L of layers) {
   if (L.conf) txt.title = L.note;
   lab.append(cb, sw, txt);
   P.appendChild(lab);
+}
+
+if (HULL) {
+  h2('Гидростатика Ф2');
+  const p = document.createElement('p');
+  p.className = 'note';
+  p.textContent = 'Водоизмещение сведено к 590 кг серийной SV20 одним числом — ' +
+    'общим множителем килеватости ' + HULL.deadrise_factor.toFixed(3) +
+    '. Остальное получилось само.';
+  P.appendChild(p);
+  table(HULL.hydroRows);
 }
 
 h2('Достоверность кривых');

@@ -27,6 +27,22 @@ def curve(fr, name):
     raise KeyError(name)
 
 
+HYDRO_ROWS = [
+    ("displacement_kg", "Водоизмещение", "кг", 0),
+    ("volume_m3", "Объём", "м³", 3),
+    ("lwl_mm", "Длина по КВЛ", "мм", 0),
+    ("bwl_mm", "Ширина по КВЛ", "мм", 0),
+    ("draft_canoe_mm", "Осадка корпусом", "мм", 0),
+    ("midship_area_m2", "Площадь миделя", "м²", 3),
+    ("wetted_area_m2", "Смоченная поверхность", "м²", 2),
+    ("lcb_pct_lwl_from_aft", "ЦВ от кормы", "% LWL", 1),
+    ("Cb", "Cb", "", 3),
+    ("Cp", "Cp", "", 3),
+    ("Cm", "Cm", "", 3),
+    ("Cwp", "Cwp", "", 3),
+]
+
+
 def build_notes(fr):
     m = fr["metrics"]
     sheer = curve(fr, "sheer_stbd")
@@ -60,6 +76,21 @@ def build_notes(fr):
     ]
 
 
+def hull_notes(hl):
+    h = hl["hydrostatics"]
+    xm = h["midship_x_mm"]
+    return [
+        {"p": [xm, h["bwl_mm"] / 2.0, 0.0], "d": [30, 30], "c": "--c-hull",
+         "t": "Ширина по КВЛ %.0f мм\nмидель %.3f м², Cm = %.2f"
+              % (h["bwl_mm"], h["midship_area_m2"], h["Cm"])},
+        {"p": [h["lcb_mm"], 0.0, -h["draft_canoe_mm"] * 0.45], "d": [-30, 40],
+         "c": "--c-hull",
+         "t": "ЦВ на %.1f%% LWL от кормы\n%.0f кг при осадке корпусом %.0f мм"
+              % (h["lcb_pct_lwl_from_aft"], h["displacement_kg"],
+                 h["draft_canoe_mm"])},
+    ]
+
+
 def main():
     out = os.path.join(ROOT, "out")
     fr = json.load(open(os.path.join(out, "frame.json")))
@@ -73,7 +104,23 @@ def main():
     rows = [[label, ("%.*f" % (prec, fr["metrics"][key])), unit]
             for key, label, unit, prec in frame.METRIC_LABELS]
 
-    payload = {"frame": fr, "draw": groups, "notes": build_notes(fr), "metricRows": rows}
+    payload = {"frame": fr, "draw": groups, "notes": build_notes(fr),
+               "metricRows": rows}
+
+    hull_path = os.path.join(out, "hull.json")
+    if os.path.exists(hull_path):
+        hl = json.load(open(hull_path))
+        h = hl["hydrostatics"]
+        payload["hull"] = {
+            "mesh": hl["mesh"],
+            "stations": [s["points"] for s in hl["stations"]],
+            "keel_line": [[round(c, 1) for c in p] for p in hl["keel_line"]],
+            "chine_line": hl.get("chine_line", []),
+            "deadrise_factor": hl["deadrise_factor"],
+            "hydroRows": [[label, "%.*f" % (prec, h[key]), unit]
+                          for key, label, unit, prec in HYDRO_ROWS],
+        }
+        payload["notes"] += hull_notes(hl)
 
     tpl = open(os.path.join(ROOT, "viewer", "template.html")).read()
     js = open(os.path.join(ROOT, "viewer", "renderer.js")).read()

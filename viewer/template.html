@@ -6,6 +6,7 @@
     --dim: #8a97a6; --accent: #4ea3ff;
     --c-measured: #4ec9ff; --c-derived: #6ee7a8; --c-projected: #ffc25a;
     --c-inferred: #9aa6b4; --c-draw: #4a6086; --c-draw2: #3a4761; --c-gap: #ff6b8a;
+    --c-hull: #7fd4ff; --c-surface: 120,168,205;
   }
   @media (prefers-color-scheme: light) {
     :root {
@@ -13,6 +14,7 @@
       --dim: #5d6b7a; --c-measured: #0b74c4; --c-derived: #12855a;
       --c-projected: #b06f00; --c-inferred: #6b7785;
       --c-draw: #97a5b6; --c-draw2: #adb9c8; --c-gap: #c22f52;
+      --c-hull: #0b74c4; --c-surface: 150,186,214;
     }
   }
   :root[data-theme="dark"] {
@@ -20,12 +22,14 @@
     --dim: #8a97a6; --c-measured: #4ec9ff; --c-derived: #6ee7a8;
     --c-projected: #ffc25a; --c-inferred: #9aa6b4;
     --c-draw: #4a6086; --c-draw2: #3a4761; --c-gap: #ff6b8a;
+    --c-hull: #7fd4ff; --c-surface: 120,168,205;
   }
   :root[data-theme="light"] {
     --bg: #f4f6f9; --panel: #ffffff; --line: #dde3ea; --fg: #1b2430;
     --dim: #5d6b7a; --c-measured: #0b74c4; --c-derived: #12855a;
     --c-projected: #b06f00; --c-inferred: #6b7785;
     --c-draw: #97a5b6; --c-draw2: #adb9c8; --c-gap: #c22f52;
+      --c-hull: #0b74c4; --c-surface: 150,186,214;
   }
   * { box-sizing: border-box; }
   body {
@@ -91,8 +95,8 @@
 </div>
 <aside>
   <h1>610 / SV20 — каркас корпуса</h1>
-  <p class="sub">Ф0–Ф1: то, что снято с чертежа общего вида. Ниже КВЛ ещё ничего нет —
-  это и есть задача следующего этапа.</p>
+  <p class="sub">Ф1 — каркас, снятый с чертежа общего вида. Ф2 — обводы, построенные
+  параметрически под известную гидростатику. Всё, что достроено, помечено.</p>
   <div id="panel"></div>
 </aside>
 

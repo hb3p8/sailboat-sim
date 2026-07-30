@@ -53,18 +53,9 @@ def main():
         f.write(html)
     print("%s — %.0f КБ" % (os.path.relpath(dst, ROOT), os.path.getsize(dst) / 1024))
 
-    # Самотест: та же физика, но без сцены и без цикла кадров. Нужен, чтобы
-    # отделять расходимость модели от проблем отрисовки — один раз это уже
-    # спасло полчаса гадания.
-    test = open(os.path.join(sim, "selftest.tpl.html")).read()
-    test = test.replace("/*__PACK__*/ null",
-                        json.dumps(pack, ensure_ascii=False, separators=(",", ":")))
-    test = test.replace("/*__PHYSICS__*/",
-                        strip_modules(open(os.path.join(sim, "physics.js")).read()))
-    tdst = os.path.join(sim, "selftest.html")
-    with open(tdst, "w") as f:
-        f.write(test)
-    print("%s — %.0f КБ" % (os.path.relpath(tdst, ROOT), os.path.getsize(tdst) / 1024))
+    # Самотеста в браузере больше нет: физику гоняет node
+    # (`make test`, tests/physics.test.mjs). Два источника правды на одну
+    # модель — верный способ чинить не то.
 
 
 if __name__ == "__main__":

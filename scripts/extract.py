@@ -53,7 +53,8 @@ def main():
     groups = layers.classify(subpaths, views, key)
     fr = frame.build(subpaths, datum, key, calibrate.SPEC,
                      views.title_box, media)
-    feats = features.extract(subpaths, datum, views.plan_box)
+    sheer_pts = [datum.profile(p) for p in key["sheer_profile"].points]
+    feats = features.extract(subpaths, datum, views.plan_box, sheer_pts)
 
     frame_doc = {
         "source": {"file": os.path.basename(pdf), "media_box_pt": list(media),

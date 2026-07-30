@@ -171,6 +171,8 @@ def main():
         },
         "hydrostatics": {
             "lwl_m": h["lwl_mm"] / 1000.0, "bwl_m": h["bwl_mm"] / 1000.0,
+            "lwl_aft_x_m": h["lwl_aft_x_mm"] / 1000.0,
+            "lwl_fwd_x_m": h["lwl_fwd_x_mm"] / 1000.0,
             "draft_canoe_m": h["draft_canoe_mm"] / 1000.0,
             "wetted_m2": h["wetted_area_m2"], "volume_m3": h["volume_m3"],
             "gm_m": ref["gm_mm"] / 1000.0,

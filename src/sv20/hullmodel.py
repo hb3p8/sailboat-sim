@@ -34,13 +34,16 @@ KEEL_STATIONS = [900.0, 1500.0, 2200.0, 3000.0, 3800.0, 4600.0, 5300.0, 5750.0]
 # интерпретация: на виде сбоку они не разобраны, а для плавучести и инерции
 # важны слабо. Уровень пайола выбран выше подошвы транца (+65 мм), чтобы
 # кокпит был самоотливным.
+# Погибь палубы и высота комингса больше не назначаются: обе сняты с вида
+# сбоку (features.find_deck_profile). Здесь остались только те величины,
+# которых на чертеже нет.
 DECK = {
-    "crown_frac": 0.045,        # погибь палубы в долях полушироты
-    "crown_ramp_mm": 500.0,     # к транцу погибь сходит на нет: кромка прямая
-    "coaming_height_mm": 55.0,
-    "sole_z_mm": 180.0,         # пайол кокпита над КВЛ
-    "cabin_height_mm": 110.0,
-    "blend_mm": 220.0,          # на этой длине кокпит сходит к переборке
+    "crown_frac_fallback": 0.052,   # если обмера нет: доля полушироты
+    "aft_crown_of_coaming": 0.6,    # палуба под верхней огибающей силуэта
+    "crown_ramp_mm": 500.0,         # к транцу погибь сходит на нет
+    "coaming_height_fallback_mm": 30.0,
+    "sole_z_mm": 180.0,             # пайол кокпита над КВЛ
+    "blend_mm": 220.0,              # на этой длине кокпит сходит к переборке
 }
 
 
@@ -182,8 +185,12 @@ class Boundary(object):
                 "coaming_inner": curves.Polyline([(p[0], p[1]) for p in d["coaming_inner"]]),
                 "recess_edge": curves.Polyline([(p[0], p[1]) for p in d["recess_edge"]]),
                 "x_fwd": d["x_fwd_mm"],
-                "cabin": f.get("cabin"),
             }
+        prof = f.get("deck_profile") or {}
+        self.coaming_top = (curves.Polyline(prof["coaming_top"])
+                            if prof.get("coaming_top") else None)
+        self.crown_curve = (curves.Polyline(prof["foredeck_crown"])
+                            if prof.get("foredeck_crown") else None)
 
     def transom_x(self, z):
         """Абсцисса плоскости транца на высоте z."""
@@ -303,20 +310,16 @@ class Hull(object):
         комингса, уровень пайола. У переборки ширины и глубина рецесса сходят
         на нет за DECK["blend_mm"], чтобы поверхность осталась непрерывной.
         """
-        d = self.b.deck
-        crown_ramp = min(1.0, max(0.0, (x - self.b.x_deck_aft) / DECK["crown_ramp_mm"]))
-        crown = DECK["crown_frac"] * ys * crown_ramp
+        b, d = self.b, self.b.deck
+        ramp = min(1.0, max(0.0, (x - b.x_deck_aft) / DECK["crown_ramp_mm"]))
+        # Погибь снята с вида сбоку впереди кокпита; в корму от неё она
+        # продолжается пропорционально полушироте — там силуэт показывает
+        # комингс, а не палубу, и прямого обмера нет.
+        crown = self._crown(x, ys) * ramp
 
         def z_deck(y):
             u = 0.0 if ys <= 0 else y / ys
-            z = zs + crown * (1.0 - u * u)
-            cab = d and d.get("cabin")
-            if cab and cab["x_aft_mm"] <= x <= cab["x_fwd_mm"]:
-                fy = max(0.0, 1.0 - (abs(y) / cab["half_width_mm"]) ** 2)
-                span = cab["x_fwd_mm"] - cab["x_aft_mm"]
-                t = min(x - cab["x_aft_mm"], cab["x_fwd_mm"] - x) / (0.25 * span)
-                z += DECK["cabin_height_mm"] * fy * min(1.0, max(0.0, t))
-            return z
+            return zs + crown * (1.0 - u * u)
 
         half = []
         if d and x <= d["x_fwd"]:
@@ -325,7 +328,11 @@ class Hull(object):
             y_ci = min(d["coaming_inner"](x), y_co) * k
             y_re = min(d["recess_edge"](x), y_ci) * k
             z_seat = z_deck(y_ci)
-            z_top = z_seat + DECK["coaming_height_mm"] * k
+            # верх комингса снят с силуэта: это высота над линией борта
+            top_over = (b.coaming_top(x) if b.coaming_top is not None
+                        else DECK["coaming_height_fallback_mm"])
+            z_top = (max(z_seat + 6.0, zs + top_over) * k
+                     + z_seat * (1.0 - k))
             z_sole = z_seat + (DECK["sole_z_mm"] - z_seat) * k
             half = [(0.0, z_sole), (y_re, z_sole), (y_re, z_seat),
                     (y_ci, z_seat), (y_ci, z_top), (y_co, z_top),
@@ -341,6 +348,31 @@ class Hull(object):
 
         ring = [(-y, z) for y, z in reversed(half[1:])] + half
         return ring
+
+    def _crown(self, x, ys):
+        """Погибь палубы над линией борта на абсциссе x.
+
+        Впереди кокпита силуэт показывает саму палубу — берём его как есть.
+        В корме силуэт показывает верх комингса, то есть верхнюю огибающую
+        всего, что там торчит: палуба обязана быть под ней. Отсюда доля
+        DECK["aft_crown_of_coaming"] — не подгонка, а следствие того, что
+        проекция даёт границу сверху, а не саму линию.
+        """
+        b = self.b
+        aft, fwd = b.coaming_top, b.crown_curve
+        if aft is None and fwd is None:
+            return DECK["crown_frac_fallback"] * ys
+        if fwd is None:
+            return DECK["aft_crown_of_coaming"] * aft(x)
+        if aft is None:
+            return fwd(x)
+        x0, x1 = aft.x[-1], fwd.x[0]
+        if x <= x0:
+            return DECK["aft_crown_of_coaming"] * aft(x)
+        if x >= x1:
+            return fwd(x)
+        u = (x - x0) / (x1 - x0)
+        return ((1 - u) * DECK["aft_crown_of_coaming"] * aft(x0) + u * fwd(x1))
 
     def closed_mesh(self, n_station=120, n_girth=28, ramp_mm=500.0):
         """Замкнутое тело корпуса: обшивка, палуба и крышки на транце и в носу.

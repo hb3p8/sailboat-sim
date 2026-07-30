@@ -171,8 +171,10 @@ function readControls(dt) {
   const o = boat.o;
   const rate = 45 * D;                      // скорость перекладки руля
   let target = 0;
-  if (keys.ArrowLeft || keys.KeyA) target = -35 * D;
-  if (keys.ArrowRight || keys.KeyD) target = 35 * D;
+  // Положительный угол пера уводит корму вправо и, значит, нос влево — так
+  // устроен руль. Клавиши поэтому инвертированы: вправо значит поворот вправо.
+  if (keys.ArrowLeft || keys.KeyA) target = 35 * D;
+  if (keys.ArrowRight || keys.KeyD) target = -35 * D;
   o.rudder += Math.max(-rate * dt, Math.min(rate * dt, target - o.rudder));
   if (!target) o.rudder *= Math.pow(0.02, dt);   // руль сам идёт в ДП
 

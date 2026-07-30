@@ -1,7 +1,7 @@
 PY ?= python3
 VENV := .venv/bin/python
 
-.PHONY: all extract hull viewer export physics sim fit clean
+.PHONY: all extract hull viewer export physics sim test fit clean
 
 all: viewer export sim
 
@@ -22,9 +22,13 @@ export: hull
 physics: hull
 	$(PY) scripts/build_physics.py
 
-# Симулятор управления и самотест физики
 sim: physics
 	$(PY) scripts/build_sim.py
+
+# Физика проверяется без браузера: он мешает отличить расходимость модели
+# от проблем отрисовки и не запускается из Makefile.
+test: physics
+	node tests/physics.test.mjs
 
 # Ф3: оптимизатор, нужен scipy из .venv. Пишет out/params.json, который
 # дальше автоматически подхватывает build_hull.
@@ -33,5 +37,4 @@ fit: extract
 	$(MAKE) all
 
 clean:
-	rm -rf out viewer/index.html sim/index.html sim/selftest.html \
-	       src/sv20/__pycache__
+	rm -rf out viewer/index.html sim/index.html src/sv20/__pycache__

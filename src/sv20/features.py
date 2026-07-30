@@ -239,6 +239,48 @@ def find_cabin(subpaths, datum, x_from, x_to=4200.0, tol=0.84):
     return best
 
 
+def find_deck_profile(subpaths, datum, sheer_pts, min_span=300.0):
+    """Высоты палубы с вида сбоку: верх комингса и погибь бака.
+
+    Силуэт показывает самую высокую линию на каждой абсциссе. В корме это верх
+    комингса кокпита, в носу — линия палубы в ДП, то есть её погибь. Обе идут
+    выше линии борта, обе длинные и обведены контурной толщиной — по этому и
+    отбираются.
+
+    Раньше обе высоты назначались от балды (комингс 55 мм, погибь 4.5% от
+    полушироты); теперь они снимаются.
+    """
+    pts = sorted(sheer_pts)
+    (x0, z0), (x1, z1) = pts[0], pts[-1]
+
+    def sheer_z(x):
+        return z0 + (z1 - z0) * (x - x0) / (x1 - x0)
+
+    found = []
+    for s in subpaths:
+        if abs(s.width - 0.84) > 1e-6 or len(s.points) < 3:
+            continue
+        a = sorted(datum.profile(p) for p in s.points)
+        span = a[-1][0] - a[0][0]
+        if span < min_span or a[0][0] < -50 or a[-1][0] > 6150:
+            continue
+        over = [p[1] - sheer_z(p[0]) for p in a]
+        if min(over) < -5 or max(over) > 200:
+            continue
+        found.append((a[0][0], [[round(p[0], 1), round(o, 1)]
+                                for p, o in zip(a, over)]))
+    if not found:
+        return None
+    found.sort()
+    aft = found[0][1]
+    fwd = None
+    for x_start, curve in found:
+        if x_start > 3000 and (fwd is None or len(curve) > len(fwd)):
+            fwd = curve
+    return {"coaming_top": aft, "foredeck_crown": fwd,
+            "note": "смещения над линией борта, мм"}
+
+
 def find_rudder_pintles(subpaths, datum, x_max=30.0, min_len=100.0):
     """Гудгенсы: горизонтальные отрезки в корму от транца, попарно по высоте."""
     horiz = []
@@ -322,11 +364,13 @@ def naca_match(profile, families=None):
             "thickness_ratio": profile["thickness_ratio"]}
 
 
-def extract(subpaths, datum, plan_box):
+def extract(subpaths, datum, plan_box, sheer_pts=None):
     """Все следы приложений, какие есть на чертеже."""
     section = find_keel_section(subpaths, datum, plan_box)
     trunk = find_keel_trunk(subpaths, datum, section)
     deck = find_deck_layout(subpaths, datum, plan_box)
+    profile = (find_deck_profile(subpaths, datum, sheer_pts)
+               if sheer_pts else None)
     cabin = find_cabin(subpaths, datum, deck["x_fwd_mm"]) if deck else None
     pintles = find_rudder_pintles(subpaths, datum)
     stock = None
@@ -339,6 +383,7 @@ def extract(subpaths, datum, plan_box):
         "keel_section_family": naca_match(section),
         "keel_trunk": trunk,
         "deck_layout": deck,
+        "deck_profile": profile,
         "cabin": cabin,
         "rudder_pintles": pintles,
         "rudder_stock": stock,

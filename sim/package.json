@@ -1,0 +1,6 @@
+{
+  "name": "sv20-sim",
+  "private": true,
+  "type": "module",
+  "description": "Физика хода SV20. type=module нужен, чтобы node мог импортировать physics.js напрямую в тестах."
+}

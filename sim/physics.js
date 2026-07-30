@@ -17,6 +17,10 @@
 
 const DEG = Math.PI / 180;
 
+// Коэффициент поперечного обтекания полоски корпуса. Для мелкого широкого
+// днища это около единицы; величина одна и общая, а не набор подгоночных.
+const HULL_CROSSFLOW_CD = 1.0;
+
 // Нормировка угла без цикла: при расходимости `while` по бесконечности вешает
 // вкладку намертво, и это не гипотеза — так и было.
 function wrapPi(a) {
@@ -157,6 +161,30 @@ export class Boat {
              awa: awa, alpha: alpha, cl: k.cl, cd: k.cd, area: area };
   }
 
+  // Поперечная сила корпуса по полоскам. Заменяет два прежних слагаемых —
+  // «сопротивление дрейфу» и «демпфирование рыскания», — потому что на самом
+  // деле это одно и то же явление: каждая полоска обтекается поперёк со своей
+  // местной скоростью v + r·x, и сумма даёт сразу и силу, и момент, и связь
+  // между ними. Раздельные подгоняемые коэффициенты для этого не нужны.
+  hullLateral(v, r, n) {
+    const P = this.p, env = P.environment, hs = P.hydrostatics;
+    const xa = hs.lwl_aft_x_m != null ? hs.lwl_aft_x_m : 0.55;
+    const xf = hs.lwl_fwd_x_m != null ? hs.lwl_fwd_x_m : 6.02;
+    const cgx = P.mass.cg_m[0];
+    const steps = n || 12;
+    const dx = (xf - xa) / steps;
+    const q = 0.5 * env.rho_water * HULL_CROSSFLOW_CD * hs.draft_canoe_m * dx;
+    let fy = 0, mz = 0;
+    for (let i = 0; i < steps; i++) {
+      const arm = xa + (i + 0.5) * dx - cgx;
+      const vi = v + r * arm;
+      const f = -q * Math.abs(vi) * vi;
+      fy += f;
+      mz += f * arm;
+    }
+    return { fy: fy, mz: mz };
+  }
+
   foilForce(foil, alpha, speed, extraCd) {
     const env = this.p.environment;
     if (speed < 0.05) return { lift: 0, drag: 0 };
@@ -174,17 +202,24 @@ export class Boat {
     const aw = this.apparentWind();
     const sail = this.sailForces(aw);
 
-    // киль: угол атаки — дрейф; крен уменьшает эффективную площадь
+    // Крылья видят не скорость центра тяжести, а свою местную: к дрейфу
+    // добавляется вращение на собственном плече от ЦТ. Для руля это главное
+    // слагаемое, ограничивающее циркуляцию: на развороте набегающий поток
+    // подходит к перу под меньшим углом, и момент сам себя гасит. Без этого
+    // лодка крутилась радиусом меньше собственной длины.
     const keel = P.foils.keel, rud = P.foils.rudder;
+    const cgx0 = P.mass.cg_m[0];
     const cphi = Math.cos(this.phi);
-    const kf = this.foilForce(keel, -leeway, speed, 0);
+    const uu = Math.max(0.05, this.u);
+
+    const vKeel = this.v + this.r * (keel.x_m - cgx0);
+    const aKeel = speed > 0.05 ? Math.atan2(vKeel, uu) : 0;
+    const kf = this.foilForce(keel, -aKeel, speed, 0);
     const keelSide = kf.lift * cphi;
     const keelDrag = kf.drag;
 
-    // руль: к дрейфу добавляется перекладка и вращение лодки
-    const vAtRudder = this.v + this.r * rud.x_m;
-    const aRud = (speed > 0.05
-      ? Math.atan2(vAtRudder, Math.max(0.05, this.u)) : 0) - this.o.rudder;
+    const vRud = this.v + this.r * (rud.x_m - cgx0);
+    const aRud = (speed > 0.05 ? Math.atan2(vRud, uu) : 0) - this.o.rudder;
     const rf = this.foilForce(rud, -aRud, speed, 0.004);
     const rudSide = rf.lift * cphi;
     const rudDrag = rf.drag;
@@ -192,9 +227,7 @@ export class Boat {
     // сопротивление корпуса по таблице
     const rt = lerpTable(P.resistance.curve, 'v_ms', Math.abs(this.u), 'rt_n');
     const hullDrag = -Math.sign(this.u || 1) * rt;
-    // поперечное сопротивление корпуса: грубо, по площади борта
-    const swayDrag = -Math.sign(this.v || 1) * 0.5 * env.rho_water * 1.1 *
-      (P.hydrostatics.lwl_m * P.hydrostatics.draft_canoe_m) * this.v * this.v;
+    const hull = this.hullLateral(this.v, this.r);
 
     // --- уравнения движения
     const mx = this.mass * (1 + m.added_surge);
@@ -203,7 +236,7 @@ export class Boat {
     const ix = m.ixx_kg_m2 * m.added_roll;
 
     const fx = sail.fx + hullDrag - keelDrag - rudDrag;
-    const fy = sail.fy + keelSide + rudSide + swayDrag;
+    const fy = sail.fy + keelSide + rudSide + hull.fy;
 
     const du = fx / mx + this.v * this.r;
     const dv = fy / my - this.u * this.r;
@@ -213,12 +246,8 @@ export class Boat {
     // их напрямую, у киля получается плечо в три метра вместо двадцати пяти
     // сантиметров. Лодка от этого раскручивается за секунды.
     const cgx = m.cg_m[0];
-    let mz = keelSide * (keel.x_m - cgx) + rudSide * (rud.x_m - cgx)
-             + sail.fy * (sail.x - cgx);
-    // демпфирование рыскания корпусом
-    mz -= 0.5 * env.rho_water * 0.35 *
-      P.hydrostatics.lwl_m * P.hydrostatics.lwl_m * P.hydrostatics.lwl_m *
-      P.hydrostatics.draft_canoe_m * this.r * Math.abs(this.r);
+    const mz = keelSide * (keel.x_m - cgx) + rudSide * (rud.x_m - cgx)
+             + sail.fy * (sail.x - cgx) + hull.mz;
     const dr = mz / iz;
 
     // крен: кренящий момент паруса минус восстанавливающий и демпфирование

@@ -159,6 +159,29 @@ if (HULL) {
               on: true, color: '--c-hull' }, [HULL.keel_line], '--c-hull', 7);
 }
 
+// --- киль и руль ------------------------------------------------------------
+
+if (HULL && HULL.appendages) {
+  const A = HULL.appendages;
+  const solid = (name, cssVar) => {
+    const g = new BufferGeometry();
+    const pos = [];
+    for (const p of A[name].verts) pos.push(p[0], p[1], p[2]);
+    g.setAttribute('position', new Float32BufferAttribute(pos, 3));
+    g.setIndex(A[name].tris.flat());
+    g.computeVertexNormals();
+    return new Mesh(g, new MeshStandardMaterial({
+      color: new Color(css(cssVar)), roughness: 0.45, metalness: 0.15,
+      side: DoubleSide }));
+  };
+  add({ id: 'fin', label: 'Перо киля', group: 'Киль и руль', on: true,
+        color: '--c-keel' }, solid('fin', '--c-keel'), '--c-keel');
+  add({ id: 'bulb', label: 'Бульб', group: 'Киль и руль', on: true,
+        color: '--c-ballast' }, solid('bulb', '--c-ballast'), '--c-ballast');
+  add({ id: 'rudder', label: 'Перо руля', group: 'Киль и руль', on: true,
+        color: '--c-keel' }, solid('rudder', '--c-keel'), '--c-keel');
+}
+
 // --- служебное --------------------------------------------------------------
 
 const grid = [];
@@ -180,7 +203,7 @@ add({ id: 'water', label: 'Вода на КВЛ', group: 'Служебное', o
 
 const BB = new Box3();
 for (const L of layers)
-  if (L.group === 'Каркас Ф1' || L.id === 'surface')
+  if (L.group === 'Каркас Ф1' || L.id === 'surface' || L.group === 'Киль и руль')
     BB.expandByObject(L.object);
 const CENTER = BB.getCenter(new Vector3());
 
@@ -436,6 +459,15 @@ for (const L of layers) {
   if (L.note) txt.title = L.note;
   lab.append(cb, sw, txt);
   P.appendChild(lab);
+}
+
+if (HULL && HULL.appendages) {
+  h2('Киль и руль — размеры');
+  const p = document.createElement('p');
+  p.className = 'note';
+  p.textContent = HULL.appendages.note;
+  P.appendChild(p);
+  table(HULL.appendages.rows);
 }
 
 if (HULL) {

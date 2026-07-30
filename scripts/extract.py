@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
-from sv20 import calibrate, frame, layers, pdf_paths  # noqa: E402
+from sv20 import calibrate, features, frame, layers, pdf_paths  # noqa: E402
 
 
 def project(groups, datum):
@@ -53,6 +53,7 @@ def main():
     groups = layers.classify(subpaths, views, key)
     fr = frame.build(subpaths, datum, key, calibrate.SPEC,
                      views.title_box, media)
+    feats = features.extract(subpaths, datum, views.plan_box)
 
     frame_doc = {
         "source": {"file": os.path.basename(pdf), "media_box_pt": list(media),
@@ -68,6 +69,7 @@ def main():
         "curves": fr["curves"],
         "metrics": fr["metrics"],
         "gaps": fr["gaps"],
+        "features": feats,
         "layer_summary": layers.summary(groups),
     }
     with open(os.path.join(outdir, "frame.json"), "w") as f:
@@ -85,6 +87,10 @@ def main():
     for c in checks:
         dev = "" if c["deviation"] is None else "  откл %+.2f%%" % (100 * c["deviation"])
         print("  %-32s %10.3f  (паспорт %8.3f)%s" % (c["name"], c["value"], c["expected"], dev))
+    ks = feats["keel_section"]
+    print("профиль пера киля с чертежа: хорда %.1f мм, толщина %.1f%% на %.0f%% хорды"
+          % (ks["chord_mm"], 100 * ks["thickness_ratio"],
+             ks["max_thickness_at_pct_chord"]))
     print("слои: " + ", ".join("%s=%d" % (k, v["paths"])
                                for k, v in frame_doc["layer_summary"].items()))
     print("записано в %s/: frame.json, drawing.json, report.md" % outdir)
@@ -138,6 +144,40 @@ def render_report(doc):
     for k, v in doc["layer_summary"].items():
         L.append("| %s | %d | %d |" % (k, v["paths"], v["points"]))
     L.append("")
+
+    f = doc.get("features")
+    if f:
+        ks, tr = f["keel_section"], f["keel_trunk"]
+        L.append("## Следы приложений на чертеже\n")
+        L.append("Ниже КВЛ на листе пусто, но киль и руль оставили следы выше неё.\n")
+        L.append("| Что | Значение |")
+        L.append("|---|---|")
+        L.append("| Профиль пера киля, хорда | %.1f мм |" % ks["chord_mm"])
+        L.append("| Толщина | %.1f мм (%.1f%% хорды) |"
+                 % (ks["thickness_mm"], 100 * ks["thickness_ratio"]))
+        L.append("| Максимум толщины | %.1f%% хорды от передней кромки |"
+                 % ks["max_thickness_at_pct_chord"])
+        L.append("| Семейство профиля | %s |" % f["keel_section_family"]["nearest"])
+        L.append("| Положение киля | X = %.0f мм, это %.1f%% LOA |"
+                 % (0.5 * (ks["x_le_mm"] + ks["x_te_mm"]),
+                    50.0 * (ks["x_le_mm"] + ks["x_te_mm"]) / doc["metrics"]["loa_mm"]))
+        if tr:
+            L.append("| Колодец | %.0f × %.0f мм |"
+                     % (tr["length_mm"], 2 * tr["half_width_mm"]))
+        p = f.get("rudder_pintles")
+        if p:
+            L.append("| Гудгенсы руля | Z = %.0f и %.0f мм над КВЛ |"
+                     % (p["stock_z_lo_mm"], p["stock_z_hi_mm"]))
+        st = f.get("rudder_stock")
+        if st:
+            L.append("| Ось баллера | X = %.1f мм, вертикальная |" % st["x_mm"])
+        L.append("")
+        if f["lifts_vertically"] and tr:
+            L.append("Колодец длиннее хорды всего на **%.0f мм**. Значит перо не "
+                     "откидывается назад, а ходит вертикально — и сечение по всей "
+                     "длине подъёма обязано быть постоянным. Это снимает вопрос о "
+                     "сужении пера: его нет.\n"
+                     % (tr["length_mm"] - ks["chord_mm"]))
 
     L.append("## Чего на чертеже нет\n")
     for g in doc["gaps"]:

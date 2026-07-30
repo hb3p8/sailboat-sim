@@ -91,6 +91,34 @@ def hull_notes(hl):
     ]
 
 
+APPENDAGE_ROWS = [
+    ("area_m2", "Площадь бокового сопротивления", "м²", 3),
+    ("aspect_ratio", "Удлинение киля", "", 2),
+    ("span_mm", "Размах киля от днища", "мм", 0),
+    ("chord_mm", "Хорда пера киля", "мм", 0),
+    ("fin_mass_kg", "Масса пера", "кг", 0),
+    ("bulb_mass_kg", "Масса бульба", "кг", 0),
+    ("ballast_vcg_mm", "ЦТ балласта от КВЛ", "мм", 0),
+]
+
+
+def appendage_payload(ap):
+    if not ap:
+        return None
+    k, r = ap["keel"], ap["rudder"]
+    rows = [[label, "%.*f" % (prec, k[key]), unit]
+            for key, label, unit, prec in APPENDAGE_ROWS]
+    rows.append(["Площадь пера руля", "%.3f" % r["area_m2"], "м²"])
+    return {
+        "fin": k["mesh"], "bulb": k["bulb_mesh"], "rudder": r["mesh"],
+        "rows": rows,
+        "note": ("Сечение пера киля снято с чертежа (%s), хорда %.0f мм. "
+                 "Бульб и руль спроектированы под 250 кг балласта, осадку "
+                 "%.0f мм и снятую с транца ось навески."
+                 % (k["section_family"], k["chord_mm"], k["draft_mm"])),
+    }
+
+
 def source_note(hl):
     fr = hl.get("fit_report")
     if fr:
@@ -130,6 +158,7 @@ def main():
             "keel_line": [[round(c, 1) for c in p] for p in hl["keel_line"]],
             "chine_line": hl.get("chine_line", []),
             "source_note": source_note(hl),
+            "appendages": appendage_payload(hl.get("appendages")),
             "hydroRows": [[label, "%.*f" % (prec, h[key]), unit]
                           for key, label, unit, prec in HYDRO_ROWS],
         }

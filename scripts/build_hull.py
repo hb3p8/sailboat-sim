@@ -19,7 +19,7 @@ import time
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from sv20 import calibrate, hullmodel, hydro  # noqa: E402
+from sv20 import appendages, calibrate, hullmodel, hydro  # noqa: E402
 
 N_STATIONS_DRAWN = 21
 
@@ -52,6 +52,17 @@ def main():
 
     xs = [boundary.x_stem * i / float(N_STATIONS_DRAWN - 1)
           for i in range(N_STATIONS_DRAWN)]
+    feats = frame_doc.get("features")
+    keel = rudder = None
+    if feats:
+        x_keel = 0.5 * (feats["keel_section"]["x_le_mm"]
+                        + feats["keel_section"]["x_te_mm"])
+        keel = appendages.build_keel(
+            feats, hull.z_keel(x_keel), calibrate.TARGET["draft_max_mm"],
+            calibrate.TARGET["ballast_kg"])
+        rudder = appendages.build_rudder(
+            feats, calibrate.TARGET["sail_area_upwind_m2"])
+
     stations = hull.station_curves(xs)
     mesh = hull.mesh()
     dt = time.time() - t0
@@ -87,6 +98,7 @@ def main():
                  "quads": mesh["quads"],
                  "transom_edge": [[round(c, 1) for c in v]
                                   for v in mesh["transom_edge"]]},
+        "appendages": appendage_doc(feats, keel, rudder),
         "warnings": ([] if not insane else
                      ["вырожденные шпангоуты на X = " +
                       ", ".join("%.0f" % x for x in insane)]),
@@ -98,6 +110,13 @@ def main():
     with open(os.path.join(out, "hull.md"), "w") as f:
         f.write(render(doc))
 
+    if keel:
+        print("киль: %.3f м², удлинение %.2f, перо %.0f кг + бульб %.0f кг, "
+              "ЦТ балласта %.0f мм"
+              % (keel["area_m2"], keel["aspect_ratio"], keel["fin_mass_kg"],
+                 keel["bulb_mass_kg"], appendages.ballast_vcg_mm(keel)))
+        print("руль: %.3f м², удлинение %.2f, ось X=%.0f мм"
+              % (rudder["area_m2"], rudder["aspect_ratio"], rudder["x_stock_mm"]))
     print("параметры: %s" % source)
     if factor:
         print("одномерная калибровка: множитель килеватости %.3f" % factor)
@@ -140,6 +159,38 @@ SANE = {
     "Cwp": (0.68, 0.82),
     "lcb_pct_lwl_from_aft": (40.0, 50.0),
 }
+
+
+def appendage_doc(feats, keel, rudder):
+    if not keel:
+        return None
+    fin, bulb = keel["fin"], keel["bulb"]
+    return {
+        "assumptions": appendages.ASSUMPTIONS,
+        "keel": {
+            "area_m2": keel["area_m2"], "aspect_ratio": keel["aspect_ratio"],
+            "span_mm": keel["wetted_span_mm"], "chord_mm": fin.root_chord,
+            "draft_mm": keel["draft_mm"],
+            "fin_mass_kg": keel["fin_mass_kg"], "fin_density": keel["fin_density"],
+            "bulb_mass_kg": keel["bulb_mass_kg"],
+            "bulb_diameter_mm": 2.0 * bulb.radius, "bulb_length_mm": bulb.length,
+            "ballast_vcg_mm": appendages.ballast_vcg_mm(keel),
+            "section_family": feats["keel_section_family"]["nearest"],
+            "mesh": fin.mesh(),
+            "bulb_mesh": bulb.mesh(keel["bulb_x_nose_mm"],
+                                   -keel["draft_mm"] + bulb.radius),
+        },
+        "rudder": {
+            "area_m2": rudder["area_m2"], "aspect_ratio": rudder["aspect_ratio"],
+            "root_chord_mm": rudder["root_chord_mm"],
+            "tip_chord_mm": rudder["tip_chord_mm"],
+            "x_stock_mm": rudder["x_stock_mm"],
+            "mesh": rudder["blade"].mesh(),
+        },
+        "sensitivity": appendages.sensitivity(
+            feats, keel["fin"].z_root, keel["draft_mm"],
+            calibrate.TARGET["ballast_kg"], [2600.0, 3600.0, 5000.0, 7850.0]),
+    }
 
 
 def render(doc):
@@ -218,6 +269,48 @@ def render(doc):
     L.append("|---" * (len(p["keel_stations"]) + 1) + "|")
     L.append("| Z | " + " | ".join("%.0f" % v for v in p["keel_z"]) + " |")
     L.append("")
+
+    ap = doc.get("appendages")
+    if ap:
+        k, r = ap["keel"], ap["rudder"]
+        L.append("## Киль и руль\n")
+        L.append("Сечение пера киля не подбиралось: оно снято с чертежа "
+                 "(колодец на виде сверху). Всё остальное здесь — "
+                 "проектирование под ограничения.\n")
+        L.append("| Величина | Значение |")
+        L.append("|---|---|")
+        L.append("| Профиль пера | %s |" % k["section_family"])
+        L.append("| Хорда, постоянная по размаху | %.1f мм |" % k["chord_mm"])
+        L.append("| Площадь бокового сопротивления | %.3f м² |" % k["area_m2"])
+        L.append("| Удлинение | %.2f |" % k["aspect_ratio"])
+        L.append("| Размах от днища | %.0f мм |" % k["span_mm"])
+        L.append("| Масса пера при ρ=%.0f | %.0f кг |"
+                 % (k["fin_density"], k["fin_mass_kg"]))
+        L.append("| Масса бульба (свинец) | %.0f кг |" % k["bulb_mass_kg"])
+        L.append("| Бульб | ⌀%.0f × %.0f мм |"
+                 % (k["bulb_diameter_mm"], k["bulb_length_mm"]))
+        L.append("| ЦТ балласта | %.0f мм от КВЛ |" % k["ballast_vcg_mm"])
+        L.append("| Площадь пера руля | %.3f м², удлинение %.2f |"
+                 % (r["area_m2"], r["aspect_ratio"]))
+        L.append("| Хорда руля | %.0f мм у корня, %.0f у конца |"
+                 % (r["root_chord_mm"], r["tip_chord_mm"]))
+        L.append("")
+        L.append("### Допущения\n")
+        for a in ap["assumptions"]:
+            L.append("- " + a)
+        L.append("")
+        L.append("### Чувствительность к плотности пера\n")
+        L.append("Заявленные 250 кг делятся между пером и бульбом, и делёж "
+                 "определяется тем, из чего перо сделано. Отсюда видно, почему "
+                 "сплошная сталь отпадает:\n")
+        L.append("| ρ пера, кг/м³ | Перо | Бульб | Бульб, ⌀×L | ЦТ балласта |")
+        L.append("|---:|---:|---:|---|---:|")
+        for row in ap["sensitivity"]:
+            L.append("| %.0f | %.0f кг | %.0f кг | %.0f × %.0f мм | %.0f мм |"
+                     % (row["fin_density"], row["fin_mass_kg"],
+                        row["bulb_mass_kg"], row["bulb_diameter_mm"],
+                        row["bulb_length_mm"], row["ballast_vcg_mm"]))
+        L.append("")
 
     if doc["warnings"]:
         L.append("## Предупреждения\n")

@@ -1,0 +1,127 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SV20 — симулятор управления</title>
+<style>
+  :root {
+    --panel: rgba(16, 22, 30, .82); --fg: #e6edf4; --dim: #93a3b4;
+    --line: rgba(255, 255, 255, .12); --accent: #ffcf5a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; overflow: hidden; background: #9fb8cc; color: var(--fg);
+    font: 13px/1.45 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; }
+  #crash {
+    position: fixed; inset: 0 0 auto 0; z-index: 9; padding: 10px 14px;
+    background: #7a1730; color: #fff; font: 12px/1.5 ui-monospace, Menlo, monospace;
+    white-space: pre-wrap;
+  }
+  .card {
+    position: fixed; background: var(--panel); backdrop-filter: blur(8px);
+    border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+  }
+  #hud { top: 14px; left: 14px; min-width: 232px; }
+  #hud .big {
+    font-size: 30px; font-weight: 650; line-height: 1.05; margin-bottom: 8px;
+    font-variant-numeric: tabular-nums;
+  }
+  #hud .big span { font-size: 14px; color: var(--dim); font-weight: 400; }
+  #hud table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #hud td { padding: 2px 0; }
+  #hud td.v { text-align: right; font-variant-numeric: tabular-nums; }
+  #hud td.u { color: var(--dim); width: 26px; padding-left: 6px; }
+  #hud .ctl {
+    margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line);
+    color: var(--dim); font-variant-numeric: tabular-nums;
+  }
+  #panel { top: 14px; right: 14px; width: 250px; }
+  #panel h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--dim); margin: 0 0 8px; font-weight: 600;
+  }
+  #panel label { display: block; margin-bottom: 10px; }
+  #panel .cap {
+    display: flex; justify-content: space-between; font-size: 11.5px;
+    margin-bottom: 2px;
+  }
+  #panel .cap span:last-child { color: var(--dim); font-variant-numeric: tabular-nums; }
+  #panel input[type=range], #panel select { width: 100%; }
+  #panel select {
+    background: rgba(0,0,0,.3); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 4px;
+  }
+  #keys { bottom: 14px; left: 14px; color: var(--dim); font-size: 12px; }
+  #keys b { color: var(--fg); font-weight: 600; }
+  #note {
+    bottom: 14px; right: 14px; width: 250px; color: var(--dim); font-size: 11.5px;
+  }
+  @media (max-width: 760px) {
+    #panel, #note { display: none; }
+  }
+</style>
+
+<div id="crash" hidden></div>
+<div id="stage"></div>
+<div id="hud" class="card"></div>
+<div id="panel" class="card">
+  <h2>Условия</h2>
+  <label><span class="cap"><span>Истинный ветер</span><span id="v-wind"></span></span>
+    <input id="wind" type="range" min="1" max="16" step="0.5" value="6"></label>
+  <label><span class="cap"><span>Направление ветра</span><span id="v-winddir"></span></span>
+    <input id="winddir" type="range" min="0" max="359" step="1" value="100"></label>
+  <label><span class="cap"><span>Откренивание экипажем</span><span id="v-hike"></span></span>
+    <input id="hike" type="range" min="0" max="1" step="0.05" value="0"></label>
+  <label><span class="cap"><span>Парусность</span><span id="v-sailscale"></span></span>
+    <input id="sailscale" type="range" min="0.6" max="2.2" step="0.05" value="1"></label>
+  <label><span class="cap"><span>Камера</span><span></span></span>
+    <select id="cam"><option value="chase">погоня</option>
+      <option value="close">ближе</option></select></label>
+</div>
+<div id="keys" class="card">
+  <b>←→</b> или <b>A D</b> — руль &nbsp;·&nbsp;
+  <b>↑↓</b> или <b>W S</b> — шкот &nbsp;·&nbsp; <b>R</b> — сброс
+</div>
+<div id="note" class="card">
+  Массы, моменты инерции, диаграмма остойчивости и гидростатика посчитаны по
+  восстановленной геометрии. Коэффициенты парусов и крыльев — модели, кривая
+  остаточного сопротивления подобрана под ожидаемую скорость.
+</div>
+
+<script>
+addEventListener('error', e => {
+  const box = document.getElementById('crash');
+  if (!box) return;
+  box.hidden = false;
+  box.textContent += (e.message || e.error || 'ошибка') +
+    (e.lineno ? '  (строка ' + e.lineno + ')' : '') + '\n';
+});
+</script>
+<script type="module">
+const PACK = /*__PACK__*/ null;
+const MESH = /*__MESH__*/ null;
+/*__THREE__*/
+{
+/*__PHYSICS__*/
+/*__MAIN__*/
+}
+</script>
+<script>
+(function () {
+  const fmt = {
+    wind: v => (+v).toFixed(1) + ' м/с (' + (v * 1.94384).toFixed(0) + ' уз)',
+    winddir: v => (+v).toFixed(0) + '°',
+    hike: v => (+v * 100).toFixed(0) + '%',
+    sailscale: v => '×' + (+v).toFixed(2),
+  };
+  for (const id of Object.keys(fmt)) {
+    const el = document.getElementById(id), out = document.getElementById('v-' + id);
+    if (!el || !out) continue;
+    const show = () => { out.textContent = fmt[id](el.value); };
+    el.addEventListener('input', show);
+    show();
+  }
+})();
+</script>

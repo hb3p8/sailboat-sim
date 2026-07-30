@@ -3,3 +3,5 @@ viewer/index.html
 __pycache__/
 *.pyc
 .venv/
+sim/index.html
+sim/selftest.html

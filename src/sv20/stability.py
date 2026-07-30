@@ -43,9 +43,18 @@ BUDGET_DEFAULTS = {
 }
 
 
-def point_item(name, mass, x, y, z, ixx_own=0.0, note=""):
+def point_item(name, mass, x, y, z, own=(0.0, 0.0, 0.0), note=""):
+    """Статья сводки. `own` — собственные моменты инерции (Ixx, Iyy, Izz).
+
+    Для рыскания и киля собственные моменты обязательны: масса корпуса
+    размазана по шести метрам длины, и без них момент инерции по вертикальной
+    оси занижается на порядок.
+    """
+    if isinstance(own, (int, float)):
+        own = (own, 0.0, 0.0)
     return {"name": name, "mass_kg": mass, "com_mm": [x, y, z],
-            "ixx_own_kg_m2": ixx_own, "note": note}
+            "ixx_own_kg_m2": own[0], "iyy_own_kg_m2": own[1],
+            "izz_own_kg_m2": own[2], "note": note}
 
 
 def budget(keel, keel_props, bulb_props, shell_props, total_kg, opts=None):
@@ -53,29 +62,34 @@ def budget(keel, keel_props, bulb_props, shell_props, total_kg, opts=None):
     o = dict(BUDGET_DEFAULTS)
     o.update(opts or {})
 
+    def solid_own(props, mass):
+        k = mass / max(1e-9, props["mass_kg"])
+        return tuple(props["inertia_kg_m2"][i][i] * k for i in range(3))
+
+    rod = o["rig_mass_kg"] * (o["rig_length_mm"] / 1000.0) ** 2 / 12.0
     items = [
         point_item("Перо киля", keel["fin_mass_kg"],
                    keel_props["com_mm"][0], 0.0, keel_props["com_mm"][2],
-                   keel_props["inertia_kg_m2"][0][0] * keel["fin_mass_kg"]
-                   / max(1e-9, keel_props["mass_kg"]),
+                   solid_own(keel_props, keel["fin_mass_kg"]),
                    "геометрия, плотность пера — допущение"),
         point_item("Бульб", keel["bulb_mass_kg"],
                    bulb_props["com_mm"][0], 0.0, bulb_props["com_mm"][2],
-                   bulb_props["inertia_kg_m2"][0][0] * keel["bulb_mass_kg"]
-                   / max(1e-9, bulb_props["mass_kg"]),
+                   solid_own(bulb_props, keel["bulb_mass_kg"]),
                    "геометрия, свинец"),
+        # мачта — тонкий вертикальный стержень: вокруг своей оси инерции нет
         point_item("Рангоут и паруса", o["rig_mass_kg"],
-                   3550.0, 0.0, o["rig_vcg_mm"],
-                   o["rig_mass_kg"] * (o["rig_length_mm"] / 1000.0) ** 2 / 12.0,
+                   3550.0, 0.0, o["rig_vcg_mm"], (rod, rod, 0.0),
                    "оценка: мачта как тонкий стержень"),
         point_item("Палубное железо и руль", o["gear_mass_kg"],
-                   2000.0, 0.0, o["gear_vcg_mm"], 0.0, "оценка"),
+                   2000.0, 0.0, o["gear_vcg_mm"], (0.0, 0.0, 0.0), "оценка"),
     ]
     rest = total_kg - sum(i["mass_kg"] for i in items)
     items.insert(0, point_item(
         "Корпус и палуба", rest,
         shell_props["com_mm"][0], 0.0, shell_props["com_mm"][2],
-        shell_props["ixx_per_kg_kg_m2"] * rest,
+        (shell_props["ixx_per_kg_kg_m2"] * rest,
+         shell_props["iyy_per_kg_kg_m2"] * rest,
+         shell_props["izz_per_kg_kg_m2"] * rest),
         "оболочка постоянной поверхностной плотности, масса — остаток"))
     return items, o
 
@@ -87,24 +101,28 @@ def crew_items(n, o):
         out.append(point_item(
             "Экипаж %d" % (i + 1), o["crew_mass_kg"],
             1800.0 + 400.0 * i, o["crew_half_beam_mm"], o["crew_vcg_mm"],
-            0.0, "сидит на борту"))
+            (0.0, 0.0, 0.0), "сидит на борту"))
     return out
 
 
 def combine(items):
-    """Суммарная масса, ЦТ и момент инерции относительно продольной оси."""
+    """Суммарная масса, ЦТ и моменты инерции по всем трём осям."""
     m = sum(i["mass_kg"] for i in items)
     if m <= 0:
         return None
     cy = sum(i["mass_kg"] * i["com_mm"][1] for i in items) / m
     cz = sum(i["mass_kg"] * i["com_mm"][2] for i in items) / m
     cx = sum(i["mass_kg"] * i["com_mm"][0] for i in items) / m
-    ixx = 0.0
+    ixx = iyy = izz = 0.0
     for i in items:
+        dx = (i["com_mm"][0] - cx) / 1000.0
         dy = (i["com_mm"][1] - cy) / 1000.0
         dz = (i["com_mm"][2] - cz) / 1000.0
         ixx += i["ixx_own_kg_m2"] + i["mass_kg"] * (dy * dy + dz * dz)
-    return {"mass_kg": m, "cg_mm": [cx, cy, cz], "ixx_kg_m2": ixx}
+        iyy += i.get("iyy_own_kg_m2", 0.0) + i["mass_kg"] * (dx * dx + dz * dz)
+        izz += i.get("izz_own_kg_m2", 0.0) + i["mass_kg"] * (dx * dx + dy * dy)
+    return {"mass_kg": m, "cg_mm": [cx, cy, cz],
+            "ixx_kg_m2": ixx, "iyy_kg_m2": iyy, "izz_kg_m2": izz}
 
 
 def roll_period(mass_kg, ixx_kg_m2, gm_mm, added=1.25):

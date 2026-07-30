@@ -1,9 +1,9 @@
 PY ?= python3
 VENV := .venv/bin/python
 
-.PHONY: all extract hull viewer export fit clean
+.PHONY: all extract hull viewer export physics sim fit clean
 
-all: viewer export
+all: viewer export sim
 
 extract:
 	$(PY) scripts/extract.py
@@ -18,6 +18,14 @@ viewer: hull
 export: hull
 	$(PY) scripts/export.py
 
+# Пакет для симулятора: GZ, гидростатика, инерции, сетки
+physics: hull
+	$(PY) scripts/build_physics.py
+
+# Симулятор управления и самотест физики
+sim: physics
+	$(PY) scripts/build_sim.py
+
 # Ф3: оптимизатор, нужен scipy из .venv. Пишет out/params.json, который
 # дальше автоматически подхватывает build_hull.
 fit: extract
@@ -25,4 +33,5 @@ fit: extract
 	$(MAKE) all
 
 clean:
-	rm -rf out viewer/index.html src/sv20/__pycache__
+	rm -rf out viewer/index.html sim/index.html sim/selftest.html \
+	       src/sv20/__pycache__

@@ -91,6 +91,19 @@ def hull_notes(hl):
     ]
 
 
+def source_note(hl):
+    fr = hl.get("fit_report")
+    if fr:
+        return ("Параметры подобраны на Ф3: %d параметров, %d невязок, "
+                "стоимость %.4f → %.4f. Водоизмещение и осадка — данные, "
+                "коридоры коэффициентов — рамка правдоподобия."
+                % (fr["parameters"], fr["residuals"],
+                   fr["cost_start"], fr["cost_end"]))
+    return ("Ф2: водоизмещение сведено к цели одним числом — общим множителем "
+            "килеватости %.3f. Остальное получилось само."
+            % (hl.get("deadrise_factor") or 0.0))
+
+
 def main():
     out = os.path.join(ROOT, "out")
     fr = json.load(open(os.path.join(out, "frame.json")))
@@ -116,16 +129,23 @@ def main():
             "stations": [s["points"] for s in hl["stations"]],
             "keel_line": [[round(c, 1) for c in p] for p in hl["keel_line"]],
             "chine_line": hl.get("chine_line", []),
-            "deadrise_factor": hl["deadrise_factor"],
+            "source_note": source_note(hl),
             "hydroRows": [[label, "%.*f" % (prec, h[key]), unit]
                           for key, label, unit, prec in HYDRO_ROWS],
         }
         payload["notes"] += hull_notes(hl)
 
+    vendor = os.path.join(ROOT, "viewer", "vendor", "three.module.js")
     tpl = open(os.path.join(ROOT, "viewer", "template.html")).read()
     js = open(os.path.join(ROOT, "viewer", "renderer.js")).read()
+    three = open(vendor).read()
+
     html = tpl.replace("/*__DATA__*/ null",
                        json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    # three вклеивается в тот же модуль, что и рендерер: его классы попадают
+    # в лексическую область видимости, а хвостовой `export {...}` в модуле
+    # безвреден. Так просмотрщик остаётся одним файлом без сети и сборщика.
+    html = html.replace("/*__THREE__*/", three)
     html = html.replace("/*__RENDERER__*/", js)
 
     dst = os.path.join(ROOT, "viewer", "index.html")

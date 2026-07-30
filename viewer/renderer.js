@@ -1,401 +1,412 @@
-// Каркасный просмотрщик: canvas 2D + ручная проекция. Никаких внешних библиотек —
-// геометрия здесь линейная, а полсотни строк математики дешевле, чем тащить движок.
+// Просмотрщик на three.js. Сборка three вклеена выше этого кода в тот же
+// модуль, поэтому все классы уже в области видимости — импортировать нечего.
+//
+// Мир в миллиметрах и с осью Z вверх, как в судостроительной системе Ф0:
+// X от кормовой оконечности в нос, Y полуширота, Z вверх от КВЛ.
 
 const RAD = Math.PI / 180;
-const cv = document.getElementById('cv');
-const ctx = cv.getContext('2d');
-const F = DATA.frame, M = F.metrics;
+const stage = document.getElementById('stage');
+const svg = document.getElementById('leaders');
+const labelBox = document.getElementById('labels');
+const F = DATA.frame, HULL = DATA.hull || null;
 
-const cam = { az: -132 * RAD, el: 19 * RAD, dist: 11500, target: [3050, 0, 120], fov: 30 * RAD };
-const HOME = Object.assign({}, cam, { target: cam.target.slice() });
+// ------------------------------------------------------------------ сцена
 
-// ---------------------------------------------------------------- слои
+const scene = new Scene();
+const camera = new PerspectiveCamera(32, 1, 20, 400000);
+camera.up.set(0, 0, 1);
 
-function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+const renderer = new WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+stage.insertBefore(renderer.domElement, svg);
 
-const CONF = {
-  measured:  { color: '--c-measured',  label: 'снято с чертежа',       dash: [] },
-  derived:   { color: '--c-derived',   label: 'совмещение двух видов', dash: [] },
-  projected: { color: '--c-projected', label: 'проекция, Y неизвестен', dash: [7, 4] },
-  inferred:  { color: '--c-inferred',  label: 'достроено',             dash: [3, 4] }
-};
+function css(v) {
+  return getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+}
+
+const hemi = new HemisphereLight(css('--sky'), css('--ground'), 2.0);
+scene.add(hemi);
+const key = new DirectionalLight(0xffffff, 2.2);
+key.position.set(-4000, -6000, 7000);
+scene.add(key);
+const fill = new DirectionalLight(0xffffff, 0.8);
+fill.position.set(5000, 4000, 1500);
+scene.add(fill);
+
+// ------------------------------------------------------------------ слои
 
 const layers = [];
+const themed = [];   // материалы, которые надо перекрасить при смене темы
 
-function lift(group) {
-  const flat = group.plane === 'plan';
-  return group.paths.map(p => p.pts.map(q => flat ? [q[0], q[1], 0] : [q[0], 0, q[1]]));
+function add(spec, object, cssVar) {
+  object.visible = spec.on;
+  scene.add(object);
+  layers.push(Object.assign({ object }, spec));
+  if (cssVar) themed.push([object, cssVar]);
+  return object;
 }
+
+function segmentsOf(polys) {
+  const pos = [];
+  for (const poly of polys)
+    for (let i = 0; i < poly.length - 1; i++)
+      pos.push(poly[i][0], poly[i][1], poly[i][2],
+               poly[i + 1][0], poly[i + 1][1], poly[i + 1][2]);
+  const g = new BufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  return g;
+}
+
+function lineLayer(spec, polys, cssVar, opacity) {
+  const mat = new LineBasicMaterial({
+    color: new Color(css(cssVar)),
+    transparent: opacity != null, opacity: opacity == null ? 1 : opacity,
+  });
+  return add(spec, new LineSegments(segmentsOf(polys), mat), cssVar);
+}
+
+// Толстые линии в WebGL не поддерживаются — важные кривые каркаса рисуем
+// тонкими трубками. Заодно они честно затеняются и не теряются на фоне.
+function tubeLayer(spec, polys, cssVar, radius) {
+  const group = new Group();
+  const mat = new MeshStandardMaterial({
+    color: new Color(css(cssVar)), roughness: 0.5, metalness: 0.0,
+  });
+  for (const poly of polys) {
+    const pts = poly.map(p => new Vector3(p[0], p[1], p[2]));
+    if (pts.length < 2) continue;
+    const curve = new CatmullRomCurve3(pts, false, 'centripetal', 0.0);
+    group.add(new Mesh(
+      new TubeGeometry(curve, Math.max(8, pts.length * 2), radius, 6, false),
+      mat));
+  }
+  return add(spec, group, cssVar);
+}
+
+// --- подложка: исходный чертёж ---------------------------------------------
 
 const UNDERLAY = [
-  ['deck_line', 'Линия борта, вид сверху', '--c-draw', 1.4],
-  ['plan',      'Вид сверху: палуба и оборудование', '--c-draw2', 0.8],
-  ['profile',   'Вид сбоку: палубные детали', '--c-draw2', 0.8],
-  ['sailplan',  'Рангоут и паруса', '--c-draw2', 0.7],
-  ['rig',       'Такелаж и выноски', '--c-draw2', 0.7],
-  ['other',     'Прочее с листа', '--c-draw2', 0.7]
+  ['deck_line', 'Линия борта, вид сверху', '--c-draw', true],
+  ['plan', 'Вид сверху: палуба и оборудование', '--c-draw2', true],
+  ['profile', 'Вид сбоку: палубные детали', '--c-draw2', true],
+  ['sailplan', 'Рангоут и паруса', '--c-draw2', false],
+  ['rig', 'Такелаж и выноски', '--c-draw2', false],
+  ['other', 'Прочее с листа', '--c-draw2', false],
 ];
 
-for (const [id, label, color, w] of UNDERLAY) {
+for (const [id, label, color, on] of UNDERLAY) {
   const g = DATA.draw[id];
   if (!g || !g.paths.length) continue;
-  layers.push({
-    id, label, color, width: w, dash: [], group: 'Подложка — исходный чертёж',
-    on: id === 'deck_line' || id === 'plan' || id === 'profile',
-    polys: lift(g), count: g.paths.length
-  });
+  const flat = g.plane === 'plan';
+  const polys = g.paths.map(p => p.pts.map(
+    q => flat ? [q[0], q[1], 0] : [q[0], 0, q[1]]));
+  lineLayer({ id, label, group: 'Подложка — исходный чертёж', on, color },
+            polys, color, 0.75);
 }
+
+// --- каркас Ф1 --------------------------------------------------------------
+
+const CONF = {
+  measured: { color: '--c-measured', label: 'снято с чертежа' },
+  derived: { color: '--c-derived', label: 'совмещение двух видов' },
+  projected: { color: '--c-projected', label: 'проекция, Y неизвестен' },
+  inferred: { color: '--c-inferred', label: 'достроено' },
+};
 
 for (const c of F.curves) {
   const cf = CONF[c.confidence] || CONF.inferred;
-  layers.push({
-    id: c.name, label: c.label, color: cf.color, width: 2.6, dash: cf.dash,
-    group: 'Каркас Ф1', on: true, polys: [c.points], conf: c.confidence, note: c.note
-  });
+  tubeLayer({ id: c.name, label: c.label, group: 'Каркас Ф1', on: true,
+              color: cf.color, note: c.note }, [c.points], cf.color, 9);
 }
 
-// ------------------------------------------------------------ корпус Ф2
+// --- обводы -----------------------------------------------------------------
 
-const HULL = DATA.hull || null;
 if (HULL) {
   const V = HULL.mesh.verts, Q = HULL.mesh.quads;
-  const verts = V.concat(V.map(p => [p[0], -p[1], p[2]]));
+  const pos = [];
+  for (const p of V) pos.push(p[0], p[1], p[2]);
+  for (const p of V) pos.push(p[0], -p[1], p[2]);
   const off = V.length;
-  // Обход в сетке идёт снизу вверх и с кормы в нос — нормаль такой рамки
-  // смотрит внутрь корпуса. Разворачиваем, чтобы отсечение изнанки работало.
-  const quads = Q.map(q => [q[3], q[2], q[1], q[0]])
-                 .concat(Q.map(q => [q[0] + off, q[1] + off, q[2] + off, q[3] + off]));
-  layers.push({
-    id: 'surface', label: 'Поверхность корпуса', kind: 'surface',
-    color: '--c-hull', group: 'Обводы Ф2', on: true, verts, quads
-  });
-  layers.push({
-    id: 'stations', label: 'Шпангоуты, шаг 305 мм', color: '--c-hull',
-    width: 1.3, dash: [], group: 'Обводы Ф2', on: false,
-    polys: HULL.stations.concat(HULL.stations.map(p => p.map(q => [q[0], -q[1], q[2]])))
-  });
-  layers.push({
-    id: 'chine', label: 'Линия скулы', color: '--c-projected',
-    width: 2.0, dash: [], group: 'Обводы Ф2', on: true,
-    polys: [HULL.chine_line, HULL.chine_line.map(q => [q[0], -q[1], q[2]])]
-  });
-  layers.push({
-    id: 'keelline', label: 'Линия киля в ДП', color: '--c-hull',
-    width: 2.0, dash: [], group: 'Обводы Ф2', on: true, polys: [HULL.keel_line]
-  });
+  const idx = [];
+  for (const q of Q) {
+    // Обход сетки идёт снизу вверх и с кормы в нос: нормаль такой рамки
+    // смотрит внутрь корпуса. Правый борт разворачиваем, левый — нет,
+    // зеркальное отражение переворачивает ориентацию само.
+    idx.push(q[3], q[2], q[1], q[3], q[1], q[0]);
+    idx.push(q[0] + off, q[1] + off, q[2] + off,
+             q[0] + off, q[2] + off, q[3] + off);
+  }
+  const geo = new BufferGeometry();
+  geo.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+
+  add({ id: 'surface', label: 'Поверхность корпуса', group: 'Обводы',
+        on: true, color: '--c-surface' },
+      new Mesh(geo, new MeshStandardMaterial({
+        color: new Color(css('--c-surface')), roughness: 0.42, metalness: 0.05,
+        side: DoubleSide })),
+      '--c-surface');
+
+  const mirror = pts => pts.map(p => [p[0], -p[1], p[2]]);
+  lineLayer({ id: 'stations', label: 'Шпангоуты', group: 'Обводы', on: false,
+              color: '--c-hull' },
+            HULL.stations.concat(HULL.stations.map(mirror)), '--c-hull', 0.85);
+  tubeLayer({ id: 'chine', label: 'Линия скулы', group: 'Обводы', on: true,
+              color: '--c-projected' },
+            [HULL.chine_line, mirror(HULL.chine_line)], '--c-projected', 7);
+  tubeLayer({ id: 'keelline', label: 'Линия киля в ДП', group: 'Обводы',
+              on: true, color: '--c-hull' }, [HULL.keel_line], '--c-hull', 7);
 }
 
-// ------------------------------------------------- служебная геометрия
+// --- служебное --------------------------------------------------------------
 
 const grid = [];
-for (let x = 0; x <= 6000; x += 1000) grid.push([[x, -1200, 0], [x, 1200, 0]]);
-grid.push([[0, 0, 0], [6100, 0, 0]]);
-grid.push([[0, -1200, 0], [6100, -1200, 0]], [[0, 1200, 0], [6100, 1200, 0]]);
-layers.push({ id: 'grid', label: 'Плоскость КВЛ, сетка 1 м', color: '--c-draw2',
-              width: 0.8, dash: [2, 5], group: 'Служебное', on: true, polys: grid });
+for (let x = 0; x <= 6000; x += 1000) grid.push([[x, -1300, 0], [x, 1300, 0]]);
+for (let y = -1000; y <= 1000; y += 1000) grid.push([[0, y, 0], [6100, y, 0]]);
+lineLayer({ id: 'grid', label: 'Плоскость КВЛ, сетка 1 м', group: 'Служебное',
+            on: true, color: '--c-draw2' }, grid, '--c-draw2', 0.5);
 
-// зона, где по паспорту корпус есть, а на чертеже — ничего
-const T = -M.draft_hull_spec_mm, xa = M.lwl_aft_x_mm, xf = M.lwl_fwd_x_mm;
-const gapPoly = [[xa, 0, 0], [xf, 0, 0], [xf, 0, T], [xa, 0, T], [xa, 0, 0]];
-const gapHatch = [gapPoly];
-for (let x = xa; x <= xf; x += 120) gapHatch.push([[x, 0, 0], [x + 120, 0, T]]);
-layers.push({ id: 'gap', label: 'Подводная часть: пробел', color: '--c-gap',
-              width: 1.0, dash: [], group: 'Служебное', on: !HULL, polys: gapHatch, alpha: .45 });
+const waterGeo = new PlaneGeometry(7400, 3000);
+waterGeo.translate(3050, 0, 0);
+add({ id: 'water', label: 'Вода на КВЛ', group: 'Служебное', on: true,
+      color: '--c-measured' },
+    new Mesh(waterGeo, new MeshBasicMaterial({
+      color: new Color(css('--c-measured')), transparent: true, opacity: 0.07,
+      side: DoubleSide, depthWrite: false })),
+    '--c-measured');
 
-const NOTES = DATA.notes;
+// --------------------------------------------------------------- камера
 
-// ---------------------------------------------------------------- камера
+const BB = new Box3();
+for (const L of layers)
+  if (L.group === 'Каркас Ф1' || L.id === 'surface')
+    BB.expandByObject(L.object);
+const CENTER = BB.getCenter(new Vector3());
 
-// Габарит всего, что показываем: по нему камера подгоняется под окно.
-const BB = (() => {
-  const lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
-  for (const L of layers) {
-    if (L.group !== 'Каркас Ф1' && L.id !== 'gap' && L.id !== 'surface') continue;
-    const polys = L.kind === 'surface' ? [L.verts] : L.polys;
-    for (const poly of polys) for (const p of poly)
-      for (let i = 0; i < 3; i++) {
-        if (p[i] < lo[i]) lo[i] = p[i];
-        if (p[i] > hi[i]) hi[i] = p[i];
-      }
-  }
-  return { lo, hi, c: [0, 1, 2].map(i => (lo[i] + hi[i]) / 2) };
-})();
+const cam = { az: -138 * RAD, el: 20 * RAD, dist: 14000,
+              target: CENTER.clone() };
+
+function applyCamera() {
+  const ce = Math.cos(cam.el);
+  camera.position.set(
+    cam.target.x + cam.dist * ce * Math.cos(cam.az),
+    cam.target.y + cam.dist * ce * Math.sin(cam.az),
+    cam.target.z + cam.dist * Math.sin(cam.el));
+  camera.lookAt(cam.target);
+  camera.updateMatrixWorld();
+}
 
 function fitCamera() {
-  const B = basis();
+  applyCamera();
+  const right = new Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+  const up = new Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+  const fwd = new Vector3().setFromMatrixColumn(camera.matrixWorld, 2);
   let hu = 0, hv = 0, hw = 0;
   for (let m = 0; m < 8; m++) {
-    const d = [0, 1, 2].map(i => (m >> i & 1 ? BB.hi[i] : BB.lo[i]) - cam.target[i]);
-    const du = Math.abs(d[0] * B.right[0] + d[1] * B.right[1] + d[2] * B.right[2]);
-    const dv = Math.abs(d[0] * B.up[0] + d[1] * B.up[1] + d[2] * B.up[2]);
-    const dw = Math.abs(d[0] * B.fwd[0] + d[1] * B.fwd[1] + d[2] * B.fwd[2]);
-    if (du > hu) hu = du; if (dv > hv) hv = dv; if (dw > hw) hw = dw;
+    const d = new Vector3(m & 1 ? BB.max.x : BB.min.x,
+                          m & 2 ? BB.max.y : BB.min.y,
+                          m & 4 ? BB.max.z : BB.min.z).sub(cam.target);
+    hu = Math.max(hu, Math.abs(d.dot(right)));
+    hv = Math.max(hv, Math.abs(d.dot(up)));
+    hw = Math.max(hw, Math.abs(d.dot(fwd)));
   }
-  const ty = Math.tan(cam.fov / 2), tx = ty * (W / H);
-  cam.dist = Math.max(hu / tx, hv / ty) * 1.16 + hw;
+  const ty = Math.tan(camera.fov * RAD / 2);
+  cam.dist = Math.max(hu / (ty * camera.aspect), hv / ty) * 1.14 + hw;
+  applyCamera();
 }
 
-function basis() {
-  const ce = Math.cos(cam.el), se = Math.sin(cam.el);
-  const u = [ce * Math.cos(cam.az), ce * Math.sin(cam.az), se];
-  const eye = [cam.target[0] + cam.dist * u[0], cam.target[1] + cam.dist * u[1],
-               cam.target[2] + cam.dist * u[2]];
-  const fwd = [-u[0], -u[1], -u[2]];
-  // right = fwd × worldUp; при взгляде с левого борта даёт нос справа, как на чертеже
-  const rn = Math.hypot(fwd[1], fwd[0]) || 1;
-  const right = [fwd[1] / rn, -fwd[0] / rn, 0];
-  const up = [right[1] * fwd[2] - right[2] * fwd[1],
-              right[2] * fwd[0] - right[0] * fwd[2],
-              right[0] * fwd[1] - right[1] * fwd[0]];
-  return { eye, fwd, right, up, f: (H / 2) / Math.tan(cam.fov / 2) };
-}
+// ------------------------------------------------------------- отрисовка
 
-function toCam(p, B) {
-  const d0 = p[0] - B.eye[0], d1 = p[1] - B.eye[1], d2 = p[2] - B.eye[2];
-  return [d0 * B.right[0] + d1 * B.right[1] + d2 * B.right[2],
-          d0 * B.up[0] + d1 * B.up[1] + d2 * B.up[2],
-          d0 * B.fwd[0] + d1 * B.fwd[1] + d2 * B.fwd[2]];
-}
-
-const NEAR = 20;
-
-function screenOf(c, B) { return [W / 2 + B.f * c[0] / c[2], H / 2 - B.f * c[1] / c[2]]; }
-
-// ---------------------------------------------------------------- отрисовка
-
-let W = 0, H = 0, fitted = false;
+let W = 0, H = 0, needsDraw = true;
 
 function resize() {
-  const dpr = window.devicePixelRatio || 1;
-  const r = cv.getBoundingClientRect();
-  W = r.width; H = r.height;
-  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  if (!fitted) { cam.target = BB.c.slice(); fitCamera(); fitted = true; }
-  draw();
+  const r = stage.getBoundingClientRect();
+  W = Math.max(1, r.width); H = Math.max(1, r.height);
+  renderer.setSize(W, H, true);
+  camera.aspect = W / H;
+  camera.updateProjectionMatrix();
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  needsDraw = true;
 }
 
-function strokeLayer(L, B) {
-  ctx.strokeStyle = css(L.color);
-  ctx.lineWidth = L.width;
-  ctx.globalAlpha = L.alpha == null ? 1 : L.alpha;
-  ctx.setLineDash(L.dash || []);
-  ctx.beginPath();
-  for (const poly of L.polys) {
-    let prev = null, prevIn = false;
-    for (const p of poly) {
-      const c = toCam(p, B), inside = c[2] > NEAR;
-      if (prev) {
-        if (inside && prevIn) {
-          const a = screenOf(prev, B), b = screenOf(c, B);
-          ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
-        } else if (inside !== prevIn) {
-          const t = (NEAR - prev[2]) / (c[2] - prev[2]);
-          const m = [prev[0] + (c[0] - prev[0]) * t, prev[1] + (c[1] - prev[1]) * t, NEAR];
-          const a = screenOf(prevIn ? prev : m, B), b = screenOf(prevIn ? m : c, B);
-          ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
-        }
-      }
-      prev = c; prevIn = inside;
-    }
+function frame() {
+  if (needsDraw) {
+    needsDraw = false;
+    applyCamera();
+    renderer.render(scene, camera);
+    placeLabels();
+    document.getElementById('hud').textContent =
+      'азимут ' + (cam.az / RAD).toFixed(0) + '°  возвышение ' +
+      (cam.el / RAD).toFixed(0) + '°  дистанция ' +
+      (cam.dist / 1000).toFixed(1) + ' м\n' +
+      'ЛКМ — вращать · колесо — приблизить · Shift+ЛКМ — сдвинуть';
   }
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.globalAlpha = 1;
+  requestAnimationFrame(frame);
 }
 
-function drawSurface(L, B) {
-  const V = L.verts, base = css('--c-surface');
-  const items = [];
-  for (const q of L.quads) {
-    const a = toCam(V[q[0]], B), b = toCam(V[q[1]], B);
-    const c = toCam(V[q[2]], B), d = toCam(V[q[3]], B);
-    if (a[2] <= NEAR || b[2] <= NEAR || c[2] <= NEAR || d[2] <= NEAR) continue;
-    const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
-    const vx = d[0] - a[0], vy = d[1] - a[1], vz = d[2] - a[2];
-    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-    const nl = Math.hypot(nx, ny, nz) || 1;
-    nx /= nl; ny /= nl; nz /= nl;
-    const cz = (a[2] + b[2] + c[2] + d[2]) / 4;
-    const cx = (a[0] + b[0] + c[0] + d[0]) / 4, cy = (a[1] + b[1] + c[1] + d[1]) / 4;
-    if (nx * cx + ny * cy + nz * cz > 0) continue;     // отсекаем изнанку
-    // фонарик из камеры плюс мягкая подсветка сверху
-    const lam = 0.30 + 0.55 * Math.abs(nz) + 0.15 * Math.max(0, ny);
-    items.push([cz, lam, a, b, c, d]);
-  }
-  items.sort((p, q) => q[0] - p[0]);
-  for (const [, lam, a, b, c, d] of items) {
-    const s0 = screenOf(a, B), s1 = screenOf(b, B);
-    const s2 = screenOf(c, B), s3 = screenOf(d, B);
-    ctx.fillStyle = 'rgba(' + base + ',' + (0.35 + 0.65 * lam).toFixed(3) + ')';
-    ctx.strokeStyle = ctx.fillStyle;
-    ctx.lineWidth = 0.6;
-    ctx.beginPath();
-    ctx.moveTo(s0[0], s0[1]); ctx.lineTo(s1[0], s1[1]);
-    ctx.lineTo(s2[0], s2[1]); ctx.lineTo(s3[0], s3[1]); ctx.closePath();
-    ctx.fill(); ctx.stroke();
-  }
-}
+// ------------------------------------------------------------- пометки
 
+const NOTES = DATA.notes;
 let showNotes = true;
+const SVGNS = 'http://www.w3.org/2000/svg';
 
-function drawNotes(B) {
-  ctx.font = '11px ui-sans-serif, -apple-system, "Segoe UI", sans-serif';
-  const fg = css('--fg'), dim = css('--dim'), panel = css('--panel'), line = css('--line');
+const chips = NOTES.map(n => {
+  const d = document.createElement('div');
+  d.className = 'label';
+  d.textContent = n.t;
+  labelBox.appendChild(d);
+  const line = document.createElementNS(SVGNS, 'line');
+  const dot = document.createElementNS(SVGNS, 'circle');
+  dot.setAttribute('r', '3.5');
+  svg.appendChild(line);
+  svg.appendChild(dot);
+  return { n, d, line, dot };
+});
 
-  // 1. позиции: якорь на модели + желаемое место подписи
+function placeLabels() {
+  const v = new Vector3();
   const boxes = [];
-  for (const n of NOTES) {
-    const c = toCam(n.p, B);
-    if (c[2] <= NEAR) continue;
-    const s = screenOf(c, B);
-    if (s[0] < -300 || s[0] > W + 300 || s[1] < -300 || s[1] > H + 300) continue;
-    const lines = n.t.split('\n');
-    const w = Math.max(...lines.map(t => ctx.measureText(t).width)) + 12;
-    const h = 18 + (lines.length - 1) * 14;
+  for (const c of chips) {
+    if (!showNotes) {
+      c.d.style.display = c.line.style.display = c.dot.style.display = 'none';
+      continue;
+    }
+    v.set(c.n.p[0], c.n.p[1], c.n.p[2]).project(camera);
+    const sx = (v.x * 0.5 + 0.5) * W, sy = (-v.y * 0.5 + 0.5) * H;
+    const vis = v.z < 1 && sx > -200 && sx < W + 200 && sy > -200 && sy < H + 200;
+    c.d.style.display = c.line.style.display = c.dot.style.display =
+      vis ? '' : 'none';
+    if (!vis) continue;
+    const w = c.d.offsetWidth, h = c.d.offsetHeight;
     boxes.push({
-      n, s, lines, w, h,
-      x: Math.max(4, Math.min(W - w - 4, n.d[0] >= 0 ? s[0] + n.d[0] : s[0] + n.d[0] - w)),
-      y: Math.max(4, Math.min(H - h - 4, s[1] + n.d[1] - 9 - (lines.length - 1) * 7))
+      c, sx, sy, w, h,
+      x: Math.max(4, Math.min(W - w - 4,
+        c.n.d[0] >= 0 ? sx + c.n.d[0] : sx + c.n.d[0] - w)),
+      y: Math.max(4, Math.min(H - h - 4, sy + c.n.d[1] - h / 2)),
     });
   }
-
-  // 2. разводим налезающие друг на друга подписи по вертикали
   boxes.sort((a, b) => a.y - b.y);
   for (let i = 0; i < boxes.length; i++)
     for (let j = 0; j < i; j++) {
       const a = boxes[i], b = boxes[j];
       if (a.x < b.x + b.w + 6 && a.x + a.w + 6 > b.x &&
-          a.y < b.y + b.h + 6 && a.y + a.h + 6 > b.y) {
+          a.y < b.y + b.h + 6 && a.y + a.h + 6 > b.y)
         a.y = Math.min(H - a.h - 4, b.y + b.h + 6);
-      }
     }
-
-  // 3. рисуем
-  for (const bx of boxes) {
-    const { n, s, lines, w, h, x, y } = bx;
-    const near = [x + (s[0] > x + w / 2 ? w : (s[0] < x ? 0 : w / 2)),
-                  y + (s[1] > y + h ? h : (s[1] < y ? 0 : h / 2))];
-    ctx.strokeStyle = dim; ctx.lineWidth = 1; ctx.globalAlpha = .55;
-    ctx.beginPath(); ctx.moveTo(s[0], s[1]); ctx.lineTo(near[0], near[1]); ctx.stroke();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = css(n.c || '--accent');
-    ctx.beginPath(); ctx.arc(s[0], s[1], 3, 0, 7); ctx.fill();
-
-    ctx.fillStyle = panel; ctx.globalAlpha = .93;
-    roundRect(x, y, w, h, 4); ctx.fill(); ctx.globalAlpha = 1;
-    ctx.strokeStyle = line; ctx.lineWidth = 1; ctx.stroke();
-    ctx.fillStyle = fg;
-    lines.forEach((t, i) => ctx.fillText(t, x + 6, y + 13 + i * 14));
+  const dim = css('--dim');
+  for (const b of boxes) {
+    b.c.d.style.left = b.x + 'px';
+    b.c.d.style.top = b.y + 'px';
+    const ax = b.sx > b.x + b.w ? b.x + b.w : (b.sx < b.x ? b.x : b.x + b.w / 2);
+    const ay = b.sy > b.y + b.h ? b.y + b.h : (b.sy < b.y ? b.y : b.y + b.h / 2);
+    b.c.line.setAttribute('x1', b.sx); b.c.line.setAttribute('y1', b.sy);
+    b.c.line.setAttribute('x2', ax); b.c.line.setAttribute('y2', ay);
+    b.c.line.setAttribute('stroke', dim);
+    b.c.line.setAttribute('stroke-opacity', '0.55');
+    b.c.dot.setAttribute('cx', b.sx); b.c.dot.setAttribute('cy', b.sy);
+    b.c.dot.setAttribute('fill', css(b.c.n.c || '--accent'));
   }
-}
-
-function roundRect(x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
-}
-
-function draw() {
-  ctx.clearRect(0, 0, W, H);
-  const B = basis();
-  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  for (const L of layers) if (L.on && L.group === 'Служебное') strokeLayer(L, B);
-  for (const L of layers) if (L.on && L.group === 'Подложка — исходный чертёж') strokeLayer(L, B);
-  for (const L of layers) if (L.on && L.kind === 'surface') drawSurface(L, B);
-  for (const L of layers) if (L.on && L.group === 'Обводы Ф2' && !L.kind) strokeLayer(L, B);
-  for (const L of layers) if (L.on && L.group === 'Каркас Ф1') strokeLayer(L, B);
-  if (showNotes) drawNotes(B);
-  document.getElementById('hud').textContent =
-    `азимут ${(cam.az / RAD).toFixed(0)}°  возвышение ${(cam.el / RAD).toFixed(0)}°  ` +
-    `дистанция ${(cam.dist / 1000).toFixed(1)} м\n` +
-    'ЛКМ — вращать · колесо — приблизить · Shift+ЛКМ — сдвинуть';
 }
 
 // ---------------------------------------------------------------- ввод
 
 let drag = null;
-cv.addEventListener('pointerdown', e => {
+const el = renderer.domElement;
+el.addEventListener('pointerdown', e => {
   drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button === 1 };
-  cv.setPointerCapture(e.pointerId); cv.classList.add('dragging');
+  el.setPointerCapture(e.pointerId);
+  stage.classList.add('dragging');
 });
-cv.addEventListener('pointermove', e => {
+el.addEventListener('pointermove', e => {
   if (!drag) return;
-  if (e.buttons === 0) { drag = null; cv.classList.remove('dragging'); return; }
+  if (e.buttons === 0) { drag = null; stage.classList.remove('dragging'); return; }
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.x = e.clientX; drag.y = e.clientY;
   if (drag.pan) {
-    const B = basis(), k = cam.dist / B.f;
-    for (let i = 0; i < 3; i++)
-      cam.target[i] += -B.right[i] * dx * k + B.up[i] * dy * k;
+    const k = cam.dist * 2 * Math.tan(camera.fov * RAD / 2) / H;
+    const right = new Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+    const up = new Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+    cam.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
   } else {
     cam.az -= dx * 0.006;
     cam.el = Math.max(-89 * RAD, Math.min(89 * RAD, cam.el + dy * 0.006));
   }
-  draw();
+  needsDraw = true;
 });
-const stop = e => { drag = null; cv.classList.remove('dragging'); };
-cv.addEventListener('pointerup', stop);
-cv.addEventListener('pointercancel', stop);
-cv.addEventListener('wheel', e => {
+const stopDrag = () => { drag = null; stage.classList.remove('dragging'); };
+el.addEventListener('pointerup', stopDrag);
+el.addEventListener('pointercancel', stopDrag);
+el.addEventListener('wheel', e => {
   e.preventDefault();
-  cam.dist = Math.max(1200, Math.min(60000, cam.dist * Math.exp(e.deltaY * 0.0012)));
-  draw();
+  cam.dist = Math.max(900, Math.min(90000,
+    cam.dist * Math.exp(e.deltaY * 0.0012)));
+  needsDraw = true;
 }, { passive: false });
 
 // ---------------------------------------------------------------- виды
 
 const VIEWS = [
-  ['Изометрия', { az: -132, el: 19 }],
-  ['Сверху', { az: -90, el: 89 }],
-  ['Сбоку', { az: -90, el: 0 }],
-  ['С кормы', { az: 180, el: 2 }],
-  ['С носа', { az: 0, el: 2 }]
+  ['Изометрия', -138, 20], ['Сверху', -90, 89], ['Сбоку', -90, 0],
+  ['С кормы', 180, 2], ['С носа', 0, 2], ['Три четверти', -55, 14],
 ];
 
 const vbox = document.getElementById('views');
-VIEWS.forEach(([name, v], i) => {
+VIEWS.forEach(([name, az, elv], i) => {
   const b = document.createElement('button');
   b.textContent = name;
+  b.className = 'view';
   b.onclick = () => {
-    cam.az = v.az * RAD; cam.el = v.el * RAD;
-    cam.target = BB.c.slice();
+    cam.az = az * RAD; cam.el = elv * RAD; cam.target.copy(CENTER);
     fitCamera();
-    [...vbox.children].forEach(c => c.classList.contains('view') && c.classList.remove('on'));
-    b.classList.add('on'); draw();
+    vbox.querySelectorAll('.view').forEach(c => c.classList.remove('on'));
+    b.classList.add('on');
+    needsDraw = true;
   };
-  b.classList.add('view');
   if (i === 0) b.classList.add('on');
   vbox.appendChild(b);
 });
 
-const rb = document.createElement('button');
-rb.textContent = 'Сброс';
-rb.onclick = () => { cam.target = BB.c.slice(); fitCamera(); draw(); };
-vbox.appendChild(rb);
+function toolButton(text, on, fn) {
+  const b = document.createElement('button');
+  b.textContent = text;
+  if (on) b.classList.add('on');
+  b.onclick = () => { fn(b); needsDraw = true; };
+  vbox.appendChild(b);
+}
 
-const nb = document.createElement('button');
-nb.textContent = 'Пометки'; nb.classList.add('on');
-nb.onclick = () => { showNotes = !showNotes; nb.classList.toggle('on', showNotes); draw(); };
-vbox.appendChild(nb);
+toolButton('Пометки', true, b => {
+  showNotes = !showNotes;
+  b.classList.toggle('on', showNotes);
+});
 
-const tb = document.createElement('button');
-tb.textContent = 'Тема';
-tb.onclick = () => {
+toolButton('Тема', false, () => {
   const cur = document.documentElement.getAttribute('data-theme');
   const dark = cur ? cur === 'dark'
     : matchMedia('(prefers-color-scheme: dark)').matches;
   document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark');
-  draw();
-};
-vbox.appendChild(tb);
+  for (const [obj, v] of themed) {
+    const c = new Color(css(v));
+    if (obj.material) obj.material.color.copy(c);
+    obj.traverse(o => { if (o.material) o.material.color.copy(c); });
+  }
+  hemi.color.set(css('--sky'));
+  hemi.groundColor.set(css('--ground'));
+  for (const L of layers) {
+    const sw = L.swatch;
+    if (sw) sw.style.borderTopColor = css(L.color);
+  }
+});
 
 // ---------------------------------------------------------------- панель
 
 const P = document.getElementById('panel');
 
-function h2(t) { const e = document.createElement('h2'); e.textContent = t; P.appendChild(e); return e; }
+function h2(t) {
+  const e = document.createElement('h2');
+  e.textContent = t;
+  P.appendChild(e);
+}
 
 function table(rows) {
   const t = document.createElement('table');
@@ -406,7 +417,6 @@ function table(rows) {
     const uc = tr.insertCell(); uc.className = 'u'; uc.textContent = u || '';
   }
   P.appendChild(t);
-  return t;
 }
 
 const seen = new Set();
@@ -416,25 +426,23 @@ for (const L of layers) {
   lab.className = 'row';
   const cb = document.createElement('input');
   cb.type = 'checkbox'; cb.checked = L.on;
-  cb.onchange = () => { L.on = cb.checked; draw(); };
+  cb.onchange = () => { L.object.visible = cb.checked; needsDraw = true; };
   const sw = document.createElement('span');
   sw.className = 'swatch';
   sw.style.borderTopColor = css(L.color);
-  sw.style.borderTopStyle = (L.dash && L.dash.length) ? 'dashed' : 'solid';
+  L.swatch = sw;
   const txt = document.createElement('span');
   txt.textContent = L.label;
-  if (L.conf) txt.title = L.note;
+  if (L.note) txt.title = L.note;
   lab.append(cb, sw, txt);
   P.appendChild(lab);
 }
 
 if (HULL) {
-  h2('Гидростатика Ф2');
+  h2('Гидростатика');
   const p = document.createElement('p');
   p.className = 'note';
-  p.textContent = 'Водоизмещение сведено к 590 кг серийной SV20 одним числом — ' +
-    'общим множителем килеватости ' + HULL.deadrise_factor.toFixed(3) +
-    '. Остальное получилось само.';
+  p.textContent = HULL.source_note;
   P.appendChild(p);
   table(HULL.hydroRows);
 }
@@ -443,34 +451,43 @@ h2('Достоверность кривых');
 for (const k of ['measured', 'derived', 'projected', 'inferred']) {
   const d = document.createElement('div');
   d.className = 'note';
-  d.innerHTML = `<code style="color:${css(CONF[k].color)}">${k}</code> — ${CONF[k].label}`;
+  const code = document.createElement('code');
+  code.textContent = k;
+  code.style.color = css(CONF[k].color);
+  d.append(code, document.createTextNode(' — ' + CONF[k].label));
   P.appendChild(d);
 }
 
 h2('Привязка');
 const dv = document.createElement('p');
 dv.className = 'note';
-dv.textContent = `Масштаб ${F.datum.mm_per_pt.toFixed(4)} мм/пт, получен из габаритной длины ` +
-  '6100 мм. Проверки — независимые паспортные величины:';
+dv.textContent = 'Масштаб ' + F.datum.mm_per_pt.toFixed(4) +
+  ' мм/пт из габаритной длины 6100 мм. Проверки — независимые паспортные ' +
+  'величины:';
 P.appendChild(dv);
 table(F.calibration_checks.map(c => [
   c.name.replace(', мм', '').replace(', пт', ''),
-  c.value.toFixed(2) + (c.deviation === null ? '' : ` (${(c.deviation * 100).toFixed(2)}%)`),
-  ''
-]));
+  c.value.toFixed(2) + (c.deviation === null ? ''
+    : ' (' + (c.deviation * 100).toFixed(2) + '%)'), '']));
 
-h2('Снятые величины');
+h2('Снятые с чертежа');
 table(DATA.metricRows);
 
 h2('Чего на чертеже нет');
 for (const g of F.gaps) {
   const d = document.createElement('div');
   d.className = 'gap';
-  d.innerHTML = `<b></b><span></span>`;
-  d.querySelector('b').textContent = g.what;
-  d.querySelector('span').textContent = g.detail;
+  const b = document.createElement('b');
+  b.textContent = g.what;
+  const s = document.createElement('span');
+  s.textContent = g.detail;
+  d.append(b, s);
   P.appendChild(d);
 }
 
+// ----------------------------------------------------------------- старт
+
 addEventListener('resize', resize);
 resize();
+fitCamera();
+frame();

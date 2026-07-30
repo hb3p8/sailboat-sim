@@ -31,8 +31,21 @@ def main():
     t0 = time.time()
     boundary = hullmodel.Boundary(frame_doc)
     target_kg = calibrate.TARGET["displacement_kg"]
-    factor, params = hullmodel.calibrate_deadrise(
-        boundary, hullmodel.DEFAULT, target_kg, hydro)
+
+    # Если Ф3 уже отработал, берём подобранные параметры; иначе сводим
+    # водоизмещение к цели одним скаляром — этого хватает, чтобы посмотреть
+    # на правдоподобный корпус, не запуская оптимизатор.
+    fitted = os.path.join(out, "params.json")
+    fit_report = None
+    if os.path.exists(fitted):
+        doc_fit = json.load(open(fitted))
+        params = hullmodel.HullParams.from_vector(doc_fit["vector"])
+        fit_report = doc_fit["report"]
+        factor, source = None, "Ф3, out/params.json"
+    else:
+        factor, params = hullmodel.calibrate_deadrise(
+            boundary, hullmodel.DEFAULT, target_kg, hydro)
+        source = "Ф2, одномерная калибровка килеватости"
     hull = hullmodel.Hull(boundary, params)
     h = hydro.hydrostatics(hull, 0.0)
     sink = hydro.sinkage_for(hull, target_kg)
@@ -50,6 +63,8 @@ def main():
         "params": hull.p.to_dict(),
         "params_start": hullmodel.DEFAULT.to_dict(),
         "deadrise_factor": factor,
+        "params_source": source,
+        "fit_report": fit_report,
         "bounds": hull.p.bounds(),
         "boundary": {
             "x_deck_aft": boundary.x_deck_aft,
@@ -83,8 +98,9 @@ def main():
     with open(os.path.join(out, "hull.md"), "w") as f:
         f.write(render(doc))
 
-    print("одномерная калибровка: множитель килеватости %s"
-          % ("%.3f" % factor if factor else "цель недостижима"))
+    print("параметры: %s" % source)
+    if factor:
+        print("одномерная калибровка: множитель килеватости %.3f" % factor)
     print("сетка: %d вершин, %d четырёхугольников, %.1f с"
           % (len(mesh["verts"]), len(mesh["quads"]), dt))
     print("транец плоскостью: невязка %.1f мм" % boundary.transom_rms)
@@ -129,7 +145,7 @@ SANE = {
 def render(doc):
     h = doc["hydrostatics"]
     t = doc["target"]
-    L = ["# Ф2 — параметрический корпус, первая генерация\n",
+    L = ["# Параметрический корпус\n",
          "Сгенерировано `scripts/build_hull.py`. Не редактировать вручную.\n",
          "## Что это\n",
          "Шпангоут составной: днищевая панель от киля до скулы, бортовая от "
@@ -138,8 +154,7 @@ def render(doc):
          "каждой панели и скругление скулы, — плюс линия киля в ДП. Границы "
          "(линия борта, кормовое днище, форштевень, транец) взяты с Ф1 и не "
          "подгоняются.\n",
-         "**Кроме водоизмещения, ничего не сводилось.** Остальные величины — "
-         "то, что получилось само; расхождения ниже это и есть задача Ф3.\n",
+         "Источник параметров: **%s**.\n" % doc.get("params_source", "—"),
          "## Гидростатика на снятой с чертежа КВЛ\n",
          "| Величина | Значение | | Ориентир |", "|---|---:|---|---|"]
 

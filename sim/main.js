@@ -338,7 +338,8 @@ function readControls(dt) {
   const sr = 32 * D;
   if (keys.ArrowUp || keys.KeyW) o.sheet -= sr * dt;
   if (keys.ArrowDown || keys.KeyS) o.sheet += sr * dt;
-  o.sheet = Math.max(2 * D, Math.min(90 * D, o.sheet));
+  // Ближе семи градусов шкот не выбирается: мешают ванты и погон.
+  o.sheet = Math.max(7 * D, Math.min(90 * D, o.sheet));
 
   o.windSpeed = parseFloat(ui.wind.value);
   const wd = parseFloat(ui.winddir.value) * D;
@@ -407,7 +408,7 @@ function frame() {
 
   const awAngle = boat.apparentWind().angle;
   const side = awAngle > 0 ? 1 : -1;
-  shapeSails(boat.o.sheet, side, (t.alphaDeg || 0) < -1);
+  shapeSails(boat.o.sheet, side, (t.alphaDeg || 0) < 4);
 
   const amp = 0.10 + 0.035 * boat.o.windSpeed;
   sea.position.set(Math.round(ix / CELL) * CELL, 0, Math.round(-iy / CELL) * CELL);
@@ -506,7 +507,7 @@ function updateHud(t) {
     (t[k] == null ? '—' : (+t[k]).toFixed(prec)) +
     '</td><td class="u">' + unit + '</td></tr>').join('');
   const al = t.alphaDeg || 0;
-  const luff = al < -1 ? ' <em>заполаскивает</em>'
+  const luff = al < 4 ? ' <em>заполаскивает</em>'
              : (al > 24 ? ' <em>перебрано</em>' : '');
   hud.innerHTML =
     '<div class="big">' + (t.speedKn || 0).toFixed(2) + ' <span>уз</span></div>' +

@@ -21,6 +21,17 @@ const DEG = Math.PI / 180;
 // днища это около единицы; величина одна и общая, а не набор подгоночных.
 const HULL_CROSSFLOW_CD = 1.0;
 
+// Приводящий момент от несимметрии накренённого корпуса. Явление настоящее и
+// для широкой плоской лодки крупное: на крене подветренная скула сидит глубже,
+// и корпус работает как изогнутое крыло, разворачивая нос на ветер. Посчитать
+// его честно можно только по обтеканию, поэтому здесь он в форме, принятой в
+// VPP, с одним коэффициентом.
+//
+// Коэффициент откалиброван по наблюдению владельца лодки: с брошенным рулём
+// в бейдевинд лодка должна слегка приводиться, а не валиться под ветер.
+// Это второе и последнее место в проекте, где число подобрано, а не выведено.
+const HULL_HEEL_YAW = 0.28;
+
 // Нормировка угла без цикла: при расходимости `while` по бесконечности вешает
 // вкладку намертво, и это не гипотеза — так и было.
 function wrapPi(a) {
@@ -157,7 +168,16 @@ export class Boat {
     // крен убирает часть боковой силы: парус наклоняется вместе с мачтой
     const cphi = Math.cos(this.phi);
     fy *= cphi;
-    return { fx: fx, fy: fy, z: rig.ce_height_m * cphi, x: rig.mast_x_m,
+    // Паразитное сопротивление корпуса, рангоута и экипажа в потоке. В
+    // лавировку кажущийся ветер силён, и эта добавка заметно ограничивает,
+    // насколько круто лодка вообще способна идти.
+    const wq = 0.5 * env.rho_air * (rig.windage_area_m2 || 0) *
+               (rig.windage_cd || 0.85) * aw.speed * aw.speed;
+    fx += wq * dirX;
+    fy += wq * dirY * cphi;
+
+    return { fx: fx, fy: fy, z: rig.ce_height_m * cphi,
+             x: rig.ce_x_m != null ? rig.ce_x_m : rig.mast_x_m,
              awa: awa, alpha: alpha, cl: k.cl, cd: k.cd, area: area };
   }
 
@@ -173,7 +193,13 @@ export class Boat {
     const cgx = P.mass.cg_m[0];
     const steps = n || 12;
     const dx = (xf - xa) / steps;
-    const q = 0.5 * env.rho_water * HULL_CROSSFLOW_CD * hs.draft_canoe_m * dx;
+    // На ровном киле поперёк потока стоит только осадка корпуса — пятнадцать
+    // сантиметров. На крене лодка подставляет потоку днище, и высота растёт до
+    // половины ширины. Без этого положенная набок лодка ничем не держится
+    // и уезжает боком со скоростью, которой на воде не бывает.
+    const c = Math.abs(Math.cos(this.phi)), s2 = Math.abs(Math.sin(this.phi));
+    const depth = hs.draft_canoe_m * c + 0.5 * hs.bwl_m * s2;
+    const q = 0.5 * env.rho_water * HULL_CROSSFLOW_CD * depth * dx;
     let fy = 0, mz = 0;
     for (let i = 0; i < steps; i++) {
       const arm = xa + (i + 0.5) * dx - cgx;
@@ -246,8 +272,18 @@ export class Boat {
     // их напрямую, у киля получается плечо в три метра вместо двадцати пяти
     // сантиметров. Лодка от этого раскручивается за секунды.
     const cgx = m.cg_m[0];
-    const mz = keelSide * (keel.x_m - cgx) + rudSide * (rud.x_m - cgx)
+    let mz = keelSide * (keel.x_m - cgx) + rudSide * (rud.x_m - cgx)
              + sail.fy * (sail.x - cgx) + hull.mz;
+    // Приводящий момент от крена — главный источник weather helm на реальной
+    // лодке, и его тут не было. На крене центр парусности уходит под ветер,
+    // а тяга остаётся вдоль корпуса: пара разворачивает нос на ветер. Без
+    // этого слагаемого лодка на бейдевинде valится под ветер и требует
+    // постоянного руля, чего на воде нет.
+    const zce = (P.rig.ce_height_m - m.cg_m[2]);
+    mz += zce * Math.sin(this.phi) * sail.fx;
+    mz += HULL_HEEL_YAW * 0.5 * env.rho_water * this.u * this.u *
+          P.hydrostatics.lwl_m * P.hydrostatics.draft_canoe_m *
+          Math.sin(2 * this.phi);
     const dr = mz / iz;
 
     // крен: кренящий момент паруса минус восстанавливающий и демпфирование

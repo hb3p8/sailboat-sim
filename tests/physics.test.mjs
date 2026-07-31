@@ -40,6 +40,10 @@ function sail(twaDeg, sheetDeg, opts = {}) {
   b.o.sheet = sheetDeg * D;
   b.o.crewHike = opts.hike ?? 0;
   b.o.crewMass = b.o.crewHike > 0 ? 240 : 0;
+  // Старт с ходом, как в симуляторе. С нуля лодка сначала сносится боком,
+  // и на острых курсах из этого состояния она уже не выбирается — проверять
+  // в таком запуске нечего.
+  b.u = opts.u ?? 3.5;
   const target = 0;
   const secs = opts.secs ?? 120;
   for (let i = 0; i < secs * 30; i++) {
@@ -100,6 +104,57 @@ check('крен в бейдевинд не запредельный', Math.abs(b
 // чтобы правка кривой не проехала мимо этой оценки незамеченной.
 check('галфвинд в 11.7 узлах ветра около восьми с половиной узлов',
   reach.speedKn > 7.6 && reach.speedKn < 9.2, reach.speedKn.toFixed(2) + ' уз');
+
+// --- балансировка руля -------------------------------------------------------
+//
+// Владелец лодки сказал, что на воде она так не валится под ветер, как это
+// делала модель. Два теста закрепляют наблюдение: сколько руля нужно, чтобы
+// держать курс, и куда лодка идёт, если руль бросить.
+
+console.log('\nБалансировка: руль для удержания курса и поведение с брошенным рулём\n');
+console.log('  TWA   руль    через 10 с с брошенным рулём');
+const balance = [];
+for (const [twa, sheet] of [[45, 13], [60, 16], [90, 24]]) {
+  const b = new Boat(PACK);
+  b.o.windSpeed = 6; b.o.windDir = twa * D; b.o.sheet = sheet * D; b.u = 3.5;
+  for (let i = 0; i < 120 * 30; i++) {
+    const err = wrapPi(0 - b.psi);
+    b.o.rudder = Math.max(-30 * D, Math.min(30 * D, -(2.2 * err - 0.9 * b.r)));
+    b.step(1 / 30);
+  }
+  const helm = b.o.rudder / D;
+  const twa0 = Math.abs(b.trueWindAngle()) / D;
+  b.o.rudder = 0;
+  for (let i = 0; i < 10 * 30; i++) b.step(1 / 30);
+  const drift = twa0 - Math.abs(b.trueWindAngle()) / D;
+  balance.push({ twa, helm, drift });
+  console.log('  ' + String(twa).padStart(3) + '° ' + helm.toFixed(1).padStart(6) +
+    '°   ' + (drift >= 0 ? 'привелась на +' : 'увалилась на ') +
+    drift.toFixed(0) + '°');
+}
+console.log('');
+check('руля для удержания курса нужно немного',
+  balance.every(b => Math.abs(b.helm) < 8),
+  'наибольший ' + Math.max(...balance.map(b => Math.abs(b.helm))).toFixed(1) + '°');
+check('с брошенным рулём лодка не валится под ветер',
+  balance.every(b => b.drift > -3),
+  'худший случай ' + Math.min(...balance.map(b => b.drift)).toFixed(0) + '°');
+
+// --- острота -----------------------------------------------------------------
+const beatRows = [[30, 10], [45, 13], [60, 16]].map(([twa, sheet]) => {
+  const r = sail(twa, sheet);
+  const track = twa + Math.abs(r.t.leewayDeg);
+  return { twa, track, vmg: r.t.speedKn * Math.cos(track * D) };
+});
+console.log('Курс к ветру с учётом дрейфа: ' +
+  beatRows.map(r => r.twa + '°→' + r.track.toFixed(0) + '° (VMG ' +
+    r.vmg.toFixed(2) + ')').join(',  ') + '\n');
+check('лучший VMG получается не на самом остром курсе',
+  beatRows[1].vmg > beatRows[0].vmg,
+  'на 45° ' + beatRows[1].vmg.toFixed(2) + ' против ' +
+  beatRows[0].vmg.toFixed(2) + ' на 30°');
+check('лавировочный угол не уже семидесяти градусов',
+  2 * beatRows[0].track > 70, (2 * beatRows[0].track).toFixed(0) + '°');
 
 // --- разворот -------------------------------------------------------------
 const turn = new Boat(PACK);

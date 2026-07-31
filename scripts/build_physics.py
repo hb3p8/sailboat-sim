@@ -199,23 +199,17 @@ def main():
                      "нет. Правьте RESIDUARY, если поведение не совпадёт."),
         },
         "foils": {
+            # Точка приложения — четверть хорды от передней кромки, а не
+            # середина: там сидит центр давления крыла.
             "keel": _foil(fin, keel["area_m2"], keel["aspect_ratio"],
-                          feats["keel_section"]["thickness_ratio"], 2.0,
-                          x_keel / 1000.0),
+                          feats["keel_section"]["thickness_ratio"], 1.5,
+                          (feats["keel_section"]["x_le_mm"]
+                           - 0.25 * feats["keel_section"]["chord_mm"]) / 1000.0),
             "rudder": _foil(blade, rudder["area_m2"], rudder["aspect_ratio"],
-                            rudder["thickness_ratio"], 1.6,
+                            rudder["thickness_ratio"], 1.25,
                             rudder["x_stock_mm"] / 1000.0),
         },
-        "rig": {
-            "main_area_m2": 16.5, "jib_area_m2": 8.5,
-            "spinnaker_area_m2": calibrate.TARGET["sail_area_downwind_m2"] - 25.0,
-            "mast_x_m": 3.55, "mast_height_m": 9.0,
-            "ce_height_m": 3.4,
-            "note": ("Площади парусов из ТТХ конструктора, положение мачты "
-                     "снято с чертежа. Высота центра парусности принята "
-                     "как 0.39 высоты мачты — обычное значение для дробного "
-                     "вооружения."),
-        },
+        "rig": _rig(),
     }
 
     with open(os.path.join(dst, "physics.json"), "w") as f:
@@ -248,11 +242,45 @@ def main():
         "%s %d тр." % (k, len(v["indices"]) // 3) for k, v in meshes.items()))
 
 
+def _rig(mast_x=3.55, mast_h=9.0, boom=2.85, main=16.5, jib=8.5):
+    """Центр парусности как центр тяжести двух треугольников.
+
+    Раньше он брался в мачте, и это была ошибка: грот стоит позади мачты,
+    стаксель впереди, и их общий центр оказывается почти на полметра в корму
+    от неё. Полметра плеча на шестиметровой лодке — разница между валкостью
+    и приводливостью, что на воде и вылезло.
+    """
+    def centroid(pts, area):
+        return (sum(p[0] for p in pts) / 3.0, sum(p[1] for p in pts) / 3.0, area)
+
+    m = centroid([(mast_x, 1.0), (mast_x, mast_h * 0.95),
+                  (mast_x - boom, 1.05)], main)
+    j = centroid([(mast_x + 2.4, 0.9), (mast_x + 0.12, mast_h * 0.76),
+                  (mast_x + 0.85 - 2.05, 1.05)], jib)
+    total = main + jib
+    return {
+        "main_area_m2": main, "jib_area_m2": jib,
+        "spinnaker_area_m2": calibrate.TARGET["sail_area_downwind_m2"] - 25.0,
+        "mast_x_m": mast_x, "mast_height_m": mast_h, "boom_m": boom,
+        "ce_x_m": (m[0] * main + j[0] * jib) / total,
+        "ce_height_m": (m[1] * main + j[1] * jib) / total,
+        "windage_area_m2": 1.15,     # корпус, рангоут и экипаж в потоке
+        "windage_cd": 0.85,
+        "windage_height_m": 1.1,
+        "note": ("Площади парусов из ТТХ конструктора, положение мачты снято "
+                 "с чертежа. Центр парусности посчитан как центр тяжести "
+                 "треугольников грота и стакселя, а не взят в мачте."),
+    }
+
+
 def _foil(foil, area_m2, ar, tc, end_plate, x_m):
     """Геометрия крыла плюс эффективное удлинение.
 
-    Корпус и бульб работают концевыми шайбами: киль «видит» удлинение примерно
-    вдвое больше геометрического, руль — в полтора раза.
+    Корпус и бульб работают концевыми шайбами, но не идеальными: удвоение
+    удлинения, как для крыла у сплошной стенки, здесь завышено. Свободная
+    поверхность рядом с корпусом пропускает вихрь, и выигрыш выходит скромнее —
+    порядка полутора раз у киля с бульбом и четверти у руля, который вдобавок
+    работает у самой поверхности.
     """
     return {
         "area_m2": area_m2,
@@ -263,7 +291,7 @@ def _foil(foil, area_m2, ar, tc, end_plate, x_m):
         "thickness_ratio": tc,
         "x_m": x_m,
         "z_centre_m": 0.5 * (foil.z_root + foil.z_tip) / 1000.0,
-        "stall_deg": 16.0 if end_plate > 1.8 else 20.0,
+        "stall_deg": 16.0 if end_plate > 1.4 else 20.0,
     }
 
 

@@ -28,6 +28,7 @@ sim: physics
 # Физика проверяется без браузера: он мешает отличить расходимость модели
 # от проблем отрисовки и не запускается из Makefile.
 test: physics
+	node tests/wind.test.mjs
 	node tests/physics.test.mjs
 	node tests/upwind.test.mjs
 

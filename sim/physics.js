@@ -15,7 +15,17 @@
 //   коэффициенты парусов и крыльев — модели здесь, в коде: их настраивают
 //   на ходу, и держать их в пакете незачем.
 
+import { WindField } from './wind.js';
+
 const DEG = Math.PI / 180;
+
+// Полосок на парус. Шесть хватает: профиль ветра по высоте гладкий, и на
+// восьми ответ отличается меньше чем на процент, а считать нужно каждый кадр.
+const STRIPS = 6;
+
+// Центр давления полоски, доля хорды от передней шкаторины. У паруса он
+// заметно впереди середины — это парус, а не симметричный профиль.
+const CP_CHORD = 0.42;
 
 // Коэффициент поперечного обтекания полоски корпуса. Для мелкого широкого
 // днища это около единицы; величина одна и общая, а не набор подгоночных.
@@ -123,11 +133,89 @@ export class Boat {
       crewHike: 0.0,           // откренивание: 0 — в ДП, 1 — на борту
       crewMass: 0.0,
       sailScale: 1.0,          // 1 — грот со стакселем, больше — с генакером
+      twist: 0.0,              // раскрытие задней шкаторины к топу, рад
     }, opts || {});
+
+    // Поле ветра: скорость и направление в опциях — опорные, на десяти метрах.
+    // Порывы по умолчанию выключены, иначе тесты меряли бы погоду, а не лодку.
+    this.wind = new WindField({ speed: this.o.windSpeed, dir: this.o.windDir });
 
     const m = pack.mass;
     this.mass = m.total_kg;
+    this.buildStrips();
     this.reset();
+  }
+
+  // Разбивка парусов на полоски по высоте.
+  //
+  // Полоска считается той же самой моделью сечения, что раньше считался весь
+  // риг целиком: ничего нового про аэродинамику здесь не появилось. Новое —
+  // то, что каждая полоска видит свой ветер (свой по профилю, свой по порыву)
+  // и свой угол атаки, потому что парус закручен. Отсюда берётся то, чего
+  // раньше просто не существовало: смысл у твиста, уход центра парусности при
+  // заходе, аэродинамическое демпфирование качки (мачта машет по воздуху) и
+  // рывок от порыва, приходящего сначала на топ.
+  //
+  // Площадь распределена по высоте линейно, как у треугольного паруса. У
+  // линейного сбега центр площади лежит на трети высоты, и суммарный центр
+  // парусности полосок совпадает с посчитанным в пакете по парусным
+  // треугольникам. Это не подгонка, а то же самое построение.
+  buildStrips() {
+    const rig = this.p.rig, H = rig.mast_height_m;
+    // Паруса заданы теми же треугольниками, по которым в пакете посчитан
+    // центр парусности (scripts/build_physics.py, _rig): галсовый угол,
+    // фаловый, шкотовый. Геометрия должна быть той же, иначе плечо паруса
+    // разъедется с тем, под которое калибровался приводящий момент корпуса.
+    //
+    // Площадь треугольника при этом не равна паспортной (у грота серп), и
+    // сводить их незачем: треугольник задаёт РАСПРЕДЕЛЕНИЕ хорды по высоте,
+    // а полная площадь берётся паспортная и раскладывается по этому
+    // распределению. Так сходится и то и другое.
+    const sails = [
+      { area: rig.main_area_m2,
+        tack: [rig.mast_x_m, 1.00], head: [rig.mast_x_m, H * 0.95],
+        clew: [rig.mast_x_m - rig.boom_m, 1.05] },
+      { area: rig.jib_area_m2,
+        tack: [rig.mast_x_m + 2.4, 0.90], head: [rig.mast_x_m + 0.12, H * 0.76],
+        clew: [rig.mast_x_m + 0.85 - 2.05, 1.05] },
+    ];
+    this.strips = [];
+    this.stripState = [];
+    for (const s of sails) {
+      // Передняя шкаторина идёт от галсового к фаловому, задняя от шкотового
+      // к фаловому. Хорда между ними убывает к топу линейно, значит доля
+      // площади ниже уровня f равна 1−(1−f)², а центр площади — на трети.
+      const zLo = Math.max(s.tack[1], s.clew[1]), zHi = s.head[1];
+      const span = zHi - zLo;
+      const ar = span * span / Math.max(1, s.area);
+      const edge = (a, z) => a[0] + (s.head[0] - a[0]) * (z - a[1]) /
+                                    (s.head[1] - a[1]);
+      for (let i = 0; i < STRIPS; i++) {
+        const f0 = i / STRIPS, f1 = (i + 1) / STRIPS;
+        const area = s.area * ((1 - f0) * (1 - f0) - (1 - f1) * (1 - f1));
+        const num = (f1 * f1 / 2 - f1 * f1 * f1 / 3) -
+                    (f0 * f0 / 2 - f0 * f0 * f0 / 3);
+        const den = (f1 - f1 * f1 / 2) - (f0 - f0 * f0 / 2);
+        const f = den > 1e-9 ? num / den : (f0 + f1) / 2;
+        const h = zLo + f * span;
+        const xLuff = edge(s.tack, h), xLeech = edge(s.clew, h);
+        this.strips.push({
+          area: area, ar: ar,
+          h: h,                               // высота по мачте, без крена
+          chord: Math.max(0.05, xLuff - xLeech),
+          xLuff: xLuff,
+          // Твист растёт к топу быстрее линейного: у настоящего паруса
+          // задняя шкаторина раскрывается в основном в верхней трети.
+          twistF: Math.pow(f, 1.3),
+        });
+        this.stripState.push({
+          h: 0, z: 0, area: area, ws: 0, awaDeg: 0, alphaDeg: 0,
+          cl: 0, drive: 0, side: 0,
+        });
+      }
+    }
+    this.sailOut = { fx: 0, fy: 0, fz: 0, mx: 0, mz: 0, ceZ: 0,
+                     awa: 0, awaEff: 0, alpha: 0, cl: 0, area: 0 };
   }
 
   reset() {
@@ -141,20 +229,27 @@ export class Boat {
 
   // --- ветер ---------------------------------------------------------------
 
-  apparentWind() {
-    const o = this.o;
-    // истинный ветер в мировой системе (куда дует)
-    const wx = -o.windSpeed * Math.cos(o.windDir);
-    const wy = -o.windSpeed * Math.sin(o.windDir);
-    // скорость лодки в мировой системе
+  // Кажущийся ветер в точке рига (xb, yb — в горизонтной системе от миделя,
+  // zb — высота над водой), которая сама движется со скоростью (vx, vy).
+  // Раньше такой точкой была вся лодка; теперь их двенадцать, по числу полосок.
+  apparentAt(xb, yb, zb, vx, vy) {
     const c = Math.cos(this.psi), s = Math.sin(this.psi);
-    const bx = this.u * c - this.v * s;
-    const by = this.u * s + this.v * c;
-    // кажущийся ветер в связанной системе
-    const ax = (wx - bx) * c + (wy - by) * s;
-    const ay = -(wx - bx) * s + (wy - by) * c;
+    const w = this.wind.sample(this.x + xb * c - yb * s,
+                              this.y + xb * s + yb * c,
+                              Math.max(0.3, zb), this.t);
+    const ax = w.x * c + w.y * s - vx;
+    const ay = -w.x * s + w.y * c - vy;
     return { x: ax, y: ay, speed: Math.hypot(ax, ay),
-             angle: Math.atan2(ay, ax) };
+             angle: Math.atan2(ay, ax), ws: w.speed };
+  }
+
+  // Кажущийся ветер «у лодки» — на высоте центра парусности. Это то, что
+  // показывает флюгер и роза; силы считаются по полоскам, а не по нему.
+  apparentWind() {
+    const rig = this.p.rig;
+    return this.apparentAt(rig.ce_x_m != null ? rig.ce_x_m : rig.mast_x_m, 0,
+                           rig.ce_height_m * Math.cos(this.phi),
+                           this.u, this.v);
   }
 
   // Угол считается от носа до направления, ОТКУДА дует, как принято на воде:
@@ -181,41 +276,78 @@ export class Boat {
   // не разгружалась вовсе. Ни одного подобранного числа здесь нет, только
   // проекция; прежний множитель cos(крен) на боковой силе — её частный случай.
   sailForces(aw) {
-    const rig = this.p.rig, env = this.p.environment;
-    const area = (rig.main_area_m2 + rig.jib_area_m2) * this.o.sailScale;
+    const rig = this.p.rig, env = this.p.environment, m = this.p.mass;
     const cphi = Math.cos(this.phi), sphi = Math.sin(this.phi);
-    const h = rig.ce_height_m;
-    const out = {
-      fx: 0, fy: 0, fz: 0,
-      cx: rig.ce_x_m != null ? rig.ce_x_m : rig.mast_x_m,
-      cy: -h * sphi, cz: h * cphi,       // центр парусности едет вбок с мачтой
-      awa: Math.PI - Math.abs(aw.angle), awaEff: 0,
-      alpha: 0, cl: 0, cd: 0, area: area,
-    };
+    const cgx = m.cg_m[0], cgz = m.cg_m[2];
+    const scale = this.o.sailScale;
+    const out = this.sailOut;
+    out.fx = 0; out.fy = 0; out.fz = 0; out.mx = 0; out.mz = 0;
+    out.awa = Math.PI - Math.abs(aw.angle);
+    out.awaEff = 0; out.alpha = 0; out.cl = 0; out.area = 0; out.ceZ = 0;
 
-    // орты плоскости паруса: e1 вдоль корпуса, e2 «поперёк» вместе с креном
-    const w1 = aw.x, w2 = aw.y * cphi;
-    const ve = Math.hypot(w1, w2);
-    if (ve < 0.05) return out;
+    // С какого борта ветер — решается один раз по флюгеру, а не по каждой
+    // полоске: парус вынесен на один борт целиком и в середине не ломается.
+    const rigSide = aw.angle > 0 ? 1 : -1;
+    let load = 0;
 
-    const theta = Math.atan2(w2, w1);         // куда дует, в плоскости паруса
-    const awa = Math.PI - Math.abs(theta);    // угол от носа, откуда дует
-    const side = theta > 0 ? 1 : -1;          // с какого борта ветер
-    const alpha = awa - this.o.sheet;
-    const ar = rig.mast_height_m * rig.mast_height_m / Math.max(1, area);
-    const k = sailCoeffs(alpha, Math.max(2.5, ar));
+    for (let i = 0; i < this.strips.length; i++) {
+      const st = this.strips[i], d = this.stripState[i];
+      const area = st.area * scale;
+      const sheet = this.o.sheet + this.o.twist * st.twistF;
+      const chord = st.chord;
+      // Положение полоски в горизонтной системе. Точка приложения — центр
+      // давления её хорды, а не мачта: поэтому при потраве шкота парусность
+      // уходит назад и в сторону, и приводящий момент меняется сам собой.
+      const zi = st.h * cphi;
+      const yi = -st.h * sphi + CP_CHORD * chord * Math.sin(sheet) * rigSide * cphi;
+      const xi = st.xLuff - CP_CHORD * chord * Math.cos(sheet);
+      // Своя местная скорость: снос, рыскание и качка на своих плечах. Из
+      // последнего слагаемого и получается аэродинамическое демпфирование
+      // качки — мачта на размахе машет по воздуху и тормозит крен.
+      const vx = this.u - this.r * yi;
+      const vy = this.v + this.r * (xi - cgx) - this.p_ * (zi - cgz);
+      const a = this.apparentAt(xi, yi, zi, vx, vy);
 
-    const q = 0.5 * env.rho_air * area * ve * ve;
-    const lift = q * k.cl, drag = q * k.cd;
-    // подъёмная сила перпендикулярна потоку, сопротивление вдоль него
-    const d1 = w1 / ve, d2 = w2 / ve;
-    const f1 = drag * d1 + lift * d2 * side;
-    const f2 = drag * d2 - lift * d1 * side;
+      // в плоскости, перпендикулярной мачте
+      const w1 = a.x, w2 = a.y * cphi;
+      const ve = Math.hypot(w1, w2);
+      d.h = st.h; d.z = zi; d.area = area; d.ws = a.ws;
+      if (ve < 0.05) {
+        d.awaDeg = 0; d.alphaDeg = 0; d.cl = 0; d.drive = 0; d.side = 0;
+        continue;
+      }
+      const theta = Math.atan2(w2, w1);
+      const awa = Math.PI - Math.abs(theta);
+      const side = theta > 0 ? 1 : -1;
+      const alpha = awa - sheet;
+      const k = sailCoeffs(alpha, Math.max(2.5, st.ar));
 
-    out.fx = f1;                 // вдоль корпуса — тяга
-    out.fy = f2 * cphi;          // поперёк — то, что кренит и сносит
-    out.fz = f2 * sphi;          // и вниз: накренённый риг притапливает лодку
-    out.awaEff = awa; out.alpha = alpha; out.cl = k.cl; out.cd = k.cd;
+      const q = 0.5 * env.rho_air * area * ve * ve;
+      const lift = q * k.cl, drag = q * k.cd;
+      const d1 = w1 / ve, d2 = w2 / ve;
+      const f1 = drag * d1 + lift * d2 * side;
+      const f2 = drag * d2 - lift * d1 * side;
+
+      const fxi = f1, fyi = f2 * cphi, fzi = f2 * sphi;
+      out.fx += fxi; out.fy += fyi; out.fz += fzi;
+      // Моменты собираются сразу по полоскам: у каждой своё плечо, и общий
+      // центр парусности больше не нужно назначать — он получается сам.
+      out.mx += yi * fzi - (zi - cgz) * fyi;
+      out.mz += (xi - cgx) * fyi - yi * fxi;
+
+      out.area += area;
+      out.awaEff += awa * area; out.alpha += alpha * area; out.cl += k.cl * area;
+      const w = Math.abs(f2);
+      load += w; out.ceZ += zi * w;
+
+      d.awaDeg = awa / DEG; d.alphaDeg = alpha / DEG;
+      d.cl = k.cl; d.drive = f1; d.side = f2;
+    }
+
+    if (out.area > 0) {
+      out.awaEff /= out.area; out.alpha /= out.area; out.cl /= out.area;
+    }
+    out.ceZ = load > 1e-6 ? out.ceZ / load : rig.ce_height_m * cphi;
     return out;
   }
 
@@ -288,6 +420,11 @@ export class Boat {
       this.o.rudder += Math.max(-lim, Math.min(lim, d));
     }
 
+    // Опорный ветер живёт в опциях, чтобы интерфейс и тесты крутили одно
+    // число; поле ветра берёт его отсюда, а профиль и порывы добавляет само.
+    this.wind.o.speed = this.o.windSpeed;
+    this.wind.o.dir = this.o.windDir;
+
     const speed = Math.hypot(this.u, this.v);
     const leeway = speed > 0.05 ? Math.atan2(this.v, Math.max(0.05, this.u)) : 0;
 
@@ -340,14 +477,13 @@ export class Boat {
     // их напрямую, у киля получается плечо в три метра вместо двадцати пяти
     // сантиметров. Лодка от этого раскручивается за секунды.
     const cgx = m.cg_m[0];
-    // Плечо паруса от центра тяжести — вектор, а не одна абсцисса: на крене
-    // центр парусности уходит под ветер (ry), и пара «тяга на плече ry»
-    // разворачивает нос на ветер. Это главный источник weather helm на живой
-    // лодке, и в перекрёстном произведении он появляется сам, отдельным
-    // слагаемым его дописывать не нужно.
-    const rx = sail.cx - cgx, ry = sail.cy, rz = sail.cz - m.cg_m[2];
+    // Момент паруса собран по полоскам, у каждой своё плечо. Оттуда же сам
+    // собой берётся приводящий момент от крена: центр парусности уходит под
+    // ветер, и пара «тяга на этом плече» разворачивает нос на ветер. Это
+    // главный источник weather helm на живой лодке, и отдельным слагаемым его
+    // дописывать не нужно.
     let mz = keelSide * (keel.x_m - cgx) + rudSide * (rud.x_m - cgx)
-             + (rx * sail.fy - ry * sail.fx) + hull.mz;
+             + sail.mz + hull.mz;
     mz += HULL_HEEL_YAW * 0.5 * env.rho_water * this.u * this.u *
           P.hydrostatics.lwl_m * P.hydrostatics.draft_canoe_m *
           Math.sin(2 * this.phi);
@@ -359,15 +495,13 @@ export class Boat {
     const righting = -Math.sign(this.phi || 1) * this.mass * env.g * gz;
     const hikeArm = this.o.crewHike * 1.0;
     const hikeMoment = -Math.sign(this.phi || 1) * this.o.crewMass * env.g * hikeArm;
-    // Кренящий момент — то же перекрёстное произведение. Прежняя запись
-    // −fy·(z−zg) занижала плечо на большом крене вчетверо: она брала и
-    // проекцию силы, и проекцию высоты, тогда как накренённый риг работает
-    // на полном плече вдоль мачты.
-    const sailHeel = ry * sail.fz - rz * sail.fy;
+    const sailHeel = sail.mx;
     const windHeel = -(wind.z - m.cg_m[2]) * wind.fy;
     const foilHeel = (keelSide * (keel.z_centre_m - m.cg_m[2])
                       + rudSide * (rud.z_centre_m - m.cg_m[2]));
-    // демпфирование качки: доля критического, иначе крен звенит
+    // Гидродинамическое демпфирование качки: доля критического, иначе крен
+    // звенит. Аэродинамическое сюда не входит и больше не нужно — оно
+    // получается само из полосок, машущих по воздуху при качке.
     const wn = Math.sqrt(this.mass * env.g * Math.max(0.05, P.hydrostatics.gm_m) / ix);
     const damp = -2 * 0.18 * wn * ix * this.p_;
     const dp = (sailHeel + windHeel + foilHeel + righting + hikeMoment + damp) / ix;
@@ -391,6 +525,9 @@ export class Boat {
       leewayDeg: leeway / DEG, heelDeg: this.phi / DEG,
       awaDeg: sail.awa / DEG, awsKn: aw.speed * 1.94384,
       awaEffDeg: sail.awaEff / DEG,   // что видит парус, а не флюгер
+      ceHeightM: sail.ceZ,            // центр парусности по нагрузке полосок
+      twsKn: aw.ws * 1.94384,         // истинный ветер на высоте ЦП
+      strips: this.stripState,
       twaDeg: this.trueWindAngle() / DEG,
       alphaDeg: sail.alpha / DEG, sailCl: sail.cl,
       driveN: sail.fx, sideN: sail.fy,
@@ -404,4 +541,4 @@ export class Boat {
   }
 }
 
-export const helpers = { lerpTable, foilCoeffs, sailCoeffs, DEG };
+export const helpers = { lerpTable, foilCoeffs, sailCoeffs, DEG, STRIPS };

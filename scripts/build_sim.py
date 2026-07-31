@@ -43,6 +43,10 @@ def main():
     html = html.replace("/*__MESH__*/ null",
                         json.dumps(mesh, separators=(",", ":")))
     html = html.replace("/*__THREE__*/", three)
+    # Порядок важен: physics.js берёт WindField из wind.js, а импорты при
+    # вклейке снимаются — значит поле ветра должно быть объявлено раньше.
+    html = html.replace("/*__WIND__*/",
+                        strip_modules(open(os.path.join(sim, "wind.js")).read()))
     html = html.replace("/*__PHYSICS__*/",
                         strip_modules(open(os.path.join(sim, "physics.js")).read()))
     html = html.replace("/*__MAIN__*/",

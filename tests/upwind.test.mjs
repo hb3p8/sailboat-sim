@@ -35,6 +35,7 @@ function run(twaDeg, sheetDeg, opts = {}) {
   b.o.windSpeed = opts.wind ?? 6;
   b.o.windDir = twaDeg * D;
   b.o.sheet = sheetDeg * D;
+  b.o.twist = (opts.twist ?? 0) * D;
   b.o.crewHike = opts.hike ?? 0;
   b.o.crewMass = b.o.crewHike > 0 ? 240 : 0;
   b.u = 3.0;
@@ -58,26 +59,31 @@ function run(twaDeg, sheetDeg, opts = {}) {
   };
 }
 
-// шкот подбираем перебором: на каждом курсе своя настройка
+// Настройки подбираем перебором: на каждом курсе свои. Твист здесь наравне со
+// шкотом — с профилем ветра по высоте он стал настоящим органом управления, а
+// не украшением: в свежий ветер им сбрасывают мощность с верха паруса.
 function best(twaDeg, opts) {
   let top = null;
-  for (let sh = 7; sh <= 34; sh += 1.5) {
-    const r = run(twaDeg, sh, opts);
-    if (!r.finite) continue;
-    if (!top || r.vmg > top.vmg) { top = r; top.sheet = sh; }
+  for (let sh = 6; sh <= 32; sh += 2) {
+    for (let tw = 0; tw <= 30; tw += 6) {
+      const r = run(twaDeg, sh, Object.assign({ twist: tw }, opts));
+      if (!r.finite) continue;
+      if (!top || r.vmg > top.vmg) { top = r; top.sheet = sh; top.twist = tw; }
+    }
   }
   return top;
 }
 
 console.log('\nПоляра в лавировку, истинный ветер 6 м/с (11.7 уз), экипаж на борту.');
 console.log('Шкот на каждом курсе подобран под наибольший VMG.\n');
-console.log('  TWA  шкот   узлы   крен   дрейф   курс   VMG    руль  ошибка курса');
+console.log('  TWA  шкот твист  узлы   крен   дрейф   курс   VMG    руль  ошибка');
 const polar = [];
 for (let twa = 30; twa <= 70; twa += 5) {
   const r = best(twa, { hike: 1 });
   polar.push({ twa, r });
   console.log('  ' + String(twa).padStart(3) + '° ' + r.sheet.toFixed(0).padStart(4) +
-    '° ' + r.t.speedKn.toFixed(2).padStart(6) + ' ' +
+    '° ' + r.twist.toFixed(0).padStart(4) + '° ' +
+    r.t.speedKn.toFixed(2).padStart(6) + ' ' +
     r.t.heelDeg.toFixed(1).padStart(6) + '° ' +
     r.t.leewayDeg.toFixed(1).padStart(6) + '° ' +
     r.track.toFixed(0).padStart(5) + '° ' + r.vmg.toFixed(2).padStart(5) + ' ' +
@@ -123,7 +129,7 @@ check('скорость нигде не выходит за разумное',
 // Экипаж на борту: в лавировку на такой лодке иначе не ходят, а без него
 // в свежий ветер она упирается не в паруса, а в собственную остойчивость.
 console.log('\nЛавировка при разной силе ветра, экипаж на борту:\n');
-console.log('  ветер   лучший TWA   узлы   крен    VMG   лавировочный угол');
+console.log('  ветер   лучший TWA  шкот твист   узлы   крен    VMG   лавир.угол');
 const byWind = [];
 for (const wind of [3, 4.5, 6, 8, 11, 14]) {
   let top = null;
@@ -132,7 +138,8 @@ for (const wind of [3, 4.5, 6, 8, 11, 14]) {
     if (r && (!top || r.vmg > top.vmg)) { top = r; top.twa = twa; }
   }
   byWind.push({ wind, top });
-  console.log('  ' + (wind + ' м/с').padEnd(8) + String(top.twa).padStart(7) + '°  ' +
+  console.log('  ' + (wind + ' м/с').padEnd(8) + String(top.twa).padStart(7) + '° ' +
+    top.sheet.toFixed(0).padStart(5) + '° ' + top.twist.toFixed(0).padStart(4) + '° ' +
     top.t.speedKn.toFixed(2).padStart(6) + ' ' + top.t.heelDeg.toFixed(0).padStart(5) +
     '° ' + top.vmg.toFixed(2).padStart(6) + '   ' + (2 * top.track).toFixed(0) + '°');
 }
@@ -155,6 +162,19 @@ check('крен упирается в потолок, а не растёт с в
   byWind.every(w => Math.abs(w.top.t.heelDeg) < 30),
   'наибольший ' +
   Math.max(...byWind.map(w => Math.abs(w.top.t.heelDeg))).toFixed(0) + '°');
+// Ради этого и разбивали риг на полоски. Твист имеет смысл только тогда, когда
+// у разных высот разный ветер и разный угол атаки: в слабый ветер лодка
+// недогружена и добирает всё, что может, а в свежий раскрывает верх паруса и
+// сбрасывает мощность оттуда, где она сильнее всего кренит.
+console.log('  Оптимальный твист по ветру: ' +
+  byWind.map(w => w.wind + ' м/с → ' + w.top.twist + '°').join(',  '));
+check('в слабый ветер твист не нужен', byWind[0].top.twist <= 6,
+  byWind[0].top.twist + '°');
+check('в свежий ветер парус раскрывают кверху',
+  byWind[byWind.length - 1].top.twist >= 12,
+  byWind[5].top.twist + '° при 14 м/с');
+check('нужный твист растёт с ветром',
+  byWind[5].top.twist > byWind[1].top.twist);
 
 // --- откренивание -------------------------------------------------------------
 

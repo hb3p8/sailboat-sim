@@ -197,6 +197,72 @@ class Boundary(object):
         return self.transom_a + self.transom_b * z
 
 
+def _signed_area(poly):
+    a = 0.0
+    for i in range(len(poly)):
+        x0, y0 = poly[i]
+        x1, y1 = poly[(i + 1) % len(poly)]
+        a += x0 * y1 - x1 * y0
+    return 0.5 * a
+
+
+def _ear_clip(poly):
+    """Триангуляция простого многоугольника отсечением ушей.
+
+    Нужна там, где контур невыпуклый: транец с вырезом кокпита. Веер из центра
+    для такого не годится — он заклеивает вырез.
+    """
+    n = len(poly)
+    if n < 3:
+        return []
+    idx = list(range(n))
+    if _signed_area(poly) < 0:
+        idx.reverse()
+
+    # Порог задаётся от размера контура, а не константой: у транца координаты
+    # в миллиметрах и сотни точек почти на одной прямой — с абсолютным
+    # эпсилоном годные уши отбраковывались и в крышке оставались дыры.
+    span = max(max(p[k] for p in poly) - min(p[k] for p in poly) for k in (0, 1))
+    eps = 1e-7 * span * span
+
+    def cross(o, a, b):
+        return ((poly[a][0] - poly[o][0]) * (poly[b][1] - poly[o][1])
+                - (poly[a][1] - poly[o][1]) * (poly[b][0] - poly[o][0]))
+
+    def inside(p, a, b, c):
+        d1, d2, d3 = cross(a, b, p), cross(b, c, p), cross(c, a, p)
+        return not ((d1 < -eps or d2 < -eps or d3 < -eps)
+                    and (d1 > eps or d2 > eps or d3 > eps))
+
+    out = []
+    guard = 0
+    while len(idx) > 3 and guard < 12 * n:
+        guard += 1
+        best = None
+        for k in range(len(idx)):
+            a = idx[(k - 1) % len(idx)]
+            b = idx[k]
+            c = idx[(k + 1) % len(idx)]
+            area = cross(a, b, c)
+            if area <= eps:
+                continue
+            if any(inside(p, a, b, c) for p in idx if p not in (a, b, c)):
+                continue
+            if best is None or area > best[0]:
+                best = (area, k, (a, b, c))
+        if best is None:
+            # вырожденный участок: срезаем самый острый угол и идём дальше
+            k = min(range(len(idx)), key=lambda j: cross(
+                idx[(j - 1) % len(idx)], idx[j], idx[(j + 1) % len(idx)]))
+            idx.pop(k)
+            continue
+        out.append(best[2])
+        idx.pop(best[1])
+    if len(idx) == 3:
+        out.append((idx[0], idx[1], idx[2]))
+    return out
+
+
 def _same(a, b, tol=0.02):
     return all(abs(a[k] - b[k]) <= tol for k in range(3))
 
@@ -440,26 +506,23 @@ class Hull(object):
                 out.pop()
             return out
 
-        # Ориентацию крышек не задаём руками, а выводим: нормаль веера должна
-        # смотреть прочь от середины корпуса. Иначе крышка оказывается вывернутой
-        # относительно обшивки, и это не ловится проверкой на дыры — только на
-        # согласованность обхода.
+        # Крышки нельзя строить веером из центра: контур транца невыпуклый —
+        # он ныряет в кокпит и обратно, — и веер заклеивал бы кокпит сплошной
+        # стенкой. Ровно это и было видно на модели: корма получалась закрытой,
+        # хотя кокпит открыт в транец. Триангуляция отсечением ушей заполняет
+        # только то, что внутри контура, и вырез появляется сам.
         mid_x = 0.5 * (rows[0][0][0] + rows[0][ns][0])
         aft, fwd = dedupe(aft), dedupe(fwd)
         for loop in (aft, fwd):
             cx = sum(verts[i][0] for i in loop) / len(loop)
-            cy = sum(verts[i][1] for i in loop) / len(loop)
-            cz = sum(verts[i][2] for i in loop) / len(loop)
-            nx = 0.0
-            for n in range(len(loop)):
-                p, q = verts[loop[n]], verts[loop[(n + 1) % len(loop)]]
-                nx += (p[1] - cy) * (q[2] - cz) - (p[2] - cz) * (q[1] - cy)
+            poly = [(verts[i][1], verts[i][2]) for i in loop]
+            faces = _ear_clip(poly)
             outward = 1.0 if cx > mid_x else -1.0
-            flip = nx * outward < 0
-            c = push((cx, cy, cz))
-            for n in range(len(loop)):
-                a, b = loop[n], loop[(n + 1) % len(loop)]
-                tris.append([c, b, a] if flip else [c, a, b])
+            area = _signed_area(poly)
+            flip = (area * outward) < 0
+            for a, b, c in faces:
+                tri = [loop[a], loop[b], loop[c]]
+                tris.append(tri[::-1] if flip else tri)
 
         return {"verts": verts, "tris": tris}
 

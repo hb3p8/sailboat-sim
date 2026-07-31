@@ -41,9 +41,9 @@ G = 9.80665
 # на полных курсах. Её место здесь, отдельной строкой, чтобы было видно, что
 # это калибровка, а не расчёт.
 RESIDUARY = [
-    (0.15, 0.0008), (0.25, 0.0045), (0.35, 0.0170), (0.45, 0.0420),
-    (0.55, 0.0680), (0.70, 0.0870), (0.85, 0.0950), (1.00, 0.0990),
-    (1.20, 0.1040), (1.50, 0.1150), (2.00, 0.1400),
+    (0.15, 0.0009), (0.25, 0.0058), (0.35, 0.0225), (0.45, 0.0555),
+    (0.55, 0.0900), (0.70, 0.1160), (0.85, 0.1250), (1.00, 0.1280),
+    (1.20, 0.1255), (1.50, 0.1245), (2.00, 0.1300),
 ]
 
 FORM_FACTOR = 1.12      # (1+k): надбавка на форму к трению плоской пластины
@@ -113,6 +113,8 @@ def main():
                                  calibrate.TARGET["draft_max_mm"],
                                  calibrate.TARGET["ballast_kg"])
     rudder = appendages.build_rudder(feats, calibrate.TARGET["sail_area_upwind_m2"])
+    case = appendages.build_keel_case(feats, hull.z_keel(x_keel) - 5.0,
+                                      appendages.TRUNK_TOP_MM)
 
     mass = calibrate.TARGET["displacement_kg"]
     h = hydro.hydrostatics(hull, 0.0, n=200)
@@ -129,6 +131,7 @@ def main():
                                        -keel["draft_mm"] + keel["bulb"].radius),
                      appendages.LEAD_DENSITY)
     rud_body = prep(rudder["blade"].mesh(), 1200.0)
+    case_body = prep(case["mesh"]) if case else None
 
     shell = meshops.shell_properties(hull_body["verts"], hull_body["tris"])
     items, opts = stability.budget(keel, fin_body["props"], bulb_body["props"],
@@ -217,8 +220,11 @@ def main():
 
     with open(os.path.join(dst, "physics.json"), "w") as f:
         json.dump(doc, f, ensure_ascii=False, indent=1)
-    meshes = sim_mesh([("hull", hull_body), ("keel_fin", fin_body),
-                       ("bulb", bulb_body), ("rudder", rud_body)])
+    parts = [("hull", hull_body), ("keel_fin", fin_body),
+             ("bulb", bulb_body), ("rudder", rud_body)]
+    if case_body:
+        parts.append(("keel_case", case_body))
+    meshes = sim_mesh(parts)
     with open(os.path.join(dst, "sim_mesh.json"), "w") as f:
         json.dump(meshes, f, separators=(",", ":"))
 

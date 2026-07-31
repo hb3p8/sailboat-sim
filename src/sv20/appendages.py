@@ -287,6 +287,35 @@ def _fin_length_factor(fin, z_hull_bottom):
     return total / wet if wet > 0 else 1.0
 
 
+def build_keel_case(features, z_bottom, z_top, wall=6.0, n_round=8):
+    """Колодец шверт-киля: короб от днища до палубы вокруг пера.
+
+    Габарит снят с чертежа (`keel_trunk`), высота — от днища до верха пера.
+    Без него перо торчит посреди кокпита, чего на лодке, разумеется, нет:
+    подъёмный киль ходит в закрытом коробе.
+    """
+    tr = features.get("keel_trunk")
+    if not tr:
+        return None
+    x0, x1 = tr["x_aft_mm"], tr["x_fwd_mm"]
+    r = tr["half_width_mm"]
+    xa, xf = x0 + r, x1 - r          # центры скруглений на концах
+
+    outline = []
+    for i in range(n_round + 1):
+        a = -math.pi / 2 + math.pi * i / n_round
+        outline.append((xf + r * math.cos(a), r * math.sin(a)))
+    for i in range(n_round + 1):
+        a = math.pi / 2 + math.pi * i / n_round
+        outline.append((xa + r * math.cos(a), r * math.sin(a)))
+
+    rings = [[(px, py, z) for px, py in outline] for z in (z_bottom, z_top)]
+    mesh = _loft(rings, cap_first=True, cap_last=True)
+    return {"mesh": mesh, "x_aft_mm": x0, "x_fwd_mm": x1,
+            "half_width_mm": r, "z_bottom_mm": z_bottom, "z_top_mm": z_top,
+            "wall_mm": wall}
+
+
 def build_rudder(features, sail_area_m2, area_frac=0.010, z_top=50.0,
                  z_tip=-1000.0, taper=0.65, thickness_ratio=0.12):
     """Навесной руль по снятой с чертежа оси и площади от парусности."""

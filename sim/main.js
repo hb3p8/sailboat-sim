@@ -68,6 +68,7 @@ const finMesh = meshFrom(MESH.keel_fin, 0x6b7681);
 const bulbMesh = meshFrom(MESH.bulb, 0x8d7340, 0.4);
 const rudderMesh = meshFrom(MESH.rudder, 0x6b7681);
 boatGroup.add(hullMesh, finMesh, bulbMesh);
+if (MESH.keel_case) boatGroup.add(meshFrom(MESH.keel_case, 0xdfe5ea, 0.4));
 
 // руль поворачивается вокруг снятой с чертежа оси баллера
 const rudderPivot = new Group();

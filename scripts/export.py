@@ -29,6 +29,7 @@ from sv20 import (appendages, calibrate, exporters, features, hullmodel,  # noqa
 LODS = [("hull", 140, 32), ("hull_lod1", 70, 18)]
 
 COLOURS = {
+    "keel_case": [0.80, 0.84, 0.88],
     "hull": [0.62, 0.70, 0.78],
     "hull_lod1": [0.62, 0.70, 0.78],
     "keel_fin": [0.42, 0.45, 0.50],
@@ -77,6 +78,8 @@ def main():
                                  calibrate.TARGET["draft_max_mm"],
                                  calibrate.TARGET["ballast_kg"])
     rudder = appendages.build_rudder(feats, calibrate.TARGET["sail_area_upwind_m2"])
+    case = appendages.build_keel_case(feats, hull.z_keel(x_keel) - 5.0,
+                                      appendages.TRUNK_TOP_MM)
 
     bodies = []
     for name, ns, ng in LODS:
@@ -88,6 +91,9 @@ def main():
         keel["bulb_x_nose_mm"], -keel["draft_mm"] + keel["bulb"].radius),
         appendages.LEAD_DENSITY))
     bodies.append(body("rudder", rudder["blade"].mesh(), 1200.0))
+    if case:
+        # масса колодца входит в конструкцию корпуса, отдельной плотности нет
+        bodies.append(body("keel_case", case["mesh"]))
 
     export = [(b["name"], b) for b in bodies if b["name"] != "hull_lod1"]
     exporters.write_glb(os.path.join(dst, "sv20.glb"),

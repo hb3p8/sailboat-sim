@@ -37,6 +37,19 @@
     margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line);
     color: var(--dim); font-variant-numeric: tabular-nums;
   }
+  #hud .ctl em { color: var(--accent); font-style: normal; }
+  #rosecard { top: 14px; left: 262px; padding: 8px; }
+  #rose { display: block; width: 112px; height: 112px; }
+  #rose .ring { fill: rgba(255,255,255,.05); stroke: rgba(255,255,255,.22); }
+  #rose .ring2 { fill: none; stroke: rgba(255,255,255,.10); }
+  #rose .boat { fill: rgba(255,255,255,.30); stroke: rgba(255,255,255,.5); }
+  #rose .sail { stroke: #cfd9e3; stroke-width: 3; stroke-linecap: round; }
+  #rose .tw { stroke: #6ee7a8; stroke-width: 3; stroke-linecap: round; }
+  #rose .aw { stroke: var(--accent); stroke-width: 3; stroke-linecap: round; }
+  #rosecard .legend {
+    margin-top: 4px; font-size: 10.5px; color: var(--dim); line-height: 1.5;
+  }
+  #rosecard .legend i { font-style: normal; font-weight: 700; }
   #panel { top: 14px; right: 14px; width: 250px; }
   #panel h2 {
     font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
@@ -66,6 +79,14 @@
 <div id="crash" hidden></div>
 <div id="stage"></div>
 <div id="hud" class="card"></div>
+<div id="rosecard" class="card">
+  <svg id="rose" viewBox="0 0 112 112"></svg>
+  <div class="legend">
+    <i style="color:#6ee7a8">—</i> истинный &nbsp;
+    <i style="color:#ffcf5a">—</i> кажущийся<br>
+    <i style="color:#cfd9e3">—</i> парус
+  </div>
+</div>
 <div id="panel" class="card">
   <h2>Условия</h2>
   <label><span class="cap"><span>Истинный ветер</span><span id="v-wind"></span></span>
@@ -76,18 +97,17 @@
     <input id="hike" type="range" min="0" max="1" step="0.05" value="0"></label>
   <label><span class="cap"><span>Парусность</span><span id="v-sailscale"></span></span>
     <input id="sailscale" type="range" min="0.6" max="2.2" step="0.05" value="1"></label>
-  <label><span class="cap"><span>Камера</span><span></span></span>
-    <select id="cam"><option value="chase">погоня</option>
-      <option value="close">ближе</option></select></label>
+  <div class="cap"><span>Камера</span><span id="cammode">погоня</span></div>
 </div>
 <div id="keys" class="card">
-  <b>←→</b> или <b>A D</b> — руль &nbsp;·&nbsp;
-  <b>↑↓</b> или <b>W S</b> — шкот &nbsp;·&nbsp; <b>R</b> — сброс
+  <b>←→</b> руль &nbsp;·&nbsp; <b>↑↓</b> шкот &nbsp;·&nbsp;
+  <b>H</b> авторулевой &nbsp;·&nbsp; <b>C</b> камера &nbsp;·&nbsp; <b>R</b> сброс
 </div>
 <div id="note" class="card">
-  Массы, моменты инерции, диаграмма остойчивости и гидростатика посчитаны по
-  восстановленной геометрии. Коэффициенты парусов и крыльев — модели, кривая
-  остаточного сопротивления подобрана под ожидаемую скорость.
+  Дорожка за кормой показывает истинный путь: разница между ней и
+  направлением носа — это дрейф. Массы, моменты инерции, остойчивость и
+  гидростатика посчитаны по восстановленной геометрии; коэффициенты парусов
+  и крыльев — модели, кривая сопротивления подобрана.
 </div>
 
 <script>

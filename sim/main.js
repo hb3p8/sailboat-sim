@@ -6,6 +6,11 @@
 //
 // Мировая система здесь — трёхмерная система three (Y вверх). Физика живёт в
 // судостроительной (Z вверх), перевод только на границе: three = (x, z, −y).
+//
+// Отдельная забота сцены — сделать поведение читаемым. По голым числам крен,
+// дрейф и потерю хода на повороте не оценить, поэтому здесь есть бурун за
+// кормой, дорожка пройденного пути, знаки на воде для привязки взгляда и
+// роза ветров с положением паруса.
 
 const D = Math.PI / 180;
 const HZ = 30;
@@ -13,38 +18,44 @@ const DT = 1 / HZ;
 
 const stage = document.getElementById('stage');
 const hud = document.getElementById('hud');
+const rose = document.getElementById('rose');
 
 const scene = new Scene();
-scene.fog = new Fog(new Color(0x9fb8cc), 60, 900);
-const camera = new PerspectiveCamera(55, 1, 0.2, 3000);
+const SKY = new Color(0xa8c4d8);
+scene.fog = new Fog(SKY, 45, 260);
+const camera = new PerspectiveCamera(52, 1, 0.15, 2000);
 const renderer = new WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-renderer.setClearColor(0x9fb8cc);
+renderer.setClearColor(SKY);
 stage.appendChild(renderer.domElement);
 
-scene.add(new HemisphereLight(0xdff0ff, 0x2a4058, 2.2));
-const sun = new DirectionalLight(0xfff4e0, 2.4);
-sun.position.set(-60, 90, 40);
+scene.add(new HemisphereLight(0xe8f4ff, 0x2b4a63, 2.4));
+const sun = new DirectionalLight(0xfff2dc, 2.6);
+sun.position.set(-70, 80, 50);
 scene.add(sun);
 
 // ------------------------------------------------------------------- вода
+//
+// Плоскость небольшая и частая: волны должны читаться рядом с лодкой, а даль
+// съедает туман. Сетка ездит за лодкой шагами по ячейке, чтобы не строить
+// бесконечное море.
 
-const SEA = 420, SEG = 96;
+const SEA = 220, SEG = 150;
 const seaGeo = new PlaneGeometry(SEA, SEA, SEG, SEG);
 seaGeo.rotateX(-Math.PI / 2);
 const sea = new Mesh(seaGeo, new MeshStandardMaterial({
-  color: 0x2f5f80, roughness: 0.35, metalness: 0.05, flatShading: false,
+  color: 0x2c5c7d, roughness: 0.28, metalness: 0.12,
 }));
 scene.add(sea);
 const seaBase = seaGeo.attributes.position.array.slice();
+const CELL = SEA / SEG;
 
-// Волны нужны только глазу: на силы они не влияют, поэтому это простая сумма
-// синусов, а не спектр. Их задача — дать чувство хода и направления ветра.
-function waveHeight(x, z, t, dirX, dirZ) {
-  const a = Math.sin((x * dirX + z * dirZ) * 0.22 + t * 1.1);
-  const b = Math.sin((x * dirZ - z * dirX) * 0.13 - t * 0.7);
-  const c = Math.sin((x * dirX + z * dirZ) * 0.55 + t * 2.3);
-  return 0.16 * a + 0.10 * b + 0.05 * c;
+function waveHeight(x, z, t, dx, dz, amp) {
+  const a = Math.sin((x * dx + z * dz) * 0.28 + t * 1.35);
+  const b = Math.sin((x * dz - z * dx) * 0.17 - t * 0.85);
+  const c = Math.sin((x * dx + z * dz) * 0.72 + t * 2.6);
+  const d = Math.sin((x * 0.9 - z * 0.4) * 1.35 - t * 3.4);
+  return amp * (0.5 * a + 0.28 * b + 0.14 * c + 0.08 * d);
 }
 
 // ------------------------------------------------------------------- лодка
@@ -52,25 +63,23 @@ function waveHeight(x, z, t, dirX, dirZ) {
 const boatGroup = new Group();
 scene.add(boatGroup);
 
-function meshFrom(data, colour, rough) {
+function meshFrom(data, colour, rough, metal) {
   const g = new BufferGeometry();
   g.setAttribute('position', new Float32BufferAttribute(data.positions, 3));
   g.setIndex(data.indices);
   g.computeVertexNormals();
   return new Mesh(g, new MeshStandardMaterial({
     color: new Color(colour), roughness: rough == null ? 0.45 : rough,
-    metalness: 0.05, side: DoubleSide,
+    metalness: metal == null ? 0.05 : metal, side: DoubleSide,
   }));
 }
 
-const hullMesh = meshFrom(MESH.hull, 0xeef2f5, 0.35);
-const finMesh = meshFrom(MESH.keel_fin, 0x6b7681);
-const bulbMesh = meshFrom(MESH.bulb, 0x8d7340, 0.4);
-const rudderMesh = meshFrom(MESH.rudder, 0x6b7681);
-boatGroup.add(hullMesh, finMesh, bulbMesh);
-if (MESH.keel_case) boatGroup.add(meshFrom(MESH.keel_case, 0xdfe5ea, 0.4));
+boatGroup.add(meshFrom(MESH.hull, 0xf4f7fa, 0.32));
+boatGroup.add(meshFrom(MESH.keel_fin, 0x5d6873, 0.4));
+boatGroup.add(meshFrom(MESH.bulb, 0x8d7340, 0.35, 0.3));
+if (MESH.keel_case) boatGroup.add(meshFrom(MESH.keel_case, 0xe4eaee, 0.4));
 
-// руль поворачивается вокруг снятой с чертежа оси баллера
+const rudderMesh = meshFrom(MESH.rudder, 0x5d6873, 0.4);
 const rudderPivot = new Group();
 const stockX = PACK.foils.rudder.x_m;
 rudderMesh.position.set(-stockX, 0, 0);
@@ -78,34 +87,43 @@ rudderPivot.position.set(stockX, 0, 0);
 rudderPivot.add(rudderMesh);
 boatGroup.add(rudderPivot);
 
-// --- паруса: плоские, но с настоящим углом выноса ---------------------------
+const rig = PACK.rig;
+const spar = new MeshStandardMaterial({
+  color: 0xc3ccd4, roughness: 0.35, metalness: 0.6 });
+const mast = new Mesh(
+  new CylinderGeometry(0.05, 0.062, rig.mast_height_m, 10), spar);
+mast.position.set(rig.mast_x_m, rig.mast_height_m / 2 + 0.62, 0);
+boatGroup.add(mast);
+
+const boom = new Mesh(new CylinderGeometry(0.045, 0.045, 2.9, 8), spar);
+boom.rotation.z = Math.PI / 2;
+boom.position.set(-1.45, 0, 0);
+const boomPivot = new Group();
+boomPivot.position.set(rig.mast_x_m, 1.0, 0);
+boomPivot.add(boom);
+boatGroup.add(boomPivot);
+
+// --- паруса -----------------------------------------------------------------
 
 function sailMesh(colour) {
   const g = new BufferGeometry();
-  g.setAttribute('position', new Float32BufferAttribute(new Float32Array(9 * 3), 3));
+  g.setAttribute('position', new Float32BufferAttribute(new Float32Array(5 * 3), 3));
   g.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4]);
-  return new Mesh(g, new MeshStandardMaterial({
-    color: new Color(colour), roughness: 0.85, side: DoubleSide,
-    transparent: true, opacity: 0.95,
+  const m = new Mesh(g, new MeshStandardMaterial({
+    color: new Color(colour), roughness: 0.9, side: DoubleSide,
   }));
+  m.frustumCulled = false;
+  return m;
 }
-const main = sailMesh(0xf2f4f6);
-const jib = sailMesh(0xe6ebef);
-const mastPivot = new Group();
-mastPivot.add(main, jib);
-boatGroup.add(mastPivot);
+const mainSail = sailMesh(0xf7f9fb);
+const jibSail = sailMesh(0xeef2f6);
+boatGroup.add(mainSail, jibSail);
 
-const rig = PACK.rig;
-const mast = new Mesh(
-  new CylinderGeometry(0.045, 0.055, rig.mast_height_m, 8),
-  new MeshStandardMaterial({ color: 0xb9c2ca, roughness: 0.4, metalness: 0.5 }));
-mast.position.set(rig.mast_x_m, rig.mast_height_m / 2 + 0.6, 0);
-boatGroup.add(mast);
-
-function shapeSails(sheet, side) {
-  // side = +1 ветер справа, парус уходит влево (в три — в +Z)
+function shapeSails(sheet, side, luffing) {
   const s = sheet * side;
-  const foot = 2.9, head = rig.mast_height_m * 0.96, tack = rig.mast_x_m;
+  const belly = luffing ? 0.06 : 0.42;
+  const foot = 2.85, head = rig.mast_height_m * 0.95, tack = rig.mast_x_m;
+  boomPivot.rotation.y = s;
   const put = (mesh, pts) => {
     const a = mesh.geometry.attributes.position.array;
     for (let i = 0; i < pts.length; i++) {
@@ -114,78 +132,163 @@ function shapeSails(sheet, side) {
     mesh.geometry.attributes.position.needsUpdate = true;
     mesh.geometry.computeVertexNormals();
   };
-  const belly = 0.35;
-  put(main, [
-    [tack, 0.75, 0],
+  const bx = Math.cos(s), bz = Math.sin(s);
+  put(mainSail, [
+    [tack, 1.0, 0],
     [tack, head, 0],
-    [tack - foot * Math.cos(s) * 0.55, head * 0.55,
-      foot * Math.sin(s) * 0.55 + belly * 0.5],
-    [tack - foot * Math.cos(s) * 0.85, head * 0.22,
-      foot * Math.sin(s) * 0.85 + belly],
-    [tack - foot * Math.cos(s), 0.95, foot * Math.sin(s)],
+    [tack - foot * 0.5 * bx + belly * 0.5 * bz, head * 0.55,
+      foot * 0.5 * bz + belly * 0.5 * bx],
+    [tack - foot * 0.8 * bx + belly * bz, head * 0.24,
+      foot * 0.8 * bz + belly * bx],
+    [tack - foot * bx, 1.05, foot * bz],
   ]);
-  const jt = rig.mast_x_m + 2.35, jh = rig.mast_height_m * 0.78;
-  const jfoot = 2.0, js = s * 0.65;
-  put(jib, [
-    [jt, 0.85, 0],
-    [rig.mast_x_m + 0.15, jh, 0],
-    [rig.mast_x_m + 0.9 - jfoot * Math.cos(js) * 0.5, jh * 0.5,
-      jfoot * Math.sin(js) * 0.5 + belly * 0.4],
-    [rig.mast_x_m + 0.9 - jfoot * Math.cos(js) * 0.8, jh * 0.22,
-      jfoot * Math.sin(js) * 0.8 + belly * 0.6],
-    [rig.mast_x_m + 0.9 - jfoot * Math.cos(js), 1.0, jfoot * Math.sin(js)],
+  const jt = rig.mast_x_m + 2.4, jh = rig.mast_height_m * 0.76;
+  const jf = 2.05, js = s * 0.62, clew = rig.mast_x_m + 0.85;
+  const jx = Math.cos(js), jz = Math.sin(js);
+  put(jibSail, [
+    [jt, 0.9, 0],
+    [rig.mast_x_m + 0.12, jh, 0],
+    [clew - jf * 0.5 * jx + belly * 0.4 * jz, jh * 0.5,
+      jf * 0.5 * jz + belly * 0.4 * jx],
+    [clew - jf * 0.8 * jx + belly * 0.7 * jz, jh * 0.24,
+      jf * 0.8 * jz + belly * 0.7 * jx],
+    [clew - jf * jx, 1.05, jf * jz],
   ]);
 }
 
-// --------------------------------------------------------------- указатель
+// --- бурун и дорожка пути -----------------------------------------------------
+//
+// Без них ход и снос не читаются: вода однородная, глазу не за что зацепиться.
+// Бурун показывает скорость, дорожка — куда лодку на самом деле несёт.
+
+const WAKE = 150;
+const wakeGeo = new BufferGeometry();
+wakeGeo.setAttribute('position',
+  new Float32BufferAttribute(new Float32Array(WAKE * 2 * 3), 3));
+wakeGeo.setAttribute('color',
+  new Float32BufferAttribute(new Float32Array(WAKE * 2 * 3), 3));
+const wakeIdx = [];
+for (let i = 0; i < WAKE - 1; i++) {
+  const a = i * 2;
+  wakeIdx.push(a, a + 1, a + 3, a, a + 3, a + 2);
+}
+wakeGeo.setIndex(wakeIdx);
+const wake = new Mesh(wakeGeo, new MeshBasicMaterial({
+  vertexColors: true, transparent: true, opacity: 0.5, depthWrite: false,
+}));
+wake.frustumCulled = false;
+scene.add(wake);
+const wakePts = [];
+
+const TRACK = 1200;
+const trackGeo = new BufferGeometry();
+trackGeo.setAttribute('position',
+  new Float32BufferAttribute(new Float32Array(TRACK * 3), 3));
+trackGeo.setDrawRange(0, 0);
+const track = new Line(trackGeo, new LineBasicMaterial({
+  color: 0xffd97a, transparent: true, opacity: 0.8 }));
+track.frustumCulled = false;
+scene.add(track);
+let trackN = 0;
+
+// --- знаки на воде ------------------------------------------------------------
+
+function buoy(x, z, colour) {
+  const g = new Group();
+  const mat = new MeshStandardMaterial({ color: colour, roughness: 0.6 });
+  const body = new Mesh(new CylinderGeometry(0.34, 0.42, 1.5, 12), mat);
+  body.position.y = 0.55;
+  const top = new Mesh(new ConeGeometry(0.34, 0.7, 12), mat);
+  top.position.y = 1.6;
+  g.add(body, top);
+  g.position.set(x, 0, z);
+  scene.add(g);
+  return g;
+}
+[[0, -90, 0xe8683c], [0, 90, 0xe8b83c], [70, 0, 0x4a9ad4], [-70, 0, 0x4a9ad4]]
+  .forEach(m => buoy(m[0], m[1], m[2]));
+
+// --- указатель ветра над лодкой ----------------------------------------------
 
 const arrow = new Group();
-const shaft = new Mesh(new CylinderGeometry(0.06, 0.06, 2.4, 8),
-  new MeshBasicMaterial({ color: 0xffcf5a }));
+const amat = new MeshBasicMaterial({ color: 0xffcf5a });
+const shaft = new Mesh(new CylinderGeometry(0.05, 0.05, 2.2, 8), amat);
 shaft.rotation.z = Math.PI / 2;
-const tip = new Mesh(new ConeGeometry(0.2, 0.6, 10),
-  new MeshBasicMaterial({ color: 0xffcf5a }));
+const tip = new Mesh(new ConeGeometry(0.18, 0.55, 10), amat);
 tip.rotation.z = -Math.PI / 2;
-tip.position.x = 1.5;
+tip.position.x = 1.35;
 arrow.add(shaft, tip);
 scene.add(arrow);
 
 // ---------------------------------------------------------------- ввод
 
+// Старт: галфвинд, шкот под него, ход близкий к установившемуся и включённый
+// авторулевой. Без этого лодка первым делом уваливается в фордевинд, где
+// парус работает одним сопротивлением, — и посмотреть на её поведение
+// не получается, пока не возьмёшь руль.
 const boat = new Boat(PACK);
+const START_TWA = 90 * D;
+boat.o.sheet = 24 * D;
+boat.psi = boat.o.windDir - START_TWA;
+boat.u = 4.0;
+let autopilot = true;
+let apHeading = boat.psi;
+
 const keys = {};
 addEventListener('keydown', e => {
   keys[e.code] = true;
   if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code))
     e.preventDefault();
-  if (e.code === 'KeyR') boat.reset();
+  if (e.code === 'KeyR') {
+    boat.reset();
+    boat.psi = boat.o.windDir - START_TWA;
+    boat.u = 4.0;
+    apHeading = boat.psi;
+    wakePts.length = 0;
+    trackN = 0;
+  }
+  if (e.code === 'KeyH') { autopilot = !autopilot; apHeading = boat.psi; }
+  if (e.code === 'KeyC') cycleCam();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 
 const ui = {};
-for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'cam']) {
-  const el = document.getElementById(id);
-  if (el) ui[id] = el;
+for (const id of ['wind', 'winddir', 'hike', 'sailscale'])
+  ui[id] = document.getElementById(id);
+
+const CAMS = ['погоня', 'сбоку', 'с борта', 'сверху'];
+let camMode = 0;
+function cycleCam() {
+  camMode = (camMode + 1) % CAMS.length;
+  document.getElementById('cammode').textContent = CAMS[camMode];
 }
+
+// wrapPi берём из physics.js: оба файла вклеиваются в один блок, и второе
+// объявление того же имени — синтаксическая ошибка на весь модуль.
 
 function readControls(dt) {
   const o = boat.o;
-  const rate = 45 * D;                      // скорость перекладки руля
+  const rate = 50 * D;
   let target = 0;
-  // Положительный угол пера уводит корму вправо и, значит, нос влево — так
-  // устроен руль. Клавиши поэтому инвертированы: вправо значит поворот вправо.
+  // Положительный угол пера уводит корму вправо и, значит, нос влево.
   if (keys.ArrowLeft || keys.KeyA) target = 35 * D;
   if (keys.ArrowRight || keys.KeyD) target = -35 * D;
+  if (autopilot) {
+    const err = wrapPi(apHeading - boat.psi);
+    target = Math.max(-25 * D, Math.min(25 * D, -(2.2 * err - 0.9 * boat.r)));
+  }
   o.rudder += Math.max(-rate * dt, Math.min(rate * dt, target - o.rudder));
-  if (!target) o.rudder *= Math.pow(0.02, dt);   // руль сам идёт в ДП
+  if (!target && !autopilot) o.rudder *= Math.pow(0.02, dt);
 
-  const sr = 30 * D;
+  const sr = 32 * D;
   if (keys.ArrowUp || keys.KeyW) o.sheet -= sr * dt;
   if (keys.ArrowDown || keys.KeyS) o.sheet += sr * dt;
   o.sheet = Math.max(2 * D, Math.min(90 * D, o.sheet));
 
   o.windSpeed = parseFloat(ui.wind.value);
-  o.windDir = parseFloat(ui.winddir.value) * D;
+  const wd = parseFloat(ui.winddir.value) * D;
+  if (autopilot) apHeading += wd - o.windDir;   // ветер повернули — держим TWA
+  o.windDir = wd;
   o.crewHike = parseFloat(ui.hike.value);
   o.crewMass = o.crewHike > 0 ? 240 : 0;
   o.sailScale = parseFloat(ui.sailscale.value);
@@ -193,22 +296,28 @@ function readControls(dt) {
 
 // ---------------------------------------------------------------- цикл
 
-let acc = 0, last = performance.now() / 1000;
-const camPos = new Vector3(-12, 5, 0);
+let acc = 0, last = performance.now() / 1000, tick = 0;
+const camPos = new Vector3(-14, 5, 0);
+const camAim = new Vector3();
 const prev = { x: 0, y: 0, psi: 0, phi: 0 };
 
 function resize() {
   const r = stage.getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) return;
   renderer.setSize(r.width, r.height, true);
-  camera.aspect = r.width / Math.max(1, r.height);
+  camera.aspect = r.width / r.height;
   camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize);
+// Одного вызова мало: на момент запуска модуля раскладка ещё может не
+// устояться, и холст остаётся размером в угол экрана. ResizeObserver ловит
+// это надёжнее, чем окно.
+if (typeof ResizeObserver !== 'undefined') new ResizeObserver(resize).observe(stage);
 resize();
 
 function frame() {
   const now = performance.now() / 1000;
-  let dt = Math.min(0.25, now - last);
+  const dt = Math.min(0.25, now - last);
   last = now;
   acc += dt;
 
@@ -218,13 +327,10 @@ function frame() {
     readControls(DT);
     boat.step(DT);
     if (![boat.x, boat.y, boat.psi, boat.phi, boat.u, boat.v].every(Number.isFinite)) {
-      // Модель разошлась. Молча продолжать нельзя: дальше пойдут NaN в сцене,
-      // и вместо понятной ошибки будет чёрный экран.
-      boat.reset();
+      boat.reset(); boat.u = 1;
       const box = document.getElementById('crash');
       box.hidden = false;
-      box.textContent = 'Физика разошлась, состояние сброшено. ' +
-        'Проверьте sim/selftest.html.';
+      box.textContent = 'Физика разошлась, состояние сброшено. Проверьте make test.';
       acc = 0;
       break;
     }
@@ -234,83 +340,151 @@ function frame() {
   const a = Math.min(1, acc / DT);
   const ix = prev.x + (boat.x - prev.x) * a;
   const iy = prev.y + (boat.y - prev.y) * a;
-  const ipsi = prev.psi + (boat.psi - prev.psi) * a;
+  const ipsi = prev.psi + wrapPi(boat.psi - prev.psi) * a;
   const iphi = prev.phi + (boat.phi - prev.phi) * a;
+  const t = boat.telemetry || {};
 
-  // судостроительные координаты -> сцена
   boatGroup.position.set(ix, 0, -iy);
   boatGroup.rotation.order = 'YXZ';
   boatGroup.rotation.y = ipsi;
   boatGroup.rotation.x = -iphi;
-
   rudderPivot.rotation.y = boat.o.rudder;
-  const t = boat.telemetry || {};
-  const side = (t.awaDeg != null && boat.apparentWind().angle > 0) ? 1 : -1;
-  shapeSails(boat.o.sheet, side);
-  mastPivot.rotation.y = 0;
 
-  // вода движется вместе с лодкой, чтобы не строить бесконечную сетку
-  sea.position.set(Math.round(ix / 4) * 4, 0, Math.round(-iy / 4) * 4);
+  const awAngle = boat.apparentWind().angle;
+  const side = awAngle > 0 ? 1 : -1;
+  shapeSails(boat.o.sheet, side, (t.alphaDeg || 0) < -1);
+
+  const amp = 0.10 + 0.035 * boat.o.windSpeed;
+  sea.position.set(Math.round(ix / CELL) * CELL, 0, Math.round(-iy / CELL) * CELL);
   const dirX = Math.cos(boat.o.windDir), dirZ = -Math.sin(boat.o.windDir);
   const pos = seaGeo.attributes.position.array;
   for (let i = 0; i < pos.length; i += 3) {
-    const wx = seaBase[i] + sea.position.x, wz = seaBase[i + 2] + sea.position.z;
-    pos[i + 1] = waveHeight(wx, wz, now, dirX, dirZ) *
-                 (0.4 + 0.09 * boat.o.windSpeed);
+    pos[i + 1] = waveHeight(seaBase[i] + sea.position.x,
+                            seaBase[i + 2] + sea.position.z, now, dirX, dirZ, amp);
   }
   seaGeo.attributes.position.needsUpdate = true;
-  // нормали воды пересчитываем через кадр: на глаз незаметно, а это самая
-  // дорогая операция в цикле
-  if ((hudTick & 1) === 0) seaGeo.computeVertexNormals();
+  if ((tick & 1) === 0) seaGeo.computeVertexNormals();
 
-  arrow.position.set(ix - 3 * Math.cos(boat.o.windDir), 5.5,
-                     -iy + 3 * Math.sin(boat.o.windDir));
+  const spd = t.speed || 0;
+  if ((tick % 2) === 0) {
+    wakePts.unshift({
+      x: ix - 2.9 * Math.cos(ipsi), z: -iy + 2.9 * Math.sin(ipsi),
+      psi: ipsi, w: 0.30 + 0.07 * spd });
+    if (wakePts.length > WAKE) wakePts.length = WAKE;
+  }
+  const wp = wakeGeo.attributes.position.array;
+  const wc = wakeGeo.attributes.color.array;
+  for (let i = 0; i < wakePts.length; i++) {
+    const p = wakePts[i];
+    const f = 1 - i / WAKE;
+    const w = p.w * (0.8 + 0.9 * (1 - f));
+    const nx = Math.sin(p.psi), nz = Math.cos(p.psi);
+    wp[i * 6] = p.x + nx * w; wp[i * 6 + 1] = 0.05; wp[i * 6 + 2] = p.z + nz * w;
+    wp[i * 6 + 3] = p.x - nx * w; wp[i * 6 + 4] = 0.05; wp[i * 6 + 5] = p.z - nz * w;
+    const b = f * f * Math.min(1, spd / 3);
+    for (let k = 0; k < 6; k++) wc[i * 6 + k] = 0.75 + 0.25 * b;
+  }
+  // Рисуем только накопленные звенья: иначе хвост схлопывается в одну точку
+  // и получается веер поперёк всей акватории.
+  wakeGeo.setDrawRange(0, Math.max(0, (wakePts.length - 1) * 6));
+  wakeGeo.attributes.position.needsUpdate = true;
+  wakeGeo.attributes.color.needsUpdate = true;
+  wake.material.opacity = 0.12 + 0.45 * Math.min(1, spd / 4);
+
+  if ((tick % 6) === 0 && trackN < TRACK) {
+    const tp = trackGeo.attributes.position.array;
+    tp[trackN * 3] = ix; tp[trackN * 3 + 1] = 0.06; tp[trackN * 3 + 2] = -iy;
+    trackN++;
+    trackGeo.setDrawRange(0, trackN);
+    trackGeo.attributes.position.needsUpdate = true;
+  }
+
+  arrow.position.set(ix - 4 * Math.cos(boat.o.windDir), 6.2,
+                     -iy + 4 * Math.sin(boat.o.windDir));
   arrow.rotation.y = boat.o.windDir + Math.PI;
 
-  // камера: сзади и сбоку, с плавным догоном
-  const mode = ui.cam ? ui.cam.value : 'chase';
-  const back = mode === 'close' ? 9 : 15;
-  const want = new Vector3(
-    ix - back * Math.cos(ipsi) + 2 * Math.sin(ipsi),
-    mode === 'close' ? 3.2 : 6.0,
-    -iy + back * Math.sin(ipsi) + 2 * Math.cos(ipsi));
-  camPos.lerp(want, 1 - Math.pow(0.001, dt));
+  const bx = ix, bz = -iy;
+  let want;
+  if (camMode === 0) {
+    want = new Vector3(bx - 13 * Math.cos(ipsi) + 2.5 * Math.sin(ipsi), 4.6,
+                       bz + 13 * Math.sin(ipsi) + 2.5 * Math.cos(ipsi));
+  } else if (camMode === 1) {
+    want = new Vector3(bx + 5 * Math.sin(ipsi) - 2 * Math.cos(ipsi), 3.0,
+                       bz + 5 * Math.cos(ipsi) + 2 * Math.sin(ipsi));
+  } else if (camMode === 2) {
+    want = new Vector3(bx - 1.2 * Math.cos(ipsi) + 1.0 * Math.sin(ipsi), 1.9,
+                       bz + 1.2 * Math.sin(ipsi) + 1.0 * Math.cos(ipsi));
+  } else {
+    want = new Vector3(bx - 2 * Math.cos(ipsi), 28, bz + 2 * Math.sin(ipsi));
+  }
+  camPos.lerp(want, 1 - Math.pow(camMode === 2 ? 1e-7 : 0.004, dt));
   camera.position.copy(camPos);
-  camera.lookAt(ix + 1.5 * Math.cos(ipsi), 1.2, -iy - 1.5 * Math.sin(ipsi));
+  camAim.lerp(new Vector3(bx + 2 * Math.cos(ipsi), camMode === 3 ? 0 : 1.4,
+                          bz - 2 * Math.sin(ipsi)), 1 - Math.pow(0.004, dt));
+  camera.lookAt(camAim);
 
   renderer.render(scene, camera);
-  updateHud(t);
+  if ((tick % 3) === 0) { updateHud(t); updateRose(t); }
+  tick++;
   requestAnimationFrame(frame);
 }
 
+// ---------------------------------------------------------------- приборы
+
 const HUD_ROWS = [
-  ['speedKn', 'Скорость', 'уз', 2],
   ['vmg', 'VMG', 'уз', 2],
   ['heelDeg', 'Крен', '°', 1],
   ['leewayDeg', 'Дрейф', '°', 1],
   ['twaAbsDeg', 'Истинный ветер', '°', 0],
-  ['awaDeg', 'Кажущийся ветер', '°', 0],
+  ['awaDeg', 'Кажущийся', '°', 0],
   ['awsKn', 'Скорость кажущегося', 'уз', 1],
   ['alphaDeg', 'Угол атаки паруса', '°', 1],
-  ['driveN', 'Тяга паруса', 'Н', 0],
-  ['sideN', 'Боковая сила', 'Н', 0],
+  ['driveN', 'Тяга', 'Н', 0],
   ['resistN', 'Сопротивление', 'Н', 0],
-  ['gzM', 'Плечо GZ', 'м', 3],
 ];
 
-let hudTick = 0;
 function updateHud(t) {
-  if (!t || (hudTick++ % 4)) return;
+  if (!t) return;
   const rows = HUD_ROWS.map(([k, label, unit, prec]) =>
     '<tr><td>' + label + '</td><td class="v">' +
     (t[k] == null ? '—' : (+t[k]).toFixed(prec)) +
     '</td><td class="u">' + unit + '</td></tr>').join('');
+  const al = t.alphaDeg || 0;
+  const luff = al < -1 ? ' <em>заполаскивает</em>'
+             : (al > 24 ? ' <em>перебрано</em>' : '');
   hud.innerHTML =
     '<div class="big">' + (t.speedKn || 0).toFixed(2) + ' <span>уз</span></div>' +
     '<table>' + rows + '</table>' +
     '<div class="ctl">руль ' + (boat.o.rudder / D).toFixed(0) +
-    '°&nbsp;&nbsp;шкот ' + (boat.o.sheet / D).toFixed(0) + '°</div>';
+    '°&nbsp;&nbsp;шкот ' + (boat.o.sheet / D).toFixed(0) + '°' + luff +
+    (autopilot ? '&nbsp;&nbsp;<b>авторулевой</b>' : '') + '</div>';
 }
 
-shapeSails(boat.o.sheet, 1);
+// Роза: лодка всегда носом вверх, стрелки показывают, откуда дует истинный и
+// кажущийся ветер, серая линия — положение паруса. По ней видно, добран шкот
+// или вынесен, не заглядывая в цифры.
+function updateRose(t) {
+  if (!t) return;
+  const R = 46;
+  const pt = (ang, r) => [56 + r * Math.sin(ang), 56 - r * Math.cos(ang)];
+  const lee = boat.apparentWind().angle > 0 ? 1 : -1;
+  const tw = (t.twaAbsDeg || 0) * D * lee;
+  const aw = (t.awaDeg || 0) * D * lee;
+  const [tx, ty] = pt(tw, R - 3);
+  const [ax, ay] = pt(aw, R - 3);
+  const [sx, sy] = pt(Math.PI + boat.o.sheet * -lee, R - 16);
+  rose.innerHTML =
+    '<circle cx="56" cy="56" r="46" class="ring"/>' +
+    '<circle cx="56" cy="56" r="30" class="ring2"/>' +
+    '<path d="M56 20 L67 76 L56 68 L45 76 Z" class="boat"/>' +
+    '<line x1="56" y1="56" x2="' + sx.toFixed(1) + '" y2="' + sy.toFixed(1) +
+      '" class="sail"/>' +
+    '<line x1="' + tx.toFixed(1) + '" y1="' + ty.toFixed(1) +
+      '" x2="56" y2="56" class="tw"/>' +
+    '<line x1="' + ax.toFixed(1) + '" y1="' + ay.toFixed(1) +
+      '" x2="56" y2="56" class="aw"/>';
+}
+
+document.getElementById('cammode').textContent = CAMS[camMode];
+shapeSails(boat.o.sheet, 1, false);
 frame();

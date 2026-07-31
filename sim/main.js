@@ -141,10 +141,25 @@ boatGroup.add(boomPivot);
 
 // --- паруса -----------------------------------------------------------------
 
+// Паруса строятся по тем же треугольникам и тому же закону твиста, что и
+// полоски в физике: сетка станций по высоте, на каждой хорда повёрнута на свой
+// угол и выгнута пузом под ветер. Раньше здесь была отдельная приблизительная
+// заглушка из пяти точек, и нарисованный парус жил своей жизнью — с твистом
+// это стало видно сразу: латы торчали за шкаторину.
+const SAIL_ROWS = 7, SAIL_COLS = 5;
+
 function sailMesh(colour) {
   const g = new BufferGeometry();
-  g.setAttribute('position', new Float32BufferAttribute(new Float32Array(5 * 3), 3));
-  g.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4]);
+  g.setAttribute('position',
+    new Float32BufferAttribute(new Float32Array(SAIL_ROWS * SAIL_COLS * 3), 3));
+  const idx = [];
+  for (let r = 0; r < SAIL_ROWS - 1; r++) {
+    for (let c = 0; c < SAIL_COLS - 1; c++) {
+      const a = r * SAIL_COLS + c;
+      idx.push(a, a + 1, a + SAIL_COLS, a + 1, a + SAIL_COLS + 1, a + SAIL_COLS);
+    }
+  }
+  g.setIndex(idx);
   const m = new Mesh(g, new MeshStandardMaterial({
     color: new Color(colour), roughness: 0.9, side: DoubleSide,
   }));
@@ -156,40 +171,35 @@ const jibSail = sailMesh(0xeef2f6);
 boatGroup.add(mainSail, jibSail);
 
 function shapeSails(sheet, side, luffing) {
-  const s = sheet * side;
-  const belly = luffing ? 0.06 : 0.42;
-  const foot = 2.85, head = rig.mast_height_m * 0.95, tack = rig.mast_x_m;
-  boomPivot.rotation.y = s;
-  const put = (mesh, pts) => {
+  boomPivot.rotation.y = sheet * side;
+  const twist = boat.o.twist;
+  const belly = luffing ? 0.02 : 0.10;      // пузо, доля хорды
+  boat.sails.forEach((sail, k) => {
+    const mesh = k === 0 ? mainSail : jibSail;
     const a = mesh.geometry.attributes.position.array;
-    for (let i = 0; i < pts.length; i++) {
-      a[i * 3] = pts[i][0]; a[i * 3 + 1] = pts[i][1]; a[i * 3 + 2] = pts[i][2];
+    const zLo = Math.max(sail.tack[1], sail.clew[1]), zHi = sail.head[1];
+    const edge = (e, z) => e[0] + (sail.head[0] - e[0]) * (z - e[1]) /
+                                  (sail.head[1] - e[1]);
+    let i = 0;
+    for (let r = 0; r < SAIL_ROWS; r++) {
+      const f = r / (SAIL_ROWS - 1);
+      const h = zLo + f * (zHi - zLo);
+      const xLuff = edge(sail.tack, h), chord = Math.max(0, xLuff - edge(sail.clew, h));
+      const sh = sheet + twist * Math.pow(f, 1.3);
+      // хорда идёт в корму и под ветер, нормаль к ней смотрит туда же
+      const ux = -Math.cos(sh), uy = Math.sin(sh) * side;
+      const nx = -uy, ny = ux;
+      for (let c = 0; c < SAIL_COLS; c++) {
+        const t = c / (SAIL_COLS - 1);
+        const bulge = belly * chord * Math.sin(Math.PI * t);
+        a[i++] = xLuff + chord * t * ux + bulge * nx;
+        a[i++] = h;
+        a[i++] = chord * t * uy + bulge * ny;
+      }
     }
     mesh.geometry.attributes.position.needsUpdate = true;
     mesh.geometry.computeVertexNormals();
-  };
-  const bx = Math.cos(s), bz = Math.sin(s);
-  put(mainSail, [
-    [tack, 1.0, 0],
-    [tack, head, 0],
-    [tack - foot * 0.5 * bx + belly * 0.5 * bz, head * 0.55,
-      foot * 0.5 * bz + belly * 0.5 * bx],
-    [tack - foot * 0.8 * bx + belly * bz, head * 0.24,
-      foot * 0.8 * bz + belly * bx],
-    [tack - foot * bx, 1.05, foot * bz],
-  ]);
-  const jt = rig.mast_x_m + 2.4, jh = rig.mast_height_m * 0.76;
-  const jf = 2.05, js = s * 0.62, clew = rig.mast_x_m + 0.85;
-  const jx = Math.cos(js), jz = Math.sin(js);
-  put(jibSail, [
-    [jt, 0.9, 0],
-    [rig.mast_x_m + 0.12, jh, 0],
-    [clew - jf * 0.5 * jx + belly * 0.4 * jz, jh * 0.5,
-      jf * 0.5 * jz + belly * 0.4 * jx],
-    [clew - jf * 0.8 * jx + belly * 0.7 * jz, jh * 0.24,
-      jf * 0.8 * jz + belly * 0.7 * jx],
-    [clew - jf * jx, 1.05, jf * jz],
-  ]);
+  });
 }
 
 // --- бурун и дорожка пути -----------------------------------------------------

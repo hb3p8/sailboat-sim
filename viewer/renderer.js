@@ -130,27 +130,21 @@ for (const c of F.curves) {
 // --- обводы -----------------------------------------------------------------
 
 if (HULL) {
-  const V = HULL.mesh.verts, Q = HULL.mesh.quads;
+  // Тело уже замкнутое и с обоими бортами: зеркалить и разворачивать нечего,
+  // ориентацию привёл meshops при сборке.
+  const V = HULL.mesh.verts;
   const pos = [];
   for (const p of V) pos.push(p[0], p[1], p[2]);
-  for (const p of V) pos.push(p[0], -p[1], p[2]);
-  const off = V.length;
   const idx = [];
-  for (const q of Q) {
-    // Обход сетки идёт снизу вверх и с кормы в нос: нормаль такой рамки
-    // смотрит внутрь корпуса. Правый борт разворачиваем, левый — нет,
-    // зеркальное отражение переворачивает ориентацию само.
-    idx.push(q[3], q[2], q[1], q[3], q[1], q[0]);
-    idx.push(q[0] + off, q[1] + off, q[2] + off,
-             q[0] + off, q[2] + off, q[3] + off);
-  }
+  for (const t of HULL.mesh.tris) idx.push(t[0], t[1], t[2]);
   const geo = new BufferGeometry();
   geo.setAttribute('position', new Float32BufferAttribute(pos, 3));
   geo.setIndex(idx);
   geo.computeVertexNormals();
 
-  add({ id: 'surface', label: 'Поверхность корпуса', group: 'Обводы',
-        on: true, color: '--c-surface' },
+  add({ id: 'surface',
+        label: 'Поверхность корпуса' + (HULL.watertight ? '' : ' (НЕ ЗАМКНУТА)'),
+        group: 'Обводы', on: true, color: '--c-surface' },
       new Mesh(geo, new MeshStandardMaterial({
         color: new Color(css('--c-surface')), roughness: 0.42, metalness: 0.05,
         side: DoubleSide })),
@@ -188,6 +182,10 @@ if (HULL && HULL.appendages) {
         color: '--c-ballast' }, solid('bulb', '--c-ballast'), '--c-ballast');
   add({ id: 'rudder', label: 'Перо руля', group: 'Киль и руль', on: true,
         color: '--c-keel' }, solid('rudder', '--c-keel'), '--c-keel');
+  if (A.case)
+    add({ id: 'keelcase', label: 'Колодец киля', group: 'Киль и руль',
+          on: true, color: '--c-surface' }, solid('case', '--c-surface'),
+        '--c-surface');
 }
 
 // --- служебное --------------------------------------------------------------

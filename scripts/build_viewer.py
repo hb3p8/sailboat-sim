@@ -109,7 +109,7 @@ def appendage_payload(ap):
     rows = [[label, "%.*f" % (prec, k[key]), unit]
             for key, label, unit, prec in APPENDAGE_ROWS]
     rows.append(["Площадь пера руля", "%.3f" % r["area_m2"], "м²"])
-    return {
+    out = {
         "fin": k["mesh"], "bulb": k["bulb_mesh"], "rudder": r["mesh"],
         "rows": rows,
         "note": ("Сечение пера киля снято с чертежа (%s), хорда %.0f мм. "
@@ -117,6 +117,9 @@ def appendage_payload(ap):
                  "%.0f мм и снятую с транца ось навески."
                  % (k["section_family"], k["chord_mm"], k["draft_mm"])),
     }
+    if ap.get("case"):
+        out["case"] = ap["case"]["mesh"]
+    return out
 
 
 def stability_payload(out):
@@ -181,6 +184,7 @@ def main():
             "chine_line": hl.get("chine_line", []),
             "source_note": source_note(hl),
             "appendages": appendage_payload(hl.get("appendages")),
+            "watertight": hl["mesh"].get("check", {}).get("watertight"),
             "stability": stability_payload(out),
             "hydroRows": [[label, "%.*f" % (prec, h[key]), unit]
                           for key, label, unit, prec in HYDRO_ROWS],

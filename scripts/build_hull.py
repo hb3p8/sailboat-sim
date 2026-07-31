@@ -19,7 +19,7 @@ import time
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from sv20 import appendages, calibrate, hullmodel, hydro  # noqa: E402
+from sv20 import appendages, calibrate, hullmodel, hydro, meshops  # noqa: E402
 
 N_STATIONS_DRAWN = 21
 
@@ -53,7 +53,7 @@ def main():
     xs = [boundary.x_stem * i / float(N_STATIONS_DRAWN - 1)
           for i in range(N_STATIONS_DRAWN)]
     feats = frame_doc.get("features")
-    keel = rudder = None
+    keel = rudder = case = None
     if feats:
         x_keel = 0.5 * (feats["keel_section"]["x_le_mm"]
                         + feats["keel_section"]["x_te_mm"])
@@ -62,9 +62,16 @@ def main():
             calibrate.TARGET["ballast_kg"])
         rudder = appendages.build_rudder(
             feats, calibrate.TARGET["sail_area_upwind_m2"])
+        case = appendages.build_keel_case(feats, hull.z_keel(x_keel) - 5.0,
+                                          appendages.TRUNK_TOP_MM)
 
     stations = hull.station_curves(xs)
-    mesh = hull.mesh()
+    # Просмотрщику отдаём замкнутое тело — то же самое, что уходит в выгрузку.
+    # Раньше здесь была открытая оболочка без палубы и крышек, и во вьювере
+    # корпус выглядел разрезанным.
+    raw = hull.closed_mesh(n_station=120, n_girth=28)
+    mv, mt, mrep = meshops.prepare(raw["verts"], raw["tris"])
+    mesh = {"verts": mv, "tris": mt, "check": mrep}
     dt = time.time() - t0
 
     insane = [s["x"] for s in stations if not s["sane"]]
@@ -95,10 +102,8 @@ def main():
         "keel_line": [[x, 0.0, hull.z_keel(x)]
                       for x in [boundary.x_stem * i / 240.0 for i in range(241)]],
         "mesh": {"verts": [[round(c, 1) for c in v] for v in mesh["verts"]],
-                 "quads": mesh["quads"],
-                 "transom_edge": [[round(c, 1) for c in v]
-                                  for v in mesh["transom_edge"]]},
-        "appendages": appendage_doc(feats, keel, rudder),
+                 "tris": mesh["tris"], "check": mesh["check"]},
+        "appendages": appendage_doc(feats, keel, rudder, case),
         "warnings": ([] if not insane else
                      ["вырожденные шпангоуты на X = " +
                       ", ".join("%.0f" % x for x in insane)]),
@@ -120,8 +125,9 @@ def main():
     print("параметры: %s" % source)
     if factor:
         print("одномерная калибровка: множитель килеватости %.3f" % factor)
-    print("сетка: %d вершин, %d четырёхугольников, %.1f с"
-          % (len(mesh["verts"]), len(mesh["quads"]), dt))
+    print("сетка: %d вершин, %d треугольников, %s, %.1f с"
+          % (len(mesh["verts"]), len(mesh["tris"]),
+             "замкнута" if mesh["check"]["watertight"] else "НЕ ЗАМКНУТА", dt))
     print("транец плоскостью: невязка %.1f мм" % boundary.transom_rms)
     if h:
         print("водоизмещение на КВЛ: %.0f кг (цель %.0f)"
@@ -161,7 +167,7 @@ SANE = {
 }
 
 
-def appendage_doc(feats, keel, rudder):
+def appendage_doc(feats, keel, rudder, case=None):
     if not keel:
         return None
     fin, bulb = keel["fin"], keel["bulb"]
@@ -187,6 +193,8 @@ def appendage_doc(feats, keel, rudder):
             "x_stock_mm": rudder["x_stock_mm"],
             "mesh": rudder["blade"].mesh(),
         },
+        "case": ({"mesh": case["mesh"], "x_aft_mm": case["x_aft_mm"],
+                  "x_fwd_mm": case["x_fwd_mm"]} if case else None),
         "sensitivity": appendages.sensitivity(
             feats, keel["fin"].z_root, keel["draft_mm"],
             calibrate.TARGET["ballast_kg"], [2600.0, 3100.0, 3600.0, 5000.0, 7850.0]),

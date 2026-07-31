@@ -40,15 +40,17 @@ function sail(twaDeg, sheetDeg, opts = {}) {
   b.o.sheet = sheetDeg * D;
   b.o.crewHike = opts.hike ?? 0;
   b.o.crewMass = b.o.crewHike > 0 ? 240 : 0;
-  // Старт с ходом, как в симуляторе. С нуля лодка сначала сносится боком,
-  // и на острых курсах из этого состояния она уже не выбирается — проверять
-  // в таком запуске нечего.
+  // Старт с ходом и уже с креном. Прямостоящая лодка на полном ходу в
+  // бейдевинд — состояние, которого на воде не бывает: парус там работает на
+  // полную, и её резко уваливает раньше, чем она успевает накрениться.
+  // Проверять переходный процесс из невозможного состояния бессмысленно.
   b.u = opts.u ?? 3.5;
+  b.phi = (opts.heel ?? 18) * D * (twaDeg > 0 ? 1 : -1);
   const target = 0;
   const secs = opts.secs ?? 120;
   for (let i = 0; i < secs * 30; i++) {
     const err = wrapPi(target - b.psi);
-    b.o.rudder = Math.max(-25 * D, Math.min(25 * D, -(2.2 * err - 0.9 * b.r)));
+    b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * err - 0.9 * b.r)));
     b.step(1 / 30);
   }
   return { b, t: b.telemetry, headingErrDeg: wrapPi(target - b.psi) / D };
@@ -119,12 +121,12 @@ for (const [twa, sheet] of [[45, 13], [60, 16], [90, 24]]) {
   b.o.windSpeed = 6; b.o.windDir = twa * D; b.o.sheet = sheet * D; b.u = 3.5;
   for (let i = 0; i < 120 * 30; i++) {
     const err = wrapPi(0 - b.psi);
-    b.o.rudder = Math.max(-30 * D, Math.min(30 * D, -(2.2 * err - 0.9 * b.r)));
+    b.o.rudderTarget = Math.max(-30 * D, Math.min(30 * D, -(2.2 * err - 0.9 * b.r)));
     b.step(1 / 30);
   }
   const helm = b.o.rudder / D;
   const twa0 = Math.abs(b.trueWindAngle()) / D;
-  b.o.rudder = 0;
+  b.o.rudderTarget = 0;
   for (let i = 0; i < 10 * 30; i++) b.step(1 / 30);
   const drift = twa0 - Math.abs(b.trueWindAngle()) / D;
   balance.push({ twa, helm, drift });
@@ -141,6 +143,12 @@ check('с брошенным рулём лодка не валится под в
   'худший случай ' + Math.min(...balance.map(b => b.drift)).toFixed(0) + '°');
 
 // --- острота -----------------------------------------------------------------
+//
+// Лавировка целиком разбирается в tests/upwind.test.mjs: там поляра с
+// подобранным шкотом, разная сила ветра, откренивание, оверштаг и левентик.
+// Здесь остаётся одна грубая проверка — что лодка вообще не умеет идти круче,
+// чем бывает; сравнивать курсы при жёстко заданном шкоте бессмысленно, шкот
+// на каждом курсе свой.
 const beatRows = [[30, 10], [45, 13], [60, 16]].map(([twa, sheet]) => {
   const r = sail(twa, sheet);
   const track = twa + Math.abs(r.t.leewayDeg);
@@ -149,10 +157,6 @@ const beatRows = [[30, 10], [45, 13], [60, 16]].map(([twa, sheet]) => {
 console.log('Курс к ветру с учётом дрейфа: ' +
   beatRows.map(r => r.twa + '°→' + r.track.toFixed(0) + '° (VMG ' +
     r.vmg.toFixed(2) + ')').join(',  ') + '\n');
-check('лучший VMG получается не на самом остром курсе',
-  beatRows[1].vmg > beatRows[0].vmg,
-  'на 45° ' + beatRows[1].vmg.toFixed(2) + ' против ' +
-  beatRows[0].vmg.toFixed(2) + ' на 30°');
 check('лавировочный угол не уже семидесяти градусов',
   2 * beatRows[0].track > 70, (2 * beatRows[0].track).toFixed(0) + '°');
 
@@ -165,7 +169,7 @@ for (let i = 0; i < 60 * 30; i++) {
   turn.step(1 / 30);
 }
 const v0 = Math.hypot(turn.u, turn.v);
-turn.o.rudder = 15 * D;
+turn.o.rudderTarget = 15 * D;
 let rates = [];
 for (let i = 0; i < 20 * 30; i++) {
   turn.step(1 / 30);

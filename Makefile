@@ -29,6 +29,7 @@ sim: physics
 # от проблем отрисовки и не запускается из Makefile.
 test: physics
 	node tests/physics.test.mjs
+	node tests/upwind.test.mjs
 
 # Ф3: оптимизатор, нужен scipy из .venv. Пишет out/params.json, который
 # дальше автоматически подхватывает build_hull.

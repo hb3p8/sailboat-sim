@@ -167,7 +167,11 @@ def main():
             "iyy_kg_m2": total["iyy_kg_m2"],
             "izz_kg_m2": total["izz_kg_m2"],
             "added_roll": opts["added_inertia"],
-            "added_sway": 0.85, "added_yaw": 0.55, "added_surge": 0.06,
+            # Присоединённые массы и моменты. Для корпуса с глубоким килем и
+            # бульбом вода увлекается заметнее, чем закладывалось сначала.
+            # От них зависит не установившаяся циркуляция, а задержка отклика
+            # на руль — та самая задумчивость.
+            "added_sway": 1.0, "added_yaw": 0.7, "added_surge": 0.06,
             "budget": [{"name": i["name"], "mass_kg": i["mass_kg"],
                         "com_m": [c / 1000.0 for c in i["com_mm"]],
                         "note": i["note"]} for i in items],

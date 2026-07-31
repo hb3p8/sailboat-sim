@@ -318,7 +318,6 @@ function cycleCam() {
 
 function readControls(dt) {
   const o = boat.o;
-  const rate = 50 * D;
   let target = 0;
   // Положительный угол пера уводит корму вправо и, значит, нос влево.
   const left = keys.ArrowLeft || keys.KeyA;
@@ -332,8 +331,9 @@ function readControls(dt) {
     const err = wrapPi(apHeading - boat.psi);
     target = Math.max(-25 * D, Math.min(25 * D, -(2.2 * err - 0.9 * boat.r)));
   }
-  o.rudder += Math.max(-rate * dt, Math.min(rate * dt, target - o.rudder));
-  if (!target && !autopilot) o.rudder *= Math.pow(0.02, dt);
+  // Скорость перекладки ограничивает сама лодка (physics.js): это её
+  // свойство, а не интерфейса.
+  o.rudderTarget = (!target && !autopilot) ? 0 : target;
 
   const sr = 32 * D;
   if (keys.ArrowUp || keys.KeyW) o.sheet -= sr * dt;

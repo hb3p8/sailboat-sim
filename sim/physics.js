@@ -32,6 +32,11 @@ const HULL_CROSSFLOW_CD = 1.0;
 // Это второе и последнее место в проекте, где число подобрано, а не выведено.
 const HULL_HEEL_YAW = 0.28;
 
+// Перо руля не переставляется мгновенно: на румпеле рука, а не сервопривод.
+// Ограничение живёт здесь, а не в интерфейсе, — это свойство лодки, и тесты
+// должны видеть ту же задержку, что и человек за рулём.
+const RUDDER_RATE = 26 * DEG;
+
 // Нормировка угла без цикла: при расходимости `while` по бесконечности вешает
 // вкладку намертво, и это не гипотеза — так и было.
 function wrapPi(a) {
@@ -63,18 +68,29 @@ function lerpTable(rows, key, x, field) {
 
 // Крыло с срывом: до срыва линейный участок, после — плоская пластина.
 // Переход сглаженный, иначе руль на больших углах перекладки дёргается.
+//
+// Угол атаки принимается любой, включая обтекание задом наперёд. Это не
+// придирка: в левентике лодка идёт кормой вперёд, и крыло обязано вести себя
+// разумно и там. Прежняя версия считала угол через max(0.05, u), на заднем
+// ходу получала девяносто градусов и выдавала силы, разгонявшие лодку назад
+// до полусотни узлов.
 function foilCoeffs(alphaRad, ar, stallDeg, cd0) {
-  const a = Math.abs(alphaRad);
+  const a0 = wrapPi(alphaRad);
+  const sgn = a0 < 0 ? -1 : 1;
+  const a = Math.abs(a0);
+  const reversed = a > Math.PI / 2;
+  const eff = reversed ? Math.PI - a : a;          // угол от ближайшей кромки
   const stall = stallDeg * DEG;
   const slope = 2 * Math.PI * ar / (ar + 2);        // теория несущей линии
-  const clLin = slope * a;
-  const clFlat = 2 * Math.sin(a) * Math.cos(a);
-  const cdFlat = 2 * Math.sin(a) * Math.sin(a);
-  const blend = a <= stall ? 0 : Math.min(1, (a - stall) / (12 * DEG));
-  const cl = clLin * (1 - blend) + clFlat * blend;
+  const clLin = slope * eff;
+  const clFlat = 2 * Math.sin(eff) * Math.cos(eff);
+  const cdFlat = 2 * Math.sin(eff) * Math.sin(eff);
+  const blend = eff <= stall ? 0 : Math.min(1, (eff - stall) / (12 * DEG));
+  let cl = clLin * (1 - blend) + clFlat * blend;
   const cdi = cl * cl / (Math.PI * ar * 0.9);
-  const cd = (cd0 + cdi) * (1 - blend) + cdFlat * blend;
-  return { cl: cl * Math.sign(alphaRad), cd: cd };
+  let cd = (cd0 + cdi) * (1 - blend) + cdFlat * blend;
+  if (reversed) { cl *= 0.55; cd = cd * 1.4 + 0.02; }   // тупой кромкой вперёд
+  return { cl: cl * sgn, cd: cd };
 }
 
 // Парус: то же крыло, но с ненулевым углом нулевой подъёмной силы — он
@@ -102,7 +118,8 @@ export class Boat {
       windSpeed: 6.0,          // истинный ветер, м/с
       windDir: 100 * DEG,      // откуда дует, рад, отсчёт от оси X мира
       sheet: 25 * DEG,         // угол выноса паруса от ДП
-      rudder: 0.0,             // перекладка руля, рад
+      rudder: 0.0,             // текущее положение пера, рад
+      rudderTarget: null,      // куда его ведут; null — держать как есть
       crewHike: 0.0,           // откренивание: 0 — в ДП, 1 — на борту
       crewMass: 0.0,
       sailScale: 1.0,          // 1 — грот со стакселем, больше — с генакером
@@ -149,36 +166,68 @@ export class Boat {
 
   // --- силы ----------------------------------------------------------------
 
+  // Парус на накренённой мачте.
+  //
+  // Крен здесь не поправочный множитель, а геометрия. Парус натянут вдоль
+  // мачты, и работает только та часть набегающего потока, которая идёт
+  // ПОПЕРЁК мачты: вдоль неё воздух просто стекает по полотну. Поэтому весь
+  // расчёт ведётся в плоскости, перпендикулярной мачте, а готовая сила
+  // раскладывается обратно по связанным осям.
+  //
+  // Отсюда сама собой берётся разгрузка на крене: угол атаки в этой плоскости
+  // равен arctg(tg(AWA)·cos(крен)), и на пятидесяти градусах парус видит вдвое
+  // меньший угол, чем показывает флюгер. Без этого модель на свежем ветру
+  // ложилась на 55–58° и продолжала идти в лавировку десять узлов — то есть
+  // не разгружалась вовсе. Ни одного подобранного числа здесь нет, только
+  // проекция; прежний множитель cos(крен) на боковой силе — её частный случай.
   sailForces(aw) {
     const rig = this.p.rig, env = this.p.environment;
     const area = (rig.main_area_m2 + rig.jib_area_m2) * this.o.sailScale;
-    // кажущийся ветер приходит «в нос» при угле π: переводим в угол от носа
-    let awa = Math.PI - Math.abs(aw.angle);
-    const side = aw.angle > 0 ? 1 : -1;      // с какого борта ветер
+    const cphi = Math.cos(this.phi), sphi = Math.sin(this.phi);
+    const h = rig.ce_height_m;
+    const out = {
+      fx: 0, fy: 0, fz: 0,
+      cx: rig.ce_x_m != null ? rig.ce_x_m : rig.mast_x_m,
+      cy: -h * sphi, cz: h * cphi,       // центр парусности едет вбок с мачтой
+      awa: Math.PI - Math.abs(aw.angle), awaEff: 0,
+      alpha: 0, cl: 0, cd: 0, area: area,
+    };
+
+    // орты плоскости паруса: e1 вдоль корпуса, e2 «поперёк» вместе с креном
+    const w1 = aw.x, w2 = aw.y * cphi;
+    const ve = Math.hypot(w1, w2);
+    if (ve < 0.05) return out;
+
+    const theta = Math.atan2(w2, w1);         // куда дует, в плоскости паруса
+    const awa = Math.PI - Math.abs(theta);    // угол от носа, откуда дует
+    const side = theta > 0 ? 1 : -1;          // с какого борта ветер
     const alpha = awa - this.o.sheet;
     const ar = rig.mast_height_m * rig.mast_height_m / Math.max(1, area);
     const k = sailCoeffs(alpha, Math.max(2.5, ar));
 
-    const q = 0.5 * env.rho_air * area * aw.speed * aw.speed;
+    const q = 0.5 * env.rho_air * area * ve * ve;
     const lift = q * k.cl, drag = q * k.cd;
-    // подъёмная сила перпендикулярна кажущемуся ветру, сопротивление вдоль
-    const dirX = aw.x / (aw.speed || 1), dirY = aw.y / (aw.speed || 1);
-    let fx = drag * dirX - lift * (-dirY) * side;
-    let fy = drag * dirY - lift * (dirX) * side;
-    // крен убирает часть боковой силы: парус наклоняется вместе с мачтой
-    const cphi = Math.cos(this.phi);
-    fy *= cphi;
-    // Паразитное сопротивление корпуса, рангоута и экипажа в потоке. В
-    // лавировку кажущийся ветер силён, и эта добавка заметно ограничивает,
-    // насколько круто лодка вообще способна идти.
-    const wq = 0.5 * env.rho_air * (rig.windage_area_m2 || 0) *
-               (rig.windage_cd || 0.85) * aw.speed * aw.speed;
-    fx += wq * dirX;
-    fy += wq * dirY * cphi;
+    // подъёмная сила перпендикулярна потоку, сопротивление вдоль него
+    const d1 = w1 / ve, d2 = w2 / ve;
+    const f1 = drag * d1 + lift * d2 * side;
+    const f2 = drag * d2 - lift * d1 * side;
 
-    return { fx: fx, fy: fy, z: rig.ce_height_m * cphi,
-             x: rig.ce_x_m != null ? rig.ce_x_m : rig.mast_x_m,
-             awa: awa, alpha: alpha, cl: k.cl, cd: k.cd, area: area };
+    out.fx = f1;                 // вдоль корпуса — тяга
+    out.fy = f2 * cphi;          // поперёк — то, что кренит и сносит
+    out.fz = f2 * sphi;          // и вниз: накренённый риг притапливает лодку
+    out.awaEff = awa; out.alpha = alpha; out.cl = k.cl; out.cd = k.cd;
+    return out;
+  }
+
+  // Паразитное сопротивление корпуса, рангоута и экипажа в потоке. Сила
+  // горизонтальная и приложена низко, так что кренит слабо; но в лавировку
+  // кажущийся ветер силён, и она заметно ограничивает остроту хода.
+  windage(aw) {
+    const rig = this.p.rig, env = this.p.environment;
+    const a = rig.windage_area_m2 || 0;
+    if (!a || aw.speed < 0.05) return { fx: 0, fy: 0, z: 0.6 };
+    const q = 0.5 * env.rho_air * a * (rig.windage_cd || 0.85) * aw.speed;
+    return { fx: q * aw.x, fy: q * aw.y, z: 0.6 };
   }
 
   // Поперечная сила корпуса по полоскам. Заменяет два прежних слагаемых —
@@ -211,22 +260,40 @@ export class Boat {
     return { fy: fy, mz: mz };
   }
 
-  foilForce(foil, alpha, speed, extraCd) {
+  // Сила крыла сразу в связанных осях. Так не нужно отдельно решать, куда
+  // смотрит подъёмная сила: она просто перпендикулярна скорости крыла, а
+  // сопротивление направлено против неё, и все четверти получаются сами.
+  foilForce(foil, ux, vy, deflect, extraCd) {
     const env = this.p.environment;
-    if (speed < 0.05) return { lift: 0, drag: 0 };
+    const V = Math.hypot(ux, vy);
+    if (V < 0.05) return { fx: 0, fy: 0, side: 0, alpha: 0 };
+    const heading = Math.atan2(vy, ux);            // куда движется крыло
+    const alpha = wrapPi(heading - (deflect || 0));
     const k = foilCoeffs(alpha, foil.effective_ar, foil.stall_deg,
                          0.008 + (extraCd || 0));
-    const q = 0.5 * env.rho_water * foil.area_m2 * speed * speed;
-    return { lift: q * k.cl, drag: q * k.cd, cl: k.cl };
+    const q = 0.5 * env.rho_water * foil.area_m2 * V * V;
+    const L = q * k.cl, Dg = q * k.cd;
+    const ex = ux / V, ey = vy / V;                // вдоль движения
+    const px = -ey, py = ex;                       // поперёк движения
+    return { fx: -Dg * ex - L * px, fy: -Dg * ey - L * py,
+             side: -L * py, alpha: alpha, cl: k.cl };
   }
 
   step(dt) {
     const P = this.p, env = P.environment, m = P.mass;
+
+    if (this.o.rudderTarget != null) {
+      const d = this.o.rudderTarget - this.o.rudder;
+      const lim = RUDDER_RATE * dt;
+      this.o.rudder += Math.max(-lim, Math.min(lim, d));
+    }
+
     const speed = Math.hypot(this.u, this.v);
     const leeway = speed > 0.05 ? Math.atan2(this.v, Math.max(0.05, this.u)) : 0;
 
     const aw = this.apparentWind();
     const sail = this.sailForces(aw);
+    const wind = this.windage(aw);
 
     // Крылья видят не скорость центра тяжести, а свою местную: к дрейфу
     // добавляется вращение на собственном плече от ЦТ. Для руля это главное
@@ -236,19 +303,20 @@ export class Boat {
     const keel = P.foils.keel, rud = P.foils.rudder;
     const cgx0 = P.mass.cg_m[0];
     const cphi = Math.cos(this.phi);
-    const uu = Math.max(0.05, this.u);
 
-    const vKeel = this.v + this.r * (keel.x_m - cgx0);
-    const aKeel = speed > 0.05 ? Math.atan2(vKeel, uu) : 0;
-    const kf = this.foilForce(keel, -aKeel, speed, 0);
-    const keelSide = kf.lift * cphi;
-    const keelDrag = kf.drag;
+    const kf = this.foilForce(keel, this.u,
+                              this.v + this.r * (keel.x_m - cgx0), 0, 0);
+    const keelSide = kf.fy * cphi;
+    const keelFx = kf.fx;
 
-    const vRud = this.v + this.r * (rud.x_m - cgx0);
-    const aRud = (speed > 0.05 ? Math.atan2(vRud, uu) : 0) - this.o.rudder;
-    const rf = this.foilForce(rud, -aRud, speed, 0.004);
-    const rudSide = rf.lift * cphi;
-    const rudDrag = rf.drag;
+    // Хорда пера повёрнута на угол перекладки: угол атаки меряется от неё.
+    // Знак здесь ровно один и его легко перевернуть — тогда руль работает
+    // наоборот, а выглядит это как «лодка не держит курс».
+    const rf = this.foilForce(rud, this.u,
+                              this.v + this.r * (rud.x_m - cgx0),
+                              this.o.rudder, 0.004);
+    const rudSide = rf.fy * cphi;
+    const rudFx = rf.fx;
 
     // сопротивление корпуса по таблице
     const rt = lerpTable(P.resistance.curve, 'v_ms', Math.abs(this.u), 'rt_n');
@@ -261,8 +329,8 @@ export class Boat {
     const iz = m.izz_kg_m2 * (1 + m.added_yaw);
     const ix = m.ixx_kg_m2 * m.added_roll;
 
-    const fx = sail.fx + hullDrag - keelDrag - rudDrag;
-    const fy = sail.fy + keelSide + rudSide + hull.fy;
+    const fx = sail.fx + wind.fx + hullDrag + keelFx + rudFx;
+    const fy = sail.fy + wind.fy + keelSide + rudSide + hull.fy;
 
     const du = fx / mx + this.v * this.r;
     const dv = fy / my - this.u * this.r;
@@ -272,15 +340,14 @@ export class Boat {
     // их напрямую, у киля получается плечо в три метра вместо двадцати пяти
     // сантиметров. Лодка от этого раскручивается за секунды.
     const cgx = m.cg_m[0];
+    // Плечо паруса от центра тяжести — вектор, а не одна абсцисса: на крене
+    // центр парусности уходит под ветер (ry), и пара «тяга на плече ry»
+    // разворачивает нос на ветер. Это главный источник weather helm на живой
+    // лодке, и в перекрёстном произведении он появляется сам, отдельным
+    // слагаемым его дописывать не нужно.
+    const rx = sail.cx - cgx, ry = sail.cy, rz = sail.cz - m.cg_m[2];
     let mz = keelSide * (keel.x_m - cgx) + rudSide * (rud.x_m - cgx)
-             + sail.fy * (sail.x - cgx) + hull.mz;
-    // Приводящий момент от крена — главный источник weather helm на реальной
-    // лодке, и его тут не было. На крене центр парусности уходит под ветер,
-    // а тяга остаётся вдоль корпуса: пара разворачивает нос на ветер. Без
-    // этого слагаемого лодка на бейдевинде valится под ветер и требует
-    // постоянного руля, чего на воде нет.
-    const zce = (P.rig.ce_height_m - m.cg_m[2]);
-    mz += zce * Math.sin(this.phi) * sail.fx;
+             + (rx * sail.fy - ry * sail.fx) + hull.mz;
     mz += HULL_HEEL_YAW * 0.5 * env.rho_water * this.u * this.u *
           P.hydrostatics.lwl_m * P.hydrostatics.draft_canoe_m *
           Math.sin(2 * this.phi);
@@ -292,13 +359,18 @@ export class Boat {
     const righting = -Math.sign(this.phi || 1) * this.mass * env.g * gz;
     const hikeArm = this.o.crewHike * 1.0;
     const hikeMoment = -Math.sign(this.phi || 1) * this.o.crewMass * env.g * hikeArm;
-    const sailHeel = -sail.fy * (sail.z - m.cg_m[2]);
+    // Кренящий момент — то же перекрёстное произведение. Прежняя запись
+    // −fy·(z−zg) занижала плечо на большом крене вчетверо: она брала и
+    // проекцию силы, и проекцию высоты, тогда как накренённый риг работает
+    // на полном плече вдоль мачты.
+    const sailHeel = ry * sail.fz - rz * sail.fy;
+    const windHeel = -(wind.z - m.cg_m[2]) * wind.fy;
     const foilHeel = (keelSide * (keel.z_centre_m - m.cg_m[2])
                       + rudSide * (rud.z_centre_m - m.cg_m[2]));
     // демпфирование качки: доля критического, иначе крен звенит
     const wn = Math.sqrt(this.mass * env.g * Math.max(0.05, P.hydrostatics.gm_m) / ix);
     const damp = -2 * 0.18 * wn * ix * this.p_;
-    const dp = (sailHeel + foilHeel + righting + hikeMoment + damp) / ix;
+    const dp = (sailHeel + windHeel + foilHeel + righting + hikeMoment + damp) / ix;
 
     // --- интегрирование, полунеявная схема Эйлера
     this.u = clamp(this.u + du * dt, 25);
@@ -318,10 +390,12 @@ export class Boat {
       speed: speed, speedKn: speed * 1.94384,
       leewayDeg: leeway / DEG, heelDeg: this.phi / DEG,
       awaDeg: sail.awa / DEG, awsKn: aw.speed * 1.94384,
+      awaEffDeg: sail.awaEff / DEG,   // что видит парус, а не флюгер
       twaDeg: this.trueWindAngle() / DEG,
       alphaDeg: sail.alpha / DEG, sailCl: sail.cl,
       driveN: sail.fx, sideN: sail.fy,
       resistN: rt, keelLiftN: keelSide, rudderLiftN: rudSide,
+      sternway: this.u < -0.15,
       gzM: gz, yawRate: this.r / DEG,
       vmg: speed * Math.cos(this.trueWindAngle()) * 1.94384,
       twaAbsDeg: Math.abs(this.trueWindAngle()) / DEG,

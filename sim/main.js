@@ -191,6 +191,56 @@ track.frustumCulled = false;
 scene.add(track);
 let trackN = 0;
 
+// --- сетка на воде ------------------------------------------------------------
+//
+// Однородная вода не даёт ощущения хода: лодка будто висит. Сетка привязана к
+// миру, а не к лодке, и переставляется шагами по ячейке — получается
+// бесконечное поле, по которому видно и скорость, и снос, и поворот.
+
+const GRID_STEP = 5, GRID_HALF = 11, GRID_SUB = 2;
+const gridLines = [];
+{
+  const n = GRID_HALF * 2, m = n * GRID_SUB;
+  for (let i = 0; i <= n; i++) {
+    const a = (i - GRID_HALF) * GRID_STEP;
+    for (let j = 0; j < m; j++) {
+      const b0 = (j / GRID_SUB - GRID_HALF) * GRID_STEP;
+      const b1 = ((j + 1) / GRID_SUB - GRID_HALF) * GRID_STEP;
+      gridLines.push([a, b0], [a, b1]);          // вдоль Z
+      gridLines.push([b0, a], [b1, a]);          // вдоль X
+    }
+  }
+}
+const gridGeo = new BufferGeometry();
+gridGeo.setAttribute('position',
+  new Float32BufferAttribute(new Float32Array(gridLines.length * 3), 3));
+gridGeo.setAttribute('color',
+  new Float32BufferAttribute(new Float32Array(gridLines.length * 3), 3));
+const grid = new LineSegments(gridGeo, new LineBasicMaterial({
+  vertexColors: true, transparent: true, opacity: 0.5, depthWrite: false }));
+grid.frustumCulled = false;
+scene.add(grid);
+const GRID_FADE = GRID_HALF * GRID_STEP;
+
+function updateGrid(cx, cz, t, dx, dz, amp) {
+  const ox = Math.round(cx / GRID_STEP) * GRID_STEP;
+  const oz = Math.round(cz / GRID_STEP) * GRID_STEP;
+  const p = gridGeo.attributes.position.array;
+  const c = gridGeo.attributes.color.array;
+  for (let i = 0; i < gridLines.length; i++) {
+    const x = ox + gridLines[i][0], z = oz + gridLines[i][1];
+    p[i * 3] = x;
+    p[i * 3 + 1] = waveHeight(x, z, t, dx, dz, amp) + 0.03;
+    p[i * 3 + 2] = z;
+    const d = Math.max(Math.abs(gridLines[i][0]), Math.abs(gridLines[i][1]));
+    const f = Math.max(0, 1 - d / GRID_FADE);
+    const v = 0.35 + 0.45 * f * f;
+    c[i * 3] = v; c[i * 3 + 1] = v * 1.05; c[i * 3 + 2] = v * 1.1;
+  }
+  gridGeo.attributes.position.needsUpdate = true;
+  gridGeo.attributes.color.needsUpdate = true;
+}
+
 // --- знаки на воде ------------------------------------------------------------
 
 function buoy(x, z, colour) {
@@ -271,8 +321,13 @@ function readControls(dt) {
   const rate = 50 * D;
   let target = 0;
   // Положительный угол пера уводит корму вправо и, значит, нос влево.
-  if (keys.ArrowLeft || keys.KeyA) target = 35 * D;
-  if (keys.ArrowRight || keys.KeyD) target = -35 * D;
+  const left = keys.ArrowLeft || keys.KeyA;
+  const right = keys.ArrowRight || keys.KeyD;
+  // Взялся за руль — авторулевой отключается сам. Иначе он молча перебивает
+  // стрелки, и создаётся полное впечатление, что управление не работает.
+  if (left || right) autopilot = false;
+  if (left) target = 35 * D;
+  if (right) target = -35 * D;
   if (autopilot) {
     const err = wrapPi(apHeading - boat.psi);
     target = Math.max(-25 * D, Math.min(25 * D, -(2.2 * err - 0.9 * boat.r)));
@@ -364,6 +419,7 @@ function frame() {
   }
   seaGeo.attributes.position.needsUpdate = true;
   if ((tick & 1) === 0) seaGeo.computeVertexNormals();
+  updateGrid(ix, -iy, now, dirX, dirZ, amp);
 
   const spd = t.speed || 0;
   if ((tick % 2) === 0) {

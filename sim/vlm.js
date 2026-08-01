@@ -231,6 +231,43 @@ export class Lattice {
     return ai;
   }
 
+  // Скорость, наведённая всей системой вихрей, в произвольной точке. Нужна не
+  // для сил, а для картинки: по ней рисуются линии тока вокруг парусов —
+  // ровно то, что показывают в трубе дымом. Считать это каждый кадр незачем,
+  // отрисовка обновляет линии в несколько раз реже.
+  induced(px, py, pz, ux, uy, uz, ground, out) {
+    const n = this.n, P = this.panels, t = this._t;
+    out[0] = out[1] = out[2] = 0;
+    const add = (A, B, TA, TB, sign) => {
+      segment(px, py, pz, A[0], A[1], A[2], B[0], B[1], B[2], t);
+      out[0] += sign * t[0]; out[1] += sign * t[1]; out[2] += sign * t[2];
+      tail(px, py, pz, TB[0], TB[1], TB[2], ux, uy, uz, t);
+      out[0] += sign * t[0]; out[1] += sign * t[1]; out[2] += sign * t[2];
+      tail(px, py, pz, TA[0], TA[1], TA[2], ux, uy, uz, t);
+      out[0] -= sign * t[0]; out[1] -= sign * t[1]; out[2] -= sign * t[2];
+    };
+    const m = this._mirTmp || (this._mirTmp = {
+      a: [0, 0, 0], b: [0, 0, 0], ta: [0, 0, 0], tb: [0, 0, 0] });
+    for (let j = 0; j < n; j++) {
+      const g = this.gamma[j];
+      if (!g) continue;
+      const p = P[j];
+      const before = [out[0], out[1], out[2]];
+      out[0] = out[1] = out[2] = 0;
+      add(p.a, p.b, p.ta, p.tb, 1);
+      if (ground) {
+        for (const k of ['a', 'b', 'ta', 'tb']) {
+          m[k][0] = p[k][0]; m[k][1] = p[k][1]; m[k][2] = -p[k][2];
+        }
+        add(m.a, m.b, m.ta, m.tb, -1);
+      }
+      out[0] = before[0] + g * out[0];
+      out[1] = before[1] + g * out[1];
+      out[2] = before[2] + g * out[2];
+    }
+    return out;
+  }
+
   // Постановка Вайссингера: условие непротекания в контрольной точке на трёх
   // четвертях хорды. Система линейная, решается один раз, срыва не знает — его
   // навешивают потом, по полученному эффективному углу атаки.

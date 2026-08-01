@@ -566,11 +566,84 @@ function saveDump() {
   }
 }
 
+// --- линии тока вокруг парусов ------------------------------------------------
+//
+// То, что в трубе показывают дымом. Вихревая решётка умеет считать наведённую
+// скорость в любой точке, а не только на самих панелях, — значит можно взять
+// сетку точек с наветра и повести их по потоку. Видно сразу и подпор перед
+// парусами, и разгон в щели между гротом и стакселем, и скос за задней
+// шкаториной: то есть именно то, ради чего решётка и заводилась и чего по
+// числам не понять.
+//
+// Линии живут в горизонтной системе лодки — той же, в которой считает риг:
+// курс есть, крена нет. Поэтому у них своя группа.
+const FLOW_LINES = 26, FLOW_STEPS = 44, FLOW_DS = 0.55;
+const flowGroup = new Group();
+scene.add(flowGroup);
+const flowGeo = new BufferGeometry();
+flowGeo.setAttribute('position',
+  new Float32BufferAttribute(new Float32Array(FLOW_LINES * FLOW_STEPS * 2 * 3), 3));
+flowGeo.setAttribute('color',
+  new Float32BufferAttribute(new Float32Array(FLOW_LINES * FLOW_STEPS * 2 * 3), 3));
+const flow = new LineSegments(flowGeo, new LineBasicMaterial({
+  vertexColors: true, transparent: true, opacity: 0.85, depthTest: false }));
+flow.frustumCulled = false;
+flow.renderOrder = 5;
+flowGroup.add(flow);
+const flowV = [0, 0, 0];
+
+function updateFlow() {
+  const lat = boat.lattice;
+  const aw = boat.apparentWind();
+  const V = Math.hypot(aw.x, aw.y);
+  const p = flowGeo.attributes.position.array;
+  const c = flowGeo.attributes.color.array;
+  if (V < 0.3) { flowGeo.setDrawRange(0, 0); return; }
+  const ux = aw.x / V, uy = aw.y / V;          // куда дует
+  const px = -uy, py = ux;                     // поперёк потока
+  const rigX = rig.ce_x_m, rigZ = rig.ce_height_m;
+  let n = 0;
+  for (let i = 0; i < FLOW_LINES; i++) {
+    // Засев: сетка поперёк потока, с наветра от рига.
+    const row = i % 2, col = (i - row) / 2;
+    const lat0 = (col / (FLOW_LINES / 2 - 1) - 0.5) * 7.5;
+    const h = row ? rigZ * 0.45 : rigZ * 1.15;
+    let x = rigX - ux * 9 + px * lat0;
+    let y = -uy * 9 + py * lat0;
+    let z = h;
+    for (let k = 0; k < FLOW_STEPS; k++) {
+      lat.induced(x, y, z, ux, uy, 0, true, flowV);
+      let vx = aw.x + flowV[0], vy = aw.y + flowV[1], vz = flowV[2];
+      const sp = Math.hypot(vx, vy, vz) || 1;
+      const nx = x + vx / sp * FLOW_DS;
+      const ny = y + vy / sp * FLOW_DS;
+      const nz = Math.max(0.15, z + vz / sp * FLOW_DS);
+      const b = n * 6;
+      p[b] = x; p[b + 1] = z; p[b + 2] = y;
+      p[b + 3] = nx; p[b + 4] = nz; p[b + 5] = ny;
+      // Цвет по скорости относительно набегающей: медленнее синий, быстрее
+      // жёлтый. В щели поток разгоняется — это и должно быть видно.
+      const q = Math.max(0, Math.min(1, (sp / V - 0.75) / 0.6));
+      for (let v = 0; v < 2; v++) {
+        c[b + v * 3] = 0.30 + 0.70 * q;
+        c[b + v * 3 + 1] = 0.55 + 0.35 * q;
+        c[b + v * 3 + 2] = 1.00 - 0.60 * q;
+      }
+      x = nx; y = ny; z = nz;
+      n++;
+    }
+  }
+  flowGeo.setDrawRange(0, n * 2);
+  flowGeo.attributes.position.needsUpdate = true;
+  flowGeo.attributes.color.needsUpdate = true;
+}
+
 let debugOn = false;
 function setDebug(on) {
   debugOn = on;
   field.visible = on;
   battens.visible = on;
+  flow.visible = on;
   document.getElementById('rigcard').hidden = !on;
 }
 
@@ -614,7 +687,36 @@ const ui = {};
 for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist'])
   ui[id] = document.getElementById(id);
 
-const CAMS = ['погоня', 'сбоку', 'с борта', 'сверху'];
+const CAMS = ['погоня', 'сбоку', 'с борта', 'сверху', 'свободная'];
+const FREE_CAM = 4;
+
+// Свободная камера: облёт вокруг лодки мышью. Нужна, чтобы разглядывать
+// паруса — из готовых точек их толком не видно, а именно там сейчас вся работа.
+//
+// Камера следует за лодкой, но не за её курсом: иначе при рыскании картинка
+// ездит под руками. Целится в середину рига, а не в корпус.
+const freeCam = { az: 2.2, el: 0.22, dist: 16, drag: null };
+
+stage.addEventListener('pointerdown', e => {
+  if (camMode !== FREE_CAM) return;
+  freeCam.drag = { x: e.clientX, y: e.clientY };
+  // Захват указателя не обязателен и на некоторых событиях недоступен —
+  // например у синтетических. Без него вращение всё равно работает.
+  try { stage.setPointerCapture(e.pointerId); } catch (err) { /* не беда */ }
+});
+stage.addEventListener('pointermove', e => {
+  if (!freeCam.drag) return;
+  freeCam.az -= (e.clientX - freeCam.drag.x) * 0.008;
+  freeCam.el += (e.clientY - freeCam.drag.y) * 0.006;
+  freeCam.el = Math.max(-0.5, Math.min(1.4, freeCam.el));
+  freeCam.drag = { x: e.clientX, y: e.clientY };
+});
+addEventListener('pointerup', () => { freeCam.drag = null; });
+stage.addEventListener('wheel', e => {
+  if (camMode !== FREE_CAM) return;
+  e.preventDefault();
+  freeCam.dist = Math.max(3, Math.min(90, freeCam.dist * Math.exp(e.deltaY * 0.001)));
+}, { passive: false });
 let camMode = 0;
 function cycleCam() {
   camMode = (camMode + 1) % CAMS.length;
@@ -746,6 +848,11 @@ function frame() {
   if (debugOn) {
     updateField(ix, iy, now);
     updateBattens(side);
+    // Линии тока считаются по всей решётке в каждой точке — это дорого, и
+    // каждый кадр не нужно: поток меняется не быстрее самой лодки.
+    flowGroup.position.set(ix, 0, iy);
+    flowGroup.rotation.y = -ipsi;
+    if ((tick % 12) === 0) updateFlow();
   }
 
   const spd = t.speed || 0;
@@ -798,10 +905,24 @@ function frame() {
   if (camMode === 0) want = at(-13, 2.5, 4.6);
   else if (camMode === 1) want = at(-2, 5, 3.0);
   else if (camMode === 2) want = at(-1.2, 1.0, 1.9);
-  else want = at(-2, 0, 28);
-  camPos.lerp(want, 1 - Math.pow(camMode === 2 ? 1e-7 : 0.004, dt));
+  else if (camMode === 3) want = at(-2, 0, 28);
+  else {
+    // Свободная: сферические координаты вокруг лодки, в мировых осях.
+    const c = Math.cos(freeCam.el), d = freeCam.dist;
+    want = new Vector3(bx + d * c * Math.cos(freeCam.az),
+                       rig.mast_height_m * 0.35 + d * Math.sin(freeCam.el),
+                       bz + d * c * Math.sin(freeCam.az));
+  }
+  const aim = camMode === FREE_CAM
+    ? new Vector3(bx + 1.5 * fx, rig.mast_height_m * 0.35, bz + 1.5 * fz)
+    : at(2, 0, camMode === 3 ? 0 : 1.4);
+  // Свободную камеру не сглаживаем: под рукой она должна ходить сразу.
+  if (camMode === FREE_CAM) { camPos.copy(want); camAim.copy(aim); }
+  else {
+    camPos.lerp(want, 1 - Math.pow(camMode === 2 ? 1e-7 : 0.004, dt));
+    camAim.lerp(aim, 1 - Math.pow(0.004, dt));
+  }
   camera.position.copy(camPos);
-  camAim.lerp(at(2, 0, camMode === 3 ? 0 : 1.4), 1 - Math.pow(0.004, dt));
   camera.lookAt(camAim);
 
   renderer.render(scene, camera);

@@ -15,7 +15,7 @@
 
 export const TRACE_FIELDS = [
   // состояние лодки — по нему она восстанавливается целиком
-  't', 'x', 'y', 'psi', 'u', 'v', 'r', 'phi', 'p_', 'rigSide',
+  't', 'x', 'y', 'psi', 'u', 'v', 'r', 'phi', 'p_', 'rigSide', 'hike',
   // органы управления и условия — всё, что можно тронуть на ходу
   'rudder', 'sheet', 'twist', 'twistEff',
   'windSpeed', 'windDir', 'gust', 'shift', 'crewHike', 'crewMass', 'sailScale',
@@ -38,6 +38,9 @@ export function traceFrame(boat) {
   return [
     r4(boat.t), r4(boat.x), r4(boat.y), r4(boat.psi),
     r4(boat.u), r4(boat.v), r4(boat.r), r4(boat.phi), r4(boat.p_), boat.rigSide,
+    // Момент откренивания — тоже состояние: экипаж отзывается с запаздыванием.
+    // Без него запись не воспроизводится, и это поймал тест, а не глаз.
+    r4(boat.hike),
     r4(boat.o.rudder), r4(boat.o.sheet), r4(boat.o.twist), r4(boat.twistEff),
     r4(boat.o.windSpeed), r4(boat.o.windDir),
     r4(boat.wind.o.gust), r4(boat.wind.o.shift),
@@ -73,6 +76,7 @@ export function restoreFrom(boat, frame, index) {
   boat.u = g('u'); boat.v = g('v'); boat.r = g('r');
   boat.phi = g('phi'); boat.p_ = g('p_'); boat.t = g('t');
   boat.rigSide = g('rigSide');
+  if (index.hike != null) boat.hike = g('hike');
 }
 
 // Подать в лодку органы управления и условия из кадра.

@@ -86,6 +86,8 @@ def main():
     # вклейке снимаются — значит поле ветра должно быть объявлено раньше.
     html = html.replace("/*__WIND__*/",
                         strip_modules(open(os.path.join(sim, "wind.js")).read()))
+    html = html.replace("/*__VLM__*/",
+                        strip_modules(open(os.path.join(sim, "vlm.js")).read()))
     html = html.replace("/*__TRACE__*/",
                         strip_modules(open(os.path.join(sim, "trace.js")).read()))
     html = html.replace("/*__PHYSICS__*/",

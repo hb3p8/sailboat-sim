@@ -16,12 +16,37 @@
 //   на ходу, и держать их в пакете незачем.
 
 import { WindField } from './wind.js';
+import { Lattice } from './vlm.js';
 
 const DEG = Math.PI / 180;
 
 // Полосок на парус. Шесть хватает: профиль ветра по высоте гладкий, и на
 // восьми ответ отличается меньше чем на процент, а считать нужно каждый кадр.
 const STRIPS = 6;
+
+// Панелей вдоль хорды. Одной не хватает: грот со стакселем стоят на расстоянии
+// меньше хорды друг от друга, и при одной панели условие непротекания ставится
+// в одной точке на весь парус — взаимное влияние выходит вдвое-втрое больше
+// настоящего, и грот в расчёте умирает. Три панели ставят его в трёх точках по
+// хорде, и поверхность наконец «чувствуется» как поверхность.
+const NCHORD = 3;
+
+// Пузо паруса, доля хорды, по параболической средней линии. Взято так, чтобы
+// угол нулевой подъёмной силы остался прежним — 2·пузо = 3°, — и поляра от
+// перехода на решётку не поехала сама по себе. Настоящее пузо у мягкого паруса
+// больше, но это отдельное решение, и принимать его надо отдельно.
+const SAIL_CAMBER = 0.0262;
+
+// За срывом потенциальное течение неприменимо, и поправка на скос гасится.
+const IND_FADE0 = 20 * DEG;
+const IND_FADE1 = 35 * DEG;
+
+// Матрица влияния решётки перестраивается не каждый шаг. Она зависит только от
+// формы рига — крена, твиста, выноса — и от направления пелены, а всё это
+// меняется на порядок медленнее, чем идёт счёт. Сама же перестройка стоит
+// полутора тысяч вычислений закона Био — Савара и съедает почти всё время
+// шага. Решается система при этом каждый шаг: она дешёвая.
+const LATTICE_EVERY = 6;
 
 // Центр давления полоски, доля хорды от передней шкаторины. У паруса он
 // заметно впереди середины — это парус, а не симметричный профиль.
@@ -40,7 +65,14 @@ const HULL_CROSSFLOW_CD = 1.0;
 // Коэффициент откалиброван по наблюдению владельца лодки: с брошенным рулём
 // в бейдевинд лодка должна слегка приводиться, а не валиться под ветер.
 // Это второе и последнее место в проекте, где число подобрано, а не выведено.
-const HULL_HEEL_YAW = 0.28;
+//
+// Пересчитан после того, как у стакселя поправили шкотовый угол: центр
+// парусности уехал на четырнадцать сантиметров вперёд, приводящий момент от
+// паруса уменьшился, и корпусу пришлось взять больше. Само наблюдение при
+// этом не менялось — менялась геометрия, под которую оно подгонялось.
+// Верхняя граница ставится не наблюдением, а рулём: выше 0.6 лодку приходится
+// держать десятью градусами пера на острых курсах, а это уже тормоз.
+const HULL_HEEL_YAW = 0.55;
 
 // Насколько ветер должен зайти за диаметральную плоскость, чтобы парус
 // перекинулся на другой борт. Без этого запаса парус на чистом фордевинде
@@ -143,8 +175,12 @@ const FREE_TWIST = 42 * DEG;
 const LOADED_ALPHA = 8 * DEG;      // при таком угле атаки шкот уже держит
 const SHEET_GIVE = 25 * DEG;       // на сколько парус сдаёт за своим пределом
 
-// Парус: то же крыло, но с ненулевым углом нулевой подъёмной силы — он
-// выгнутый, — и более ранним срывом. Угол атаки здесь считается от ХОРДЫ и
+// Парус: сечение, ДВУМЕРНОЕ. Наклон кривой подъёмной силы 2π, без поправки на
+// удлинение, и никакого индуктивного сопротивления: и то и другое считает
+// вихревая решётка (sim/vlm.js) по настоящей форме паруса и его закрутке, а не
+// по паспортному числу. Двойной учёт был бы грубой ошибкой.
+//
+// Угол атаки здесь считается от ХОРДЫ и
 // принимается любой, включая обтекание с задней стороны: на полных курсах
 // парус вынесен так, что поток идёт под углом далеко за девяносто градусов.
 //
@@ -153,22 +189,26 @@ const SHEET_GIVE = 25 * DEG;       // на сколько парус сдаёт 
 // нечем, парус полощет и не даёт почти ничего. Без этого лодка с полностью
 // отданными шкотами ехала три с половиной узла и понемногу разгонялась —
 // подъёмную силу давала «пузатость», которой у полощущего паруса нет.
-function sailCoeffs(alphaRad, ar) {
+function sailCoeffs(alphaRad) {
   const a = Math.abs(alphaRad);
   const f = Math.min(1, a / SAIL_FILL);
   const fill = f * f * (3 - 2 * f);
-  const stall = 18 * DEG;
-  const slope = 2 * Math.PI * ar / (ar + 2);
-  const clLin = slope * (a + 3 * DEG * fill);
+  // Срыв у двумерного сечения наступает раньше и резче, чем казалось раньше.
+  // До вихревой решётки наклон брался с поправкой на удлинение (около 4 вместо
+  // 2π), и она заодно работала неявным ограничителем: подъёмная сила просто не
+  // успевала вырасти до невозможных значений. Теперь поправку делает решётка,
+  // наклон стал честным 2π — и ограничивать срыв должен сам срыв. Тринадцать
+  // градусов дают максимум около 1.75, что для мягкого выгнутого паруса
+  // примерно и есть предел.
+  const stall = 13 * DEG;
+  const clLin = 2 * Math.PI * (a + 2 * SAIL_CAMBER * fill);
   const clFlat = 2 * Math.sin(a) * Math.cos(a);
   const cdFlat = 1.2 * Math.sin(a) * Math.sin(a) + 0.08;
-  const blend = a <= stall ? 0 : Math.min(1, (a - stall) / (25 * DEG));
+  const blend = a <= stall ? 0 : Math.min(1, (a - stall) / (15 * DEG));
   const cl = (clLin * (1 - blend) + clFlat * blend) * fill;
-  const cdi = cl * cl / (Math.PI * ar * 0.85);
   // Полощущий парус тоже тормозит — он хлопает поперёк потока, — но тяги не
-  // даёт никакой.
-  const cd = ((0.06 + cdi) * (1 - blend) + cdFlat * blend) * fill +
-             (1 - fill) * 0.12;
+  // даёт никакой. Индуктивного сопротивления здесь нет: его даёт решётка.
+  const cd = (0.06 * (1 - blend) + cdFlat * blend) * fill + (1 - fill) * 0.12;
   return { cl: cl * Math.sign(alphaRad || 1), cd: cd };
 }
 
@@ -238,9 +278,11 @@ export class Boat {
       { area: rig.main_area_m2, maxSheet: 90 * DEG,
         tack: [rig.mast_x_m, 1.00], head: [rig.mast_x_m, H * 0.95],
         clew: [rig.mast_x_m - rig.boom_m, 1.05] },
+      // Шкотовый угол стакселя у мачты: он примерно стопроцентный, площадь
+      // сходится с передним треугольником. Смотри scripts/build_physics.py.
       { area: rig.jib_area_m2, maxSheet: 35 * DEG,
         tack: [rig.mast_x_m + 2.4, 0.90], head: [rig.mast_x_m + 0.12, H * 0.76],
-        clew: [rig.mast_x_m + 0.85 - 2.05, 1.05] },
+        clew: [rig.mast_x_m, 1.05] },
     ];
     // Отрисовка строит поверхность парусов по этим же треугольникам и по тому
     // же закону твиста. Иначе нарисованный парус и посчитанный расходятся, и
@@ -265,10 +307,15 @@ export class Boat {
         const den = (f1 - f1 * f1 / 2) - (f0 - f0 * f0 / 2);
         const f = den > 1e-9 ? num / den : (f0 + f1) / 2;
         const h = zLo + f * span;
+        const hLo = zLo + f0 * span, hHi = zLo + f1 * span;
         const xLuff = edge(s.tack, h), xLeech = edge(s.clew, h);
         this.strips.push({
           area: area, ar: ar, maxSheet: s.maxSheet,
           h: h,                               // высота по мачте, без крена
+          hLo: hLo, hHi: hHi,                 // границы размаха полоски
+          chordLo: Math.max(0.05, edge(s.tack, hLo) - edge(s.clew, hLo)),
+          chordHi: Math.max(0.05, edge(s.tack, hHi) - edge(s.clew, hHi)),
+          xLuffLo: edge(s.tack, hLo), xLuffHi: edge(s.tack, hHi),
           chord: Math.max(0.05, xLuff - xLeech),
           xLuff: xLuff,
           // Твист растёт к топу быстрее линейного: у настоящего паруса
@@ -283,6 +330,17 @@ export class Boat {
     }
     this.sailOut = { fx: 0, fy: 0, fz: 0, mx: 0, mz: 0, ceZ: 0,
                      awa: 0, awaEff: 0, alpha: 0, cl: 0, area: 0 };
+    // Вихревая решётка на весь риг сразу: гроту и стакселю положено знать друг
+    // о друге, и в одной решётке они узнают об этом сами.
+    const n = this.strips.length;
+    this.lattice = new Lattice(n * NCHORD);
+    this.stripCalc = this.strips.map(() => ({
+      xi: 0, yi: 0, zi: 0, ve: 0, d1: 0, d2: 0, alpha: 0, awa: 0,
+      chord: 0, area: 0, live: false,
+    }));
+    this.alphaInd = new Float64Array(n);
+    this.latRhs = new Float64Array(n * NCHORD);
+    this.latAge = 0;
   }
 
   reset() {
@@ -364,8 +422,11 @@ export class Boat {
     this.twistEff = twist;
     let load = 0;
 
-    for (let i = 0; i < this.strips.length; i++) {
-      const st = this.strips[i], d = this.stripState[i];
+    // --- проход первый: геометрия и углы атаки без учёта скоса.
+    const lat = this.lattice, calc = this.stripCalc, NS = this.strips.length;
+    const e2y = cphi, e2z = sphi;                 // орт «поперёк» накренённого рига
+    for (let i = 0; i < NS; i++) {
+      const st = this.strips[i], d = this.stripState[i], g = calc[i];
       const area = st.area * scale;
       const sheet = this.o.sheet + twist * st.twistF;
       const chord = st.chord;
@@ -386,23 +447,21 @@ export class Boat {
       const w1 = a.x, w2 = a.y * cphi;
       const ve = Math.hypot(w1, w2);
       d.h = st.h; d.z = zi; d.area = area; d.ws = a.ws;
-      if (ve < 0.05) {
-        d.awaDeg = 0; d.alphaDeg = 0; d.cl = 0; d.drive = 0; d.side = 0;
+      g.xi = xi; g.yi = yi; g.zi = zi; g.area = area; g.ve = ve; g.chord = chord;
+      g.live = ve >= 0.05;
+      if (!g.live) {
+        d.awaDeg = 0; d.alphaDeg = 0; d.indDeg = 0; d.cl = 0; d.drive = 0; d.side = 0;
+        for (let k = 0; k < NCHORD; k++) lat.panels[i * NCHORD + k].speed = 0;
         continue;
       }
       const theta = Math.atan2(w2, w1);         // куда дует, в плоскости паруса
       const awa = Math.PI - Math.abs(theta);    // угол от носа, откуда дует
       // Угол атаки меряется от хорды паруса, а не от «наветренной стороны».
-      // Раньше он считался как AWA минус шкот, то есть в предположении, что
-      // парус всегда под ветром; когда ветер переходил через ДП, сторона
-      // менялась скачком и боковая сила прыгала на две сотни ньютонов за шаг.
       // От хорды всё получается непрерывно во всех четвертях: парус стоит там,
       // где стоит, а поток может подходить к нему с любой стороны.
       // Шкот парус не держит, а только ограничивает: гик вытравливается по
-      // потоку, пока шкот его не остановит. Пока ветер дальше в корму, чем
-      // пускает шкот, парус стоит по шкоту и работает; как только ветер
-      // выходит вперёд, парус просто уходит за ним и заполаскивает — сам,
-      // без отдельного правила про отрицательный угол атаки.
+      // потоку, пока шкот его не остановит. За своим пределом парус не стоит
+      // на упоре, а сваливается по потоку и полощет.
       const held = Math.min(sheet, awa);
       const over = Math.min(1, Math.max(0, (sheet - st.maxSheet) / SHEET_GIVE));
       const set = held + (awa - held) * over;
@@ -411,35 +470,123 @@ export class Boat {
       // rigSide равен нулю и хорда лежит точно в ДП, как настоящий гик.
       const chordDir = Math.PI - rigSide * set;
       const alpha = wrapPi(theta - chordDir);
-      const k = sailCoeffs(alpha, Math.max(2.5, st.ar));
+      g.alpha = alpha; g.awa = awa; g.d1 = w1 / ve; g.d2 = w2 / ve;
 
-      const q = 0.5 * env.rho_air * area * ve * ve;
+      // Панели решётки: NCHORD штук вдоль хорды. Присоединённый вихрь каждой на
+      // четверти её длины, контрольная точка на трёх четвертях, свободные вихри
+      // уходят по потоку прямо от присоединённого — обычная вихревая решётка.
+      const cs = Math.cos(set), sn = Math.sin(set) * rigSide;
+      const nc = -Math.sin(chordDir), ns = Math.cos(chordDir);
+      const camSign = Math.sign(alpha || 1);
+      // Точка на средней линии паруса на доле t хорды: вдоль хорды плюс пузо
+      // по нормали. Пузо и даёт угол нулевой подъёмной силы.
+      const put = (arr, h, ch, xl, t) => {
+        const bow = camSign * SAIL_CAMBER * 4 * t * (1 - t) * ch;
+        const ax = xl - t * ch * cs + bow * nc;
+        const as = t * ch * sn + bow * ns;      // смещение поперёк, в плоскости
+        arr[0] = ax;
+        arr[1] = -h * sphi + as * e2y;
+        arr[2] = h * cphi + as * e2z;
+      };
+      for (let k = 0; k < NCHORD; k++) {
+        const p = lat.panels[i * NCHORD + k];
+        const tb = (k + 0.25) / NCHORD, tc = (k + 0.75) / NCHORD;
+        put(p.a, st.hHi, st.chordHi, st.xLuffHi, tb);
+        put(p.b, st.hLo, st.chordLo, st.xLuffLo, tb);
+        // Свободные вихри уходят прямо от присоединённого: у решётки с
+        // панелями по хорде отдельных отрезков до задней шкаторины не нужно,
+        // их роль играют присоединённые вихри следующих панелей.
+        p.ta[0] = p.a[0]; p.ta[1] = p.a[1]; p.ta[2] = p.a[2];
+        p.tb[0] = p.b[0]; p.tb[1] = p.b[1]; p.tb[2] = p.b[2];
+        put(p.c, st.h, chord, st.xLuff, tc);
+        // Нормаль повёрнута на местный наклон средней линии — отсюда и берётся
+        // подъёмная сила пуза, без отдельного слагаемого.
+        const sl = camSign * SAIL_CAMBER * 4 * (1 - 2 * tc);
+        const cd2 = Math.cos(sl), sd2 = Math.sin(sl);
+        const nx = nc * cd2 + cs * sd2;         // поворот нормали в плоскости
+        const nsr = ns * cd2 + sn * sd2;
+        p.nrm[0] = nx; p.nrm[1] = nsr * e2y; p.nrm[2] = nsr * e2z;
+        p.chord = chord / NCHORD; p.speed = ve;
+        this.latRhs[i * NCHORD + k] = -ve * Math.sin(alpha - sl);
+      }
+    }
+
+    // --- решётка: скос от собственной пелены и от соседнего паруса.
+    //
+    // Задача линейная: условие непротекания на всех панелях сразу. Из неё
+    // берётся циркуляция полоски, из неё — эффективный угол атаки: тот, при
+    // котором двумерное сечение дало бы такую же циркуляцию. Разница с
+    // геометрическим и есть скос.
+    //
+    // За срывом решётка неприменима — потенциальное течение о срыве не знает,
+    // а на полных курсах парус живёт именно там. Поэтому поправка плавно
+    // гасится от IND_FADE0 до IND_FADE1.
+    const awSpeed = Math.hypot(aw.x, aw.y);
+    const aInd = this.alphaInd;
+    aInd.fill(0);
+    if (awSpeed > 0.2) {
+      if (this.latAge <= 0) {
+        lat.build(aw.x / awSpeed, aw.y / awSpeed, 0, true, true);
+        this.latAge = LATTICE_EVERY;
+      }
+      this.latAge--;
+      const gam = lat.solveLinear(this.latRhs);
+      for (let i = 0; i < NS; i++) {
+        const g = calc[i];
+        if (!g.live) continue;
+        let G = 0;
+        for (let k = 0; k < NCHORD; k++) G += gam[i * NCHORD + k];
+        // Γ = π·b·V·(α − α₀): отсюда эффективный угол.
+        const aEff = G / (Math.PI * g.chord * g.ve) -
+                     Math.sign(g.alpha || 1) * 2 * SAIL_CAMBER;
+        const raw = g.alpha - aEff;
+        const a = Math.abs(g.alpha);
+        const fade = a <= IND_FADE0 ? 1
+          : (a >= IND_FADE1 ? 0 : (IND_FADE1 - a) / (IND_FADE1 - IND_FADE0));
+        // Скос не может быть больше самого угла атаки: за этим стоит только
+        // выход постановки за пределы применимости.
+        aInd[i] = Math.max(-a, Math.min(a, raw)) * fade;
+      }
+    }
+
+    // --- проход второй: силы по эффективному углу атаки.
+    for (let i = 0; i < NS; i++) {
+      const g = calc[i], d = this.stripState[i];
+      if (!g.live) continue;
+      // Скос уменьшает угол атаки и наклоняет подъёмную силу назад — вот
+      // отсюда и берётся индуктивное сопротивление, а не из формулы с
+      // паспортным удлинением.
+      const ai = aInd[i];
+      const alpha = g.alpha - ai;
+      const k = sailCoeffs(alpha);
+
+      const q = 0.5 * env.rho_air * g.area * g.ve * g.ve;
       const lift = q * k.cl, drag = q * k.cd;
-      const d1 = w1 / ve, d2 = w2 / ve;
-      // Сопротивление вдоль потока, подъёмная поперёк. Куда именно поперёк,
-      // решать не нужно: знак уже сидит в cl, вместе со сменой знака за
-      // девяносто градусов, где полотно обтекается с изнанки.
-      const f1 = drag * d1 - lift * d2;
-      const f2 = drag * d2 + lift * d1;
+      const d1 = g.d1, d2 = g.d2;
+      const along = drag + lift * Math.sin(ai);
+      const across = lift * Math.cos(ai);
+      const f1 = along * d1 - across * d2;
+      const f2 = along * d2 + across * d1;
 
       const fxi = f1, fyi = f2 * cphi, fzi = f2 * sphi;
       out.fx += fxi; out.fy += fyi; out.fz += fzi;
       // Моменты собираются сразу по полоскам: у каждой своё плечо, и общий
       // центр парусности больше не нужно назначать — он получается сам.
-      out.mx += yi * fzi - (zi - cgz) * fyi;
-      out.mz += (xi - cgx) * fyi - yi * fxi;
+      out.mx += g.yi * fzi - (g.zi - cgz) * fyi;
+      out.mz += (g.xi - cgx) * fyi - g.yi * fxi;
 
-      out.area += area;
-      out.awaEff += awa * area; out.alpha += -rigSide * alpha * area;
-      out.cl += Math.abs(k.cl) * area;
+      out.area += g.area;
+      out.awaEff += g.awa * g.area; out.alpha += -rigSide * alpha * g.area;
+      out.cl += Math.abs(k.cl) * g.area;
       const w = Math.abs(f2);
-      load += w; out.ceZ += zi * w;
+      load += w; out.ceZ += g.zi * w;
 
-      d.awaDeg = awa / DEG;
+      d.awaDeg = g.awa / DEG;
       // Знак угла атаки зависит от галса: с одного борта он положительный, с
       // другого отрицательный. В приборах это только мешает, поэтому
       // показывается «рабочий» угол — одинаковый на обоих галсах.
       d.alphaDeg = -rigSide * alpha / DEG;
+      d.indDeg = -rigSide * ai / DEG;
       d.cl = Math.abs(k.cl); d.drive = f1; d.side = f2;
     }
 
@@ -675,4 +822,4 @@ export class Boat {
   }
 }
 
-export const helpers = { lerpTable, foilCoeffs, sailCoeffs, DEG, STRIPS };
+export const helpers = { lerpTable, foilCoeffs, sailCoeffs, DEG, STRIPS, NCHORD };

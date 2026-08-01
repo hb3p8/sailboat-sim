@@ -46,6 +46,11 @@ const IND_FADE1 = 35 * DEG;
 // меняется на порядок медленнее, чем идёт счёт. Сама же перестройка стоит
 // полутора тысяч вычислений закона Био — Савара и съедает почти всё время
 // шага. Решается система при этом каждый шаг: она дешёвая.
+//
+// Момент перестройки считается ОТ ВРЕМЕНИ, а не свободным счётчиком. Со
+// счётчиком это было бы скрытое состояние: ответ модели зависел бы от того, на
+// каком шаге её запустили, и записанный прогон переставал воспроизводиться.
+// Ровно это и поймал tests/replay.test.mjs.
 const LATTICE_EVERY = 6;
 
 // Центр давления полоски, доля хорды от передней шкаторины. У паруса он
@@ -340,7 +345,8 @@ export class Boat {
     }));
     this.alphaInd = new Float64Array(n);
     this.latRhs = new Float64Array(n * NCHORD);
-    this.latAge = 0;
+    this.latRebuild = true;
+    this.latReady = false;
   }
 
   reset() {
@@ -525,11 +531,10 @@ export class Boat {
     const aInd = this.alphaInd;
     aInd.fill(0);
     if (awSpeed > 0.2) {
-      if (this.latAge <= 0) {
+      if (this.latRebuild) {
         lat.build(aw.x / awSpeed, aw.y / awSpeed, 0, true, true);
-        this.latAge = LATTICE_EVERY;
+        this.latReady = true;
       }
-      this.latAge--;
       const gam = lat.solveLinear(this.latRhs);
       for (let i = 0; i < NS; i++) {
         const g = calc[i];
@@ -670,6 +675,11 @@ export class Boat {
     // число; поле ветра берёт его отсюда, а профиль и порывы добавляет само.
     this.wind.o.speed = this.o.windSpeed;
     this.wind.o.dir = this.o.windDir;
+
+    // Перестраивать ли матрицу решётки на этом шаге — считается от времени,
+    // чтобы не заводить скрытого состояния.
+    this.latRebuild = !this.latReady ||
+                      (dt > 0 && Math.round(this.t / dt) % LATTICE_EVERY === 0);
 
     const speed = Math.hypot(this.u, this.v);
     const leeway = speed > 0.05 ? Math.atan2(this.v, Math.max(0.05, this.u)) : 0;

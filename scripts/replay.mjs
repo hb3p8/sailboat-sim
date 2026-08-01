@@ -90,7 +90,9 @@ if (frames.length > 1) {
   console.log('Наибольшее расхождение с записью: скорость ' +
     worst.speed.toFixed(3) + ' уз, крен ' + worst.heel.toFixed(3) +
     '°, курс ' + worst.psi.toFixed(3) + '°');
-  const exact = worst.speed < 1e-3 && worst.heel < 1e-3 && worst.psi < 1e-3;
+  // Запись округляется до четвёртого знака, причём углы в радианах: четвёртый
+  // знак там стоит 0.0057°. Поэтому «точно» — это в пределах округления.
+  const exact = worst.speed < 2e-3 && worst.heel < 2e-2 && worst.psi < 2e-2;
   console.log(exact
     ? 'Случай воспроизводится точно.'
     : 'ВНИМАНИЕ: модель отвечает не так, как при записи, — с тех пор она менялась.');
@@ -120,10 +122,12 @@ if (frames.length > 1) {
   show('driveN', 'Н');
   show('sideN', 'Н');
   show('twsKn', 'уз');
-  const sides = col('rigSide');
+  // Борт паруса — величина непрерывная: гик переходит за секунду. Считаем
+  // смены знака, то есть настоящие перебросы, а не каждый шаг взмаха.
+  const sides = col('rigSide').map(v => Math.sign(v || 1));
   let flips = 0;
   for (let i = 1; i < sides.length; i++) if (sides[i] !== sides[i - 1]) flips++;
-  console.log('  борт паруса менялся ' + flips + ' раз');
+  console.log('  парус перекидывался ' + flips + ' раз');
 }
 
 // --- продолжение с конца ------------------------------------------------------

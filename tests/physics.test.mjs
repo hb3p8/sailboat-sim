@@ -262,6 +262,56 @@ check('добранный в фордевинд парус почти не ве�
     'cl низ ' + t.strips[0].cl.toFixed(2) + ', верх ' + t.strips[5].cl.toFixed(2));
 }
 
+// --- независимость от шага ----------------------------------------------------
+//
+// Самая полезная проверка во всей батарее, и появилась она позже всех.
+//
+// Физика идёт шагом 1/30 с. Если ответ зависит от величины шага, значит это
+// уже не физика, а свойство интегратора. Именно так и вылезло: момент
+// откренивания брался по знаку крена, то есть экипаж мгновенно перепрыгивал с
+// борта на борт каждый раз, когда крен проходил через ноль. На полных курсах,
+// где крен и так около нуля, лодка мелко тряслась на четырёх герцах — вчетверо
+// чаще собственной частоты качки, — и амплитуда падала в девять раз при
+// уменьшении шага. У физического явления такого быть не может.
+//
+// Проверяются не траектории (они расходятся от накопления ошибки, и это
+// нормально), а размах качки и средний ход.
+
+console.log('\nОдин и тот же ход разным шагом интегрирования:\n');
+console.log('    шаг    размах крена   средний ход   пик скорости крена');
+const byStep = [];
+for (const hz of [30, 240]) {
+  const b = new Boat(PACK);
+  b.o.windSpeed = 9; b.o.windDir = 140 * D; b.o.sheet = 72 * D;
+  b.o.twist = 8 * D; b.o.crewHike = 1; b.o.crewMass = 240;
+  b.wind.o.gust = 0.45; b.wind.o.shift = 0.45 * 45 * D;
+  b.u = 3.2; b.o.rudder = 0; b.o.rudderTarget = null;
+  let lo = 9e9, hi = -9e9, sum = 0, n = 0, peak = 0;
+  for (let i = 0; i < 30 * hz; i++) {
+    b.step(1 / hz);
+    if (i < 8 * hz) continue;              // переходный процесс пропускаем
+    const h = b.telemetry.heelDeg;
+    lo = Math.min(lo, h); hi = Math.max(hi, h);
+    sum += b.telemetry.speedKn; n++;
+    peak = Math.max(peak, Math.abs(b.p_ / D));
+  }
+  byStep.push({ hz, range: hi - lo, speed: sum / n, peak });
+  console.log('   1/' + String(hz).padEnd(5) + (hi - lo).toFixed(2).padStart(10) +
+    '°' + (sum / n).toFixed(3).padStart(13) + ' уз' +
+    peak.toFixed(1).padStart(16) + '°/с');
+}
+console.log('');
+const [coarse, fine] = byStep;
+check('размах качки не зависит от шага',
+  Math.abs(coarse.range - fine.range) < 0.25 * fine.range + 0.05,
+  coarse.range.toFixed(2) + '° против ' + fine.range.toFixed(2) + '°');
+check('средний ход не зависит от шага',
+  Math.abs(coarse.speed - fine.speed) < 0.02 * fine.speed,
+  coarse.speed.toFixed(3) + ' против ' + fine.speed.toFixed(3) + ' уз');
+check('скорость качки не зависит от шага',
+  Math.abs(coarse.peak - fine.peak) < 0.3 * fine.peak + 0.2,
+  coarse.peak.toFixed(1) + ' против ' + fine.peak.toFixed(1) + ' °/с');
+
 // --- разворот -------------------------------------------------------------
 const turn = new Boat(PACK);
 turn.o.windSpeed = 6; turn.o.windDir = 90 * D; turn.o.sheet = 24 * D;

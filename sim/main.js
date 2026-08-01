@@ -502,6 +502,63 @@ function updateBattens(side) {
   battenGeo.attributes.color.needsUpdate = true;
 }
 
+// --- запись состояния ---------------------------------------------------------
+//
+// Кнопка «сдампать» пишет в файл всё, что нужно, чтобы воспроизвести момент:
+// состояние лодки, настройки, поле ветра — и запись последних двадцати секунд
+// по шагам физики. Запись важнее снимка: жалобы на воде звучат как «дрожит»
+// или «понемногу разгоняется», а это про поведение во времени, а не про одно
+// мгновение.
+//
+// Поле ветра собственного состояния не имеет: оно однозначно задаётся
+// скоростью, направлением, порывистостью и парой (положение, время). Значит
+// восстановления лодки достаточно, чтобы получить тот же самый ветер.
+//
+// Проигрывается дамп без браузера: scripts/replay.mjs.
+const TRACE_SECONDS = 20;
+const recorder = new Recorder(TRACE_SECONDS, HZ);
+
+function dumpState() {
+  const t = boat.telemetry || {};
+  return {
+    build: typeof BUILD !== 'undefined' ? BUILD : null,
+    saved: new Date().toISOString(),
+    boat: {
+      x: boat.x, y: boat.y, psi: boat.psi, u: boat.u, v: boat.v, r: boat.r,
+      phi: boat.phi, p_: boat.p_, t: boat.t, rigSide: boat.rigSide,
+    },
+    controls: Object.assign({}, boat.o),
+    wind: Object.assign({}, boat.wind.o),
+    scene: {
+      camera: CAMS[camMode], autopilot: autopilot, apHeading: apHeading,
+      debug: debugOn,
+    },
+    telemetry: Object.assign({}, t, { strips: undefined }),
+    strips: (t.strips || []).map(s => Object.assign({}, s)),
+    rig: boat.strips.map(s => ({
+      h: s.h, area: s.area, chord: s.chord, xLuff: s.xLuff,
+      ar: s.ar, twistF: s.twistF,
+    })),
+    trace: recorder.dump(),
+  };
+}
+
+function saveDump() {
+  const name = 'sv20-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const blob = new Blob([JSON.stringify(dumpState(), null, 1)],
+                        { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name + '.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  const btn = document.getElementById('dump');
+  if (btn) {
+    btn.textContent = 'записано: ' + recorder.frames.length + ' кадров';
+    setTimeout(() => { btn.textContent = 'Сдампать состояние'; }, 2200);
+  }
+}
+
 let debugOn = false;
 function setDebug(on) {
   debugOn = on;
@@ -540,6 +597,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyH') { autopilot = !autopilot; apHeading = boat.psi; }
   if (e.code === 'KeyC') cycleCam();
   if (e.code === 'KeyG') setDebug(!debugOn);
+  if (e.code === 'KeyD') saveDump();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 
@@ -638,6 +696,7 @@ function frame() {
       acc = 0;
       break;
     }
+    recorder.push(boat);
     acc -= DT;
     steps++;
   }
@@ -887,6 +946,10 @@ function updateRig(t) {
 }
 
 document.getElementById('cammode').textContent = CAMS[camMode];
+document.getElementById('dump').addEventListener('click', saveDump);
+// Тот же дамп доступен из консоли — удобно, когда файл забирать некуда:
+// copy(JSON.stringify(sv20dump()))
+window.sv20dump = dumpState;
 shapeSails(1, false);
 setDebug(false);
 frame();

@@ -1,0 +1,91 @@
+// Запись состояния лодки по шагам физики.
+//
+// Живёт отдельным модулем нарочно: этой же записью пользуется симулятор,
+// проигрыватель (scripts/replay.mjs) и тест на воспроизводимость. Если формат
+// разъедется, разъедется молча и обнаружится через неделю на чужом дампе.
+//
+// В запись идёт ВСЁ, что человек может тронуть по ходу дела, а не только руль
+// со шкотом. Первая же проверка на этом и споткнулась: ползунок ветра двигали
+// в середине записи, а в дампе лежало только его конечное значение — и
+// воспроизведение разъезжалось на четверть по скорости ветра.
+//
+// Поле ветра собственного состояния не имеет: оно однозначно задаётся
+// скоростью, направлением, порывистостью и парой (положение, время). Значит
+// восстановления лодки достаточно, чтобы получить тот же самый ветер.
+
+export const TRACE_FIELDS = [
+  // состояние лодки — по нему она восстанавливается целиком
+  't', 'x', 'y', 'psi', 'u', 'v', 'r', 'phi', 'p_', 'rigSide',
+  // органы управления и условия — всё, что можно тронуть на ходу
+  'rudder', 'sheet', 'twist', 'twistEff',
+  'windSpeed', 'windDir', 'gust', 'shift', 'crewHike', 'crewMass', 'sailScale',
+  // показания — для сверки при воспроизведении и для разбора без пересчёта
+  'speedKn', 'heelDeg', 'leewayDeg', 'driveN', 'sideN', 'alphaDeg',
+  'awaDeg', 'twsKn',
+];
+
+// Поля, которые при воспроизведении надо подавать обратно в лодку.
+export const TRACE_INPUTS = [
+  'rudder', 'sheet', 'twist', 'windSpeed', 'windDir',
+  'crewHike', 'crewMass', 'sailScale',
+];
+
+const r4 = v => Math.round((v || 0) * 1e4) / 1e4;
+
+export function traceFrame(boat) {
+  const t = boat.telemetry;
+  if (!t) return null;
+  return [
+    r4(boat.t), r4(boat.x), r4(boat.y), r4(boat.psi),
+    r4(boat.u), r4(boat.v), r4(boat.r), r4(boat.phi), r4(boat.p_), boat.rigSide,
+    r4(boat.o.rudder), r4(boat.o.sheet), r4(boat.o.twist), r4(boat.twistEff),
+    r4(boat.o.windSpeed), r4(boat.o.windDir),
+    r4(boat.wind.o.gust), r4(boat.wind.o.shift),
+    r4(boat.o.crewHike), r4(boat.o.crewMass), r4(boat.o.sailScale),
+    r4(t.speedKn), r4(t.heelDeg), r4(t.leewayDeg), r4(t.driveN), r4(t.sideN),
+    r4(t.alphaDeg), r4(t.awaDeg), r4(t.twsKn),
+  ];
+}
+
+// Кольцевая запись последних `seconds` секунд.
+export class Recorder {
+  constructor(seconds, hz) {
+    this.hz = hz;
+    this.limit = Math.round(seconds * hz);
+    this.frames = [];
+  }
+  push(boat) {
+    const f = traceFrame(boat);
+    if (!f) return;
+    this.frames.push(f);
+    if (this.frames.length > this.limit) this.frames.shift();
+  }
+  dump() {
+    return { hz: this.hz, fields: TRACE_FIELDS, frames: this.frames.slice() };
+  }
+}
+
+// Восстановить лодку по кадру записи. Индексы берутся из полей самого дампа,
+// а не из TRACE_FIELDS: старый дамп с другим порядком полей должен читаться.
+export function restoreFrom(boat, frame, index) {
+  const g = name => (index[name] != null ? frame[index[name]] : undefined);
+  boat.x = g('x'); boat.y = g('y'); boat.psi = g('psi');
+  boat.u = g('u'); boat.v = g('v'); boat.r = g('r');
+  boat.phi = g('phi'); boat.p_ = g('p_'); boat.t = g('t');
+  boat.rigSide = g('rigSide');
+}
+
+// Подать в лодку органы управления и условия из кадра.
+export function applyFrom(boat, frame, index) {
+  for (const name of TRACE_INPUTS) {
+    if (index[name] != null) boat.o[name] = frame[index[name]];
+  }
+  if (index.gust != null) boat.wind.o.gust = frame[index.gust];
+  if (index.shift != null) boat.wind.o.shift = frame[index.shift];
+}
+
+export function fieldIndex(fields) {
+  const ix = {};
+  (fields || TRACE_FIELDS).forEach((name, i) => { ix[name] = i; });
+  return ix;
+}

@@ -8,12 +8,24 @@
 сборщика в проекте нет.
 """
 
+import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+
+def _git(*args):
+    """Спросить git, молча вернув пустую строку, если его нет."""
+    try:
+        out = subprocess.run(("git",) + args, cwd=ROOT, capture_output=True,
+                             text=True, timeout=5)
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
 
 
 def strip_modules(src):
@@ -38,6 +50,16 @@ def main():
     tpl = open(os.path.join(sim, "template.html")).read()
     three = open(os.path.join(ROOT, "viewer", "vendor", "three.module.js")).read()
 
+    # Отметка сборки: по ней дамп состояния можно привязать к коду, который
+    # его породил. Без этого «воспроизведи вот этот случай» через неделю
+    # означает «воспроизведи неизвестно на какой версии».
+    build = {"commit": _git("rev-parse", "--short", "HEAD"),
+             "branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
+             "dirty": bool(_git("status", "--porcelain")),
+             "built": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
+
+    tpl = tpl.replace("/*__BUILD__*/ null",
+                      json.dumps(build, ensure_ascii=False, separators=(",", ":")))
     html = tpl.replace("/*__PACK__*/ null",
                        json.dumps(pack, ensure_ascii=False, separators=(",", ":")))
     html = html.replace("/*__MESH__*/ null",
@@ -47,6 +69,8 @@ def main():
     # вклейке снимаются — значит поле ветра должно быть объявлено раньше.
     html = html.replace("/*__WIND__*/",
                         strip_modules(open(os.path.join(sim, "wind.js")).read()))
+    html = html.replace("/*__TRACE__*/",
+                        strip_modules(open(os.path.join(sim, "trace.js")).read()))
     html = html.replace("/*__PHYSICS__*/",
                         strip_modules(open(os.path.join(sim, "physics.js")).read()))
     html = html.replace("/*__MAIN__*/",

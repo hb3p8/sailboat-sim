@@ -220,8 +220,14 @@ boatGroup.add(mainSail, jibSail);
 // посчитанный полощет.
 function shapeSails(side, luffing) {
   const awa = boat.telemetry ? boat.telemetry.awaDeg * D : Math.PI;
-  const sheet = Math.min(boat.o.sheet, awa);
-  boomPivot.rotation.y = sheet * side;
+  // Та же формула, что в physics.sailForces: парус держится шкотом до своего
+  // предела, дальше сваливается по потоку.
+  const setOf = sail => {
+    const held = Math.min(boat.o.sheet, awa);
+    const over = Math.min(1, Math.max(0, (boat.o.sheet - sail.maxSheet) / (25 * D)));
+    return held + (awa - held) * over;
+  };
+  boomPivot.rotation.y = setOf(boat.sails[0]) * side;
   const twist = boat.twistEff || boat.o.twist;
   const belly = luffing ? 0.02 : 0.10;      // пузо, доля хорды
   boat.sails.forEach((sail, k) => {
@@ -235,7 +241,7 @@ function shapeSails(side, luffing) {
       const f = r / (SAIL_ROWS - 1);
       const h = zLo + f * (zHi - zLo);
       const xLuff = edge(sail.tack, h), chord = Math.max(0, xLuff - edge(sail.clew, h));
-      const sh = sheet + twist * Math.pow(f, 1.3);
+      const sh = setOf(sail) + twist * Math.pow(f, 1.3);
       // хорда идёт в корму и под ветер, нормаль к ней смотрит туда же
       const ux = -Math.cos(sh), uy = Math.sin(sh) * side;
       const nx = -uy, ny = ux;
@@ -479,7 +485,10 @@ function updateBattens(side) {
   if (st) for (const d of st) peak = Math.max(peak, Math.abs(d.drive));
   for (let i = 0; i < NSTRIP; i++) {
     const s = boat.strips[i], d = st ? st[i] : null;
-    const sheet = Math.min(boat.o.sheet, d ? d.awaDeg * D : Math.PI) +
+    const aw = d ? d.awaDeg * D : Math.PI;
+    const held = Math.min(boat.o.sheet, aw);
+    const over = Math.min(1, Math.max(0, (boat.o.sheet - s.maxSheet) / (25 * D)));
+    const sheet = held + (aw - held) * over +
                   (boat.twistEff || boat.o.twist) * s.twistF;
     const ax = s.xLuff, az = 0;
     const bx = s.xLuff - s.chord * Math.cos(sheet);

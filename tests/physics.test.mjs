@@ -173,6 +173,92 @@ console.log('Курс к ветру с учётом дрейфа: ' +
 check('лавировочный угол не уже семидесяти градусов',
   2 * beatRows[0].track > 70, (2 * beatRows[0].track).toFixed(0) + '°');
 
+// --- полные курсы и отданные шкоты -------------------------------------------
+//
+// Всё, что здесь проверяется, разъехалось на попутных курсах: парус
+// перекидывался с борта на борт от каждого колебания ветра, шкот держал полотно
+// как жёсткую пластину, а «сорванный» парус выдавался за ошибку настройки,
+// хотя в фордевинд он ровно так и работает.
+
+console.log('\nФордевинд, шкот от добранного до отданного:\n');
+console.log('  шкот    α°   состояние потока   тяга,Н   скорость,уз');
+const runRows = [];
+for (const sheet of [15, 35, 55, 75, 90]) {
+  const b = new Boat(PACK);
+  b.o.windSpeed = 7; b.o.windDir = 180 * D; b.o.sheet = sheet * D; b.u = 3;
+  for (let i = 0; i < 150 * 30; i++) {
+    const err = wrapPi(0 - b.psi);
+    b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * err - 0.9 * b.r)));
+    b.step(1 / 30);
+  }
+  const t = b.telemetry;
+  // Поток прилипает и у нулевого угла, и у ста восьмидесяти: во втором
+  // случае парус просто стоит вдоль потока задом наперёд, как флаг.
+  const eff = Math.min(Math.abs(t.alphaDeg), 180 - Math.abs(t.alphaDeg));
+  const state = eff < 3 ? 'полощет' : eff <= 18 ? 'прилип' : 'сорван';
+  runRows.push({ sheet, t, state });
+  console.log('  ' + String(sheet).padStart(4) + '° ' +
+    t.alphaDeg.toFixed(0).padStart(5) + '   ' + state.padEnd(16) +
+    t.driveN.toFixed(0).padStart(7) + ' ' + t.speedKn.toFixed(2).padStart(13));
+}
+console.log('');
+const bestRun = runRows.reduce((a, b) => (b.t.speedKn > a.t.speedKn ? b : a));
+// Ответ на «почему при красных индикаторах быстрее, чем при зелёных»: в
+// фордевинд нужна не подъёмная сила, а сопротивление вдоль движения, и даёт
+// его именно сорванный парус. Индикатор состояния потока тут ни при чём.
+check('в фордевинд быстрее всего идёт сорванный парус',
+  bestRun.state === 'сорван',
+  'лучший шкот ' + bestRun.sheet + '°, ' + bestRun.state + ', ' +
+  bestRun.t.speedKn.toFixed(2) + ' уз');
+check('добранный в фордевинд парус почти не везёт',
+  runRows[0].t.speedKn < bestRun.t.speedKn * 0.8,
+  runRows[0].t.speedKn.toFixed(2) + ' против ' + bestRun.t.speedKn.toFixed(2) + ' уз');
+
+// Парус стоит на своём борту, пока не перекинется по-настоящему.
+{
+  const b = new Boat(PACK);
+  b.o.windSpeed = 7; b.o.windDir = 180 * D; b.o.sheet = 75 * D; b.u = 3;
+  b.wind.o.gust = 0.25; b.wind.o.shift = 0.25 * 45 * D;
+  let flips = 0, prev = b.rigSide, jolt = 0, prevSide = null;
+  for (let i = 0; i < 180 * 30; i++) {
+    const err = wrapPi(0 - b.psi);
+    b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * err - 0.9 * b.r)));
+    b.step(1 / 30);
+    if (i < 30 * 30) continue;
+    if (b.rigSide !== prev) flips++;
+    prev = b.rigSide;
+    if (prevSide !== null) jolt = Math.max(jolt, Math.abs(b.telemetry.sideN - prevSide));
+    prevSide = b.telemetry.sideN;
+  }
+  console.log('Чистый фордевинд в порывистый ветер: борт паруса менялся ' + flips +
+    ' раз, наибольший скачок боковой силы ' + jolt.toFixed(0) + ' Н за шаг\n');
+  // Раньше здесь было по десятку перекидываний с рывком в две сотни ньютонов —
+  // именно это выглядело как мелкая неестественная дрожь лодки.
+  check('боковая сила не прыгает скачком', jolt < 25, jolt.toFixed(0) + ' Н за шаг');
+}
+
+// Отданные шкоты и брошенный руль.
+{
+  const b = new Boat(PACK);
+  b.o.windSpeed = 6; b.o.windDir = 90 * D; b.o.sheet = 90 * D; b.o.rudder = 0;
+  const at = [];
+  for (let i = 0; i < 600 * 30; i++) {
+    b.step(1 / 30);
+    if ((i + 1) % (150 * 30) === 0) at.push(b.telemetry.speedKn);
+  }
+  const t = b.telemetry;
+  console.log('Всё отдано, десять минут: ' +
+    at.map(v => v.toFixed(2)).join(' → ') + ' уз, TWA ' +
+    t.twaAbsDeg.toFixed(0) + '°\n');
+  check('с отданными шкотами лодка не разгоняется без конца',
+    at[3] - at[1] < 0.05, 'за последние пять минут ' +
+    (at[3] - at[1]).toFixed(2) + ' уз');
+  check('и едет медленно', at[3] < 3.6, at[3].toFixed(2) + ' уз');
+  check('верх паруса при этом заполаскивает',
+    t.strips[5].cl < 0.05 && t.strips[0].cl > 0.1,
+    'cl низ ' + t.strips[0].cl.toFixed(2) + ', верх ' + t.strips[5].cl.toFixed(2));
+}
+
 // --- разворот -------------------------------------------------------------
 const turn = new Boat(PACK);
 turn.o.windSpeed = 6; turn.o.windDir = 90 * D; turn.o.sheet = 24 * D;

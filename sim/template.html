@@ -81,11 +81,14 @@
   #rig .aj { fill: none; stroke: #9aa8b8; stroke-width: 1.3; stroke-dasharray: 3 2; }
   #rig .bm { fill: rgba(255,207,90,.75); }
   #rig .bj { fill: rgba(255,207,90,.38); }
+  #rig .bd { fill: rgba(110,231,168,.8); }
+  #rig .bdj { fill: rgba(110,231,168,.42); }
   #rignote {
     margin-top: 2px; font-size: 10.5px; color: var(--dim);
     font-variant-numeric: tabular-nums;
   }
   #rignote b { color: var(--fg); font-weight: 600; }
+  #rignote .slack { color: var(--accent); }
   #keys { bottom: 14px; left: 14px; color: var(--dim); font-size: 12px; }
   #keys b { color: var(--fg); font-weight: 600; }
   #note {
@@ -140,7 +143,11 @@
   чем оно дойдёт до парусов. Ползунок ветра задаёт скорость на стандартных
   <b>10 м</b>: у центра парусности её примерно на восьмую часть меньше, у топа
   мачты больше.<br><br>
-  <b>G</b> — поле ветра стрелками и хорды полосок паруса.
+  <b>G</b> — поле ветра стрелками и хорды полосок паруса. Цвет лат — тяга
+  полоски: зелёная везёт, серая простаивает, красная тормозит. На полных курсах
+  парус работает сорванным, и это нормально: там нужна не подъёмная сила, а
+  сопротивление вдоль движения. Состояние потока — во втором столбце панели,
+  с чертой срыва.
 </div>
 
 <script>

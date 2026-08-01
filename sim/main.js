@@ -35,7 +35,9 @@ const rose = document.getElementById('rose');
 
 const scene = new Scene();
 const SKY = new Color(0xa8c4d8);
-scene.fog = new Fog(SKY, 45, 260);
+// Туман отодвинут: порывы на воде — языки по сотне метров, и в прежние
+// сорок пять метров чистой воды не помещалось даже одного.
+scene.fog = new Fog(SKY, 110, 420);
 const camera = new PerspectiveCamera(52, 1, 0.15, 2000);
 const renderer = new WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -56,34 +58,78 @@ scene.add(sun);
 const SEA = 220, SEG = 150;
 const seaGeo = new PlaneGeometry(SEA, SEA, SEG, SEG);
 seaGeo.rotateX(-Math.PI / 2);
-seaGeo.setAttribute('color', new Float32BufferAttribute(
-  new Float32Array(seaGeo.attributes.position.count * 3).fill(1), 3));
-const sea = new Mesh(seaGeo, new MeshStandardMaterial({
-  color: 0x2c5c7d, roughness: 0.28, metalness: 0.12, vertexColors: true,
-}));
+const seaMat = new MeshStandardMaterial({
+  color: 0x2c5c7d, roughness: 0.28, metalness: 0.12,
+});
+const sea = new Mesh(seaGeo, seaMat);
 scene.add(sea);
 const seaBase = seaGeo.attributes.position.array.slice();
 const CELL = SEA / SEG;
 
 // Рябь от порывов. На воде усиление ветра видно раньше, чем оно доходит до
 // парусов, — тёмными языками, ползущими по ветру. Это не украшение: без них
-// порыв приходит из ниоткуда, и понять, что произошло, невозможно. Заодно это
-// и есть отладочный вид поля ветра — то самое поле, по которому считаются
-// силы, а не отдельная картинка рядом.
-function paintSea(t) {
-  const wind = boat.wind;
-  const col = seaGeo.attributes.color.array;
-  const amp = wind.o.gust;
-  for (let i = 0, v = 0; i < col.length; i += 3, v++) {
-    let k = 1;
-    if (amp > 0.001) {
-      const x = seaBase[v * 3] + sea.position.x;
-      const z = seaBase[v * 3 + 2] + sea.position.z;
-      k = 1 - 0.95 * amp * wind.gust(x, z, t);    // порыв темнее, дыра светлее
-    }
-    col[i] = k; col[i + 1] = k; col[i + 2] = k;
-  }
-  seaGeo.attributes.color.needsUpdate = true;
+// порыв приходит из ниоткуда, и понять, что произошло, невозможно.
+//
+// Считается это в шейдере, по мировым координатам фрагмента. Раньше цвет
+// раскладывался по вершинам на процессоре: сетка воды переставляется вслед за
+// лодкой шагами по ячейке каждый кадр, а цвета пересчитывались через кадр, и
+// картинка отставала от геометрии — языки мельтешили. В шейдере отставать
+// нечему, заодно исчезла и зернистость от полутораметровой сетки вершин.
+//
+// Шум здесь — слово в слово тот же, что в sim/wind.js: те же константы, тот же
+// хеш на беззнаковых тридцатидвухбитных. Это принципиально. Вода должна
+// показывать ровно то поле, по которому считаются силы, иначе отладочный вид
+// начнёт врать — а он затем и нужен, чтобы не врал.
+const SEA_UNIFORMS = {
+  uGust: { value: 0 },
+  uWindDir: { value: 0 },
+  uWindSpeed: { value: 6 },
+  uTime: { value: 0 },
+};
+
+const SEA_NOISE = `
+uniform float uGust;
+uniform float uWindDir;
+uniform float uWindSpeed;
+uniform float uTime;
+varying vec2 vSeaXZ;
+float svHash(int i, int j) {
+  uint h = uint(i) * 374761393u + uint(j) * 668265263u;
+  h = (h ^ (h >> 13u)) * 1274126177u;
+  return float(h ^ (h >> 16u)) / 2147483647.5 - 1.0;
+}
+float svNoise(vec2 p) {
+  vec2 fl = floor(p);
+  int i = int(fl.x), j = int(fl.y);
+  vec2 f = p - fl;
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = svHash(i, j), b = svHash(i + 1, j);
+  float c = svHash(i, j + 1), d = svHash(i + 1, j + 1);
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+float svGust(vec2 p) {
+  float c = cos(uWindDir), s = sin(uWindDir);
+  float along = -(p.x * c + p.y * s) - uWindSpeed * uTime;
+  float across = -p.x * s + p.y * c;
+  return 0.55 * svNoise(vec2(along / 130.0, across / 42.0))
+       + 0.30 * svNoise(vec2(along / 52.0 + 37.1, across / 17.0 + 19.7))
+       + 0.15 * svNoise(vec2(along / 21.0 + 74.2, across / 7.0 + 39.4));
+}
+`;
+
+// Целочисленный хеш требует GLSL ES 3.00, то есть WebGL2. Если его нет —
+// вода просто останется ровной: лучше без ряби, чем с непохожей рябью.
+if (renderer.capabilities.isWebGL2) {
+  seaMat.onBeforeCompile = shader => {
+    Object.assign(shader.uniforms, SEA_UNIFORMS);
+    shader.vertexShader = 'varying vec2 vSeaXZ;\n' + shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\n  vSeaXZ = (modelMatrix * vec4(position, 1.0)).xz;');
+    shader.fragmentShader = SEA_NOISE + shader.fragmentShader.replace(
+      'vec4 diffuseColor = vec4( diffuse, opacity );',
+      'vec4 diffuseColor = vec4( diffuse, opacity );\n' +
+      '  diffuseColor.rgb *= clamp(1.0 - 3.0 * uGust * svGust(vSeaXZ), 0.25, 1.8);');
+  };
 }
 
 function waveHeight(x, z, t, dx, dz, amp) {
@@ -170,9 +216,15 @@ const mainSail = sailMesh(0xf7f9fb);
 const jibSail = sailMesh(0xeef2f6);
 boatGroup.add(mainSail, jibSail);
 
-function shapeSails(sheet, side, luffing) {
+// Парус рисуется ровно там, где стоит в расчёте: шкот его только ограничивает,
+// а твист берётся действующий, вместе с той добавкой, которую даёт провисший
+// шкот. Иначе на потравленных шкотах нарисованный парус стоит колом, а
+// посчитанный полощет.
+function shapeSails(side, luffing) {
+  const awa = boat.telemetry ? boat.telemetry.awaDeg * D : Math.PI;
+  const sheet = Math.min(boat.o.sheet, awa);
   boomPivot.rotation.y = sheet * side;
-  const twist = boat.o.twist;
+  const twist = boat.twistEff || boat.o.twist;
   const belly = luffing ? 0.02 : 0.10;      // пузо, доля хорды
   boat.sails.forEach((sail, k) => {
     const mesh = k === 0 ? mainSail : jibSail;
@@ -400,22 +452,37 @@ battens.frustumCulled = false;
 battens.renderOrder = 4;
 boatGroup.add(battens);
 
-// Цвет по углу атаки: тот же язык, что у надписи в приборах.
-function alphaColour(deg) {
-  if (deg < 0) return [0.35, 0.6, 1.0];                       // заполаскивает
-  if (deg < 4) return [0.45, 0.85, 0.95];                     // на грани
-  if (deg <= 18) return [0.35, 0.95, 0.45];                   // работает
-  if (deg <= 26) return [1.0, 0.85, 0.25];                    // на срыве
-  return [1.0, 0.35, 0.3];                                    // сорван
+// Цвет по ТЯГЕ полоски, а не по углу атаки.
+//
+// По углу атаки было честно, но обманчиво: на полных курсах парус работает
+// сорванным, потому что там нужна не подъёмная сила, а лобовое сопротивление
+// вдоль движения. Шкала «зелёный — поток прилип, красный — сорван» показывала
+// в фордевинд сплошной красный ровно там, где лодка едет быстрее всего.
+// Тяга отвечает на вопрос прямо и одинаково на всех курсах.
+//
+// Состояние потока никуда не делось: угол атаки со срывной чертой остался
+// вторым столбцом панели рига.
+function driveColour(f) {
+  if (f < 0) {                       // тормозит: от серого к красному
+    const k = Math.min(1, -f);
+    return [0.55 + 0.45 * k, 0.55 - 0.25 * k, 0.6 - 0.3 * k];
+  }
+  const k = Math.min(1, f);          // тянет: от серого к зелёному
+  return [0.55 - 0.25 * k, 0.55 + 0.4 * k, 0.6 - 0.25 * k];
 }
 
 function updateBattens(side) {
   const p = battenGeo.attributes.position.array;
   const c = battenGeo.attributes.color.array;
   const st = boat.telemetry && boat.telemetry.strips;
+  // Нормируем по самой тянущей полоске: важно, кто здесь и сейчас работает,
+  // а не абсолютные ньютоны, которые меняются на порядок с силой ветра.
+  let peak = 1e-6;
+  if (st) for (const d of st) peak = Math.max(peak, Math.abs(d.drive));
   for (let i = 0; i < NSTRIP; i++) {
     const s = boat.strips[i], d = st ? st[i] : null;
-    const sheet = boat.o.sheet + boat.o.twist * s.twistF;
+    const sheet = Math.min(boat.o.sheet, d ? d.awaDeg * D : Math.PI) +
+                  (boat.twistEff || boat.o.twist) * s.twistF;
     const ax = s.xLuff, az = 0;
     const bx = s.xLuff - s.chord * Math.cos(sheet);
     const bz = s.chord * Math.sin(sheet) * side;
@@ -425,7 +492,7 @@ function updateBattens(side) {
     put(bx, s.h - BAT_HALF, bz);
     put(ax, s.h + BAT_HALF, az); put(bx, s.h + BAT_HALF, bz);
     put(bx, s.h - BAT_HALF, bz);
-    const col = alphaColour(d ? d.alphaDeg : 0);
+    const col = driveColour(d ? d.drive / peak : 0);
     for (let v = 0; v < BAT_V; v++) {
       const b = (i * BAT_V + v) * 3;
       c[b] = col[0]; c[b + 1] = col[1]; c[b + 2] = col[2];
@@ -587,9 +654,10 @@ function frame() {
   boatGroup.rotation.x = -iphi;
   rudderPivot.rotation.y = -boat.o.rudder;
 
-  const awAngle = boat.apparentWind().angle;
-  const side = awAngle > 0 ? 1 : -1;
-  shapeSails(boat.o.sheet, side, (t.alphaDeg || 0) < 4);
+  // Борт паруса берём у физики: там он с запасом на перекидывание, и парус
+  // не должен телепортироваться от каждого колебания ветра.
+  const side = boat.rigSide;
+  shapeSails(side, (t.alphaDeg || 0) < 4);
 
   const amp = 0.10 + 0.035 * boat.o.windSpeed;
   sea.position.set(Math.round(ix / CELL) * CELL, 0, Math.round(iy / CELL) * CELL);
@@ -601,9 +669,10 @@ function frame() {
   }
   seaGeo.attributes.position.needsUpdate = true;
   if ((tick & 1) === 0) seaGeo.computeVertexNormals();
-  // Рябь от порывов меняется медленно — по метру между обновлениями, — так что
-  // каждый третий кадр её хватает, а перекраска всей воды не бесплатная.
-  if ((tick % 3) === 0) paintSea(now);
+  SEA_UNIFORMS.uGust.value = boat.wind.o.gust;
+  SEA_UNIFORMS.uWindDir.value = boat.wind.o.dir;
+  SEA_UNIFORMS.uWindSpeed.value = boat.wind.o.speed;
+  SEA_UNIFORMS.uTime.value = boat.t;
   updateGrid(ix, iy, now, dirX, dirZ, amp);
   if (debugOn) {
     updateField(ix, iy, now);
@@ -692,9 +761,11 @@ function updateHud(t) {
     '<tr><td>' + label + '</td><td class="v">' +
     (t[k] == null ? '—' : (+t[k]).toFixed(prec)) +
     '</td><td class="u">' + unit + '</td></tr>').join('');
+  // «Перебрано» имеет смысл только на острых курсах: на полных парус работает
+  // сорванным, и это норма, а не ошибка настройки.
   const al = t.alphaDeg || 0;
-  const luff = al < 4 ? ' <em>заполаскивает</em>'
-             : (al > 24 ? ' <em>перебрано</em>' : '');
+  const luff = al < 3 ? ' <em>полощет</em>'
+             : ((t.awaDeg || 0) < 80 && al > 24 ? ' <em>перебрано</em>' : '');
   hud.innerHTML =
     '<div class="big">' + (t.speedKn || 0).toFixed(2) + ' <span>уз</span></div>' +
     '<table>' + rows + '</table>' +
@@ -746,6 +817,8 @@ function updateRig(t) {
   const H = rig.mast_height_m;
   const y = h => RIG_H - RIG_PAD - (h / H) * (RIG_H - 2 * RIG_PAD);
   const main = st.slice(0, 6), jib = st.slice(6);
+  let peakDrive = 1e-6;
+  for (const s of st) peakDrive = Math.max(peakDrive, Math.abs(s.drive));
 
   const axis = (col, label, ticks) => {
     let g = '<g transform="translate(' + col * RIG_W + ',0)">' +
@@ -779,17 +852,28 @@ function updateRig(t) {
   for (const s of st)
     svg += '<circle cx="' + xa(s.alphaDeg).toFixed(1) + '" cy="' +
       y(s.z).toFixed(1) + '" r="1.8" fill="rgb(' +
-      alphaColour(s.alphaDeg).map(v => Math.round(v * 255)).join(',') + ')"/>';
+      driveColour(s.drive / peakDrive).map(v => Math.round(v * 255)).join(',') +
+      ')"/>';
   svg += '</g>';
 
-  // --- вклад в боковую силу: видно, где парус на самом деле кренит
-  const fMax = Math.max(1, ...st.map(s => Math.abs(s.side)));
-  svg += axis(2, 'боковая, Н', [[8, '0'], [RIG_W - 34, fMax.toFixed(0)]]);
-  for (const [arr, cls] of [[main, 'bm'], [jib, 'bj']]) {
+  // --- тяга и боковая: расходящиеся столбики от общей середины. Сразу видно,
+  // где парус везёт, а где только кренит, — и что на полных курсах это одни и
+  // те же полоски, а в лавировку разные.
+  const fMax = Math.max(1, ...st.map(s => Math.max(Math.abs(s.side), Math.abs(s.drive))));
+  const mid = RIG_W / 2, half = RIG_W / 2 - 8;
+  svg += axis(2, 'тяга / боковая', [[10, 'бок'], [RIG_W - 26, 'тяга']]);
+  svg += '<line class="ax" x1="' + mid + '" y1="' + y(rig.mast_height_m) +
+    '" x2="' + mid + '" y2="' + y(0) + '"/>';
+  for (const [arr, dim] of [[main, false], [jib, true]]) {
     for (const s of arr) {
-      const w = (Math.abs(s.side) / fMax) * (RIG_W - 22);
-      svg += '<rect class="' + cls + '" x="8" y="' + (y(s.z) - 2.6).toFixed(1) +
-        '" width="' + Math.max(0.4, w).toFixed(1) + '" height="5.2"/>';
+      const yy = (y(s.z) - 2.6).toFixed(1);
+      const wd = (Math.abs(s.drive) / fMax) * half;
+      const ws = (Math.abs(s.side) / fMax) * half;
+      svg += '<rect class="' + (dim ? 'bdj' : 'bd') + '" x="' + mid +
+        '" y="' + yy + '" width="' + Math.max(0.4, wd).toFixed(1) + '" height="5.2"/>';
+      svg += '<rect class="' + (dim ? 'bj' : 'bm') + '" x="' +
+        (mid - Math.max(0.4, ws)).toFixed(1) + '" y="' + yy +
+        '" width="' + Math.max(0.4, ws).toFixed(1) + '" height="5.2"/>';
     }
   }
   svg += '</g>';
@@ -797,11 +881,12 @@ function updateRig(t) {
   rigSvg.innerHTML = svg;
   document.getElementById('rignote').innerHTML =
     'ЦП по нагрузке <b>' + (t.ceHeightM || 0).toFixed(2) + ' м</b>' +
-    ' &nbsp;·&nbsp; твист <b>' + (boat.o.twist / D).toFixed(0) + '°</b>' +
+    ' &nbsp;·&nbsp; твист <b>' + ((boat.twistEff || 0) / D).toFixed(0) + '°</b>' +
+    (boat.twistEff > boat.o.twist + 1 * D ? ' <span class="slack">шкот провис</span>' : '') +
     ' &nbsp;·&nbsp; ветер у рига <b>' + (t.twsKn || 0).toFixed(1) + '</b> уз';
 }
 
 document.getElementById('cammode').textContent = CAMS[camMode];
-shapeSails(boat.o.sheet, 1, false);
+shapeSails(1, false);
 setDebug(false);
 frame();

@@ -124,7 +124,10 @@ const svNoise = Fn(([p]) => {
   const i = fl.x.toInt().toVar();
   const j = fl.y.toInt().toVar();
   const f = p.sub(fl).toVar();
-  const u = f.mul(f).mul(f.mul(2.0).oneMinus().add(1.0)).toVar();   // 3 − 2f
+  // Сглаживание f²·(3 − 2f). Вес обязан дойти до единицы на границе ячейки —
+  // иначе значение соседнего узла решётки не достигается никогда, и поле рвётся
+  // на каждой границе. Выглядит это как полосы с резкими краями по всей воде.
+  const u = f.mul(f).mul(f.mul(2.0).negate().add(3.0)).toVar();
   const a = svHash(i, j);
   const b = svHash(i.add(1), j);
   const c = svHash(i, j.add(1));

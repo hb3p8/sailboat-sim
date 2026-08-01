@@ -219,14 +219,17 @@ check('добранный в фордевинд парус почти не ве�
   const b = new Boat(PACK);
   b.o.windSpeed = 7; b.o.windDir = 180 * D; b.o.sheet = 75 * D; b.u = 3;
   b.wind.o.gust = 0.25; b.wind.o.shift = 0.25 * 45 * D;
-  let flips = 0, prev = b.rigSide, jolt = 0, prevSide = null;
+  // Борт паруса — величина непрерывная (гик переходит за секунду), поэтому
+  // считаются смены ЗНАКА, то есть настоящие перебросы, а не каждый шаг взмаха.
+  let flips = 0, prev = Math.sign(b.rigSide || 1), jolt = 0, prevSide = null;
   for (let i = 0; i < 180 * 30; i++) {
     const err = wrapPi(0 - b.psi);
     b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * err - 0.9 * b.r)));
     b.step(1 / 30);
     if (i < 30 * 30) continue;
-    if (b.rigSide !== prev) flips++;
-    prev = b.rigSide;
+    const now = Math.sign(b.rigSide || 1);
+    if (now !== prev) flips++;
+    prev = now;
     if (prevSide !== null) jolt = Math.max(jolt, Math.abs(b.telemetry.sideN - prevSide));
     prevSide = b.telemetry.sideN;
   }

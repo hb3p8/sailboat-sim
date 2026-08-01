@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { WindField } from '../sim/wind.js';
+import { WindField, gustAt, gustTexture, GUST_PERIOD } from '../sim/wind.js';
 import { Boat } from '../sim/physics.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -98,6 +98,53 @@ check('поле гладкое: на метр не больше 0.1 размах
   }
   check('усиление ветра и заход идут вместе', both / total > 0.7,
     (100 * both / total).toFixed(0) + '% случаев');
+}
+
+// --- текстура поля ------------------------------------------------------------
+//
+// Вода в симуляторе поле не считает: она берёт его из текстуры, построенной
+// этим же кодом. Значит проверять надо ровно одно — что выборка из текстуры
+// воспроизводит поле. Это единственное звено, на которое опирается шейдер;
+// всё остальное там — перевод координат в систему ветра, две строки.
+//
+// До этого поле существовало в двух экземплярах, и они разошлись: множитель
+// сглаживания в шейдерном шуме был переписан с ошибкой, вода пошла полосами, а
+// физика считала правильное. Тестами такое не ловится — они до шейдера не
+// достают. Теперь ловить нечего, но выборку зафиксировать надо: ошибиться в
+// ней (промахнуться на полтексела, перепутать края) по-прежнему можно.
+
+{
+  const W = 512, H = 256;
+  const tex = gustTexture(W, H);
+  const wrap01 = v => v - Math.floor(v);
+  // Билинейная выборка ровно так, как её делает видеокарта: значения лежат в
+  // центрах текселов, координата в текселах равна uv·размер − 0.5.
+  const sample = (along, across) => {
+    const fx = wrap01(along / GUST_PERIOD.along) * W - 0.5;
+    const fy = wrap01(across / GUST_PERIOD.across) * H - 0.5;
+    const i = Math.floor(fx), j = Math.floor(fy);
+    const tx = fx - i, ty = fy - j;
+    const at = (a, b) => tex[((b % H) + H) % H * W + (((a % W) + W) % W)] / 127.5 - 1;
+    return (at(i, j) * (1 - tx) + at(i + 1, j) * tx) * (1 - ty) +
+           (at(i, j + 1) * (1 - tx) + at(i + 1, j + 1) * tx) * ty;
+  };
+
+  let worst = 0, at = null;
+  for (let k = 0; k < 20000; k++) {
+    const along = (k * 13.37) % (3 * GUST_PERIOD.along) - GUST_PERIOD.along;
+    const across = (k * 4.61) % (3 * GUST_PERIOD.across) - GUST_PERIOD.across;
+    const d = Math.abs(sample(along, across) - gustAt(along, across));
+    if (d > worst) { worst = d; at = [along, across]; }
+  }
+  console.log('\nТекстура поля ' + W + '×' + H + ': наибольшее расхождение с ' +
+    'gustAt ' + worst.toFixed(4) + ' (в точке ' + at[0].toFixed(0) + ', ' +
+    at[1].toFixed(0) + ' м)\n');
+  // Допуск складывается из двух вещей: квантование байтом (1/127.5 ≈ 0.008) и
+  // билинейная интерполяция вместо точной между центрами текселов.
+  // Точки берутся и за пределами периода, в том числе отрицательные: вода
+  // бесконечная, и кроиться текстура обязана во все стороны.
+  check('выборка из текстуры воспроизводит поле', worst < 0.02,
+    worst.toFixed(4) + ' при размахе поля около 1.5');
 }
 
 // --- полоски рига -------------------------------------------------------------

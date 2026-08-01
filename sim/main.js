@@ -73,80 +73,62 @@ const CELL = SEA / SEG;
 // парусов, — тёмными языками, ползущими по ветру. Это не украшение: без них
 // порыв приходит из ниоткуда, и понять, что произошло, невозможно.
 //
-// Считается это в шейдере, по мировым координатам фрагмента. Раньше цвет
+// Красится это в шейдере, по мировым координатам фрагмента. Раньше цвет
 // раскладывался по вершинам на процессоре: сетка воды переставляется вслед за
 // лодкой шагами по ячейке каждый кадр, а цвета пересчитывались через кадр, и
 // картинка отставала от геометрии — языки мельтешили. В шейдере отставать
 // нечему, заодно исчезла и зернистость от полутораметровой сетки вершин.
 //
-// Шум здесь — слово в слово тот же, что в sim/wind.js: те же константы, тот же
-// хеш на беззнаковых тридцатидвухбитных. Это принципиально. Вода должна
-// показывать ровно то поле, по которому считаются силы, иначе отладочный вид
-// начнёт врать — а он затем и нужен, чтобы не врал.
+// Само поле здесь НЕ считается. Оно посчитано один раз в sim/wind.js — тем же
+// кодом, по которому идут силы, — и лежит в текстуре размером в один период.
+// Шейдеру остаётся перевести мировые координаты в систему, связанную с ветром,
+// и взять выборку.
 //
-// Написано на TSL, то есть обычным кодом, а не строкой с GLSL внутри. До
-// перехода на WebGPU это была врезка в чужие шейдерные заготовки через
-// onBeforeCompile: приём, завязанный на точный текст `#include <begin_vertex>`
-// и `vec4 diffuseColor = ...` в исходниках three. Он молча отваливался бы при
-// первом же обновлении библиотеки.
-// Имена TSL живут в одной области видимости с вклеенным three, и какое-нибудь
-// из них может оказаться перекрыто одноимённой обычной функцией — так уже
-// вышло с clamp: в ядре есть числовой clamp, он молча вернул число вместо
-// узла, и вода стала чёрной без единой ошибки в консоли. Проверка ловит это
-// сразу и с внятным текстом; методы узлов (x.clamp(a, b)) такой опасности не
-// подвержены и ниже используются везде, где можно.
-for (const [name, fn] of [['float', float], ['uint', uint], ['vec2', vec2],
-                          ['vec3', vec3], ['color', color], ['uniform', uniform]]) {
-  if (typeof fn !== 'function' || typeof fn(1).mul !== 'function') {
-    throw new Error('TSL: имя ' + name +
-      ' перекрыто — вклеенная сборка three объявляет своё, узел не получается');
-  }
-}
+// Так сделано после того, как две реализации одного поля разошлись: множитель
+// сглаживания в шейдерном шуме оказался переписан с ошибкой, поле рвалось на
+// границах ячеек решётки, вода шла полосами — а физика при этом считала
+// правильное поле. Ни тестом, ни консолью такое не ловится, потому что тесты
+// до шейдера не достают. Теперь реализация одна, и расходиться нечему.
+//
+// Период поля — тысяча метров вдоль ветра и триста поперёк; текстура кроется
+// с повторением, поэтому вода бесконечная. Байта на тексел хватает: на яркость
+// приходится меньше процента на шаг, а вывод и так восьмибитный.
+const GUST_TEX = { w: 512, h: 256 };
+const seaGustMap = new DataTexture(
+  gustTexture(GUST_TEX.w, GUST_TEX.h), GUST_TEX.w, GUST_TEX.h, RedFormat);
+seaGustMap.wrapS = RepeatWrapping;
+seaGustMap.wrapT = RepeatWrapping;
+seaGustMap.minFilter = LinearFilter;
+seaGustMap.magFilter = LinearFilter;
+seaGustMap.needsUpdate = true;
 
 const seaGust = uniform(0);
 const seaWindDir = uniform(0);
 const seaWindSpeed = uniform(6);
 const seaTime = uniform(0);
 
-// Всё написано методами узлов (x.mul(y), x.clamp(a, b)), а не свободными
-// функциями. Свободные имена TSL живут в той же области видимости, что и
-// вклеенный three, и там уже есть, например, числовой clamp из ядра — он
-// молча возвращает число вместо узла, и вода становится чёрной. У методов
-// такой опасности нет: они берутся с самого узла.
-const svHash = Fn(([ix, iy]) => {
-  const h = uint(ix).mul(uint(374761393)).add(uint(iy).mul(uint(668265263))).toVar();
-  h.assign(h.bitXor(h.shiftRight(uint(13))).mul(uint(1274126177)));
-  return h.bitXor(h.shiftRight(uint(16))).toFloat().div(2147483647.5).sub(1.0);
-});
-
-const svNoise = Fn(([p]) => {
-  const fl = p.floor().toVar();
-  const i = fl.x.toInt().toVar();
-  const j = fl.y.toInt().toVar();
-  const f = p.sub(fl).toVar();
-  // Сглаживание f²·(3 − 2f). Вес обязан дойти до единицы на границе ячейки —
-  // иначе значение соседнего узла решётки не достигается никогда, и поле рвётся
-  // на каждой границе. Выглядит это как полосы с резкими краями по всей воде.
-  const u = f.mul(f).mul(f.mul(2.0).negate().add(3.0)).toVar();
-  const a = svHash(i, j);
-  const b = svHash(i.add(1), j);
-  const c = svHash(i, j.add(1));
-  const d = svHash(i.add(1), j.add(1));
-  return a.mix(b, u.x).mix(c.mix(d, u.x), u.y);
-});
-
+// Те же две строки, что и в WindField.frame: вдоль потока и поперёк, поле едет
+// по ветру со скоростью потока.
 const svGust = Fn(([p]) => {
   const c = seaWindDir.cos(), s = seaWindDir.sin();
-  const along = p.x.mul(c).add(p.y.mul(s)).negate()
-                 .sub(seaWindSpeed.mul(seaTime)).toVar();
-  const across = p.x.mul(s).negate().add(p.y.mul(c)).toVar();
-  return svNoise(vec2(along.div(130.0), across.div(42.0))).mul(0.55)
-    .add(svNoise(vec2(along.div(52.0).add(37.1), across.div(17.0).add(19.7))).mul(0.30))
-    .add(svNoise(vec2(along.div(21.0).add(74.2), across.div(7.0).add(39.4))).mul(0.15));
+  const along = p.x.mul(c).add(p.y.mul(s)).negate().sub(seaWindSpeed.mul(seaTime));
+  const across = p.x.mul(s).negate().add(p.y.mul(c));
+  const uv = vec2(along.div(GUST_PERIOD.along), across.div(GUST_PERIOD.across));
+  return texture(seaGustMap, uv).r.mul(2.0).sub(1.0);
 });
 
 seaMat.colorNode = color(SEA_COLOUR).mul(
   svGust(positionWorld.xz).mul(seaGust).mul(3.0).oneMinus().clamp(0.25, 1.8));
+
+// Имена TSL живут в одной области видимости с вклеенным three, и какое-нибудь
+// из них может оказаться перекрыто одноимённой обычной функцией — так уже
+// вышло с clamp: в ядре есть числовой clamp, он молча вернул число вместо
+// узла, и вода стала чёрной без единой ошибки в консоли. Проверять по списку
+// имён незачем: достаточно убедиться, что собранное выражение — узел.
+if (!seaMat.colorNode || typeof seaMat.colorNode.mul !== 'function') {
+  throw new Error('TSL: выражение цвета воды собралось не в узел — ' +
+                  'какое-то имя перекрыто вклеенной сборкой three');
+}
 
 function waveHeight(x, z, t, dx, dz, amp) {
   const a = Math.sin((x * dx + z * dz) * 0.28 + t * 1.35);
@@ -729,9 +711,10 @@ function frame() {
   boatGroup.rotation.x = -iphi;
   rudderPivot.rotation.y = -boat.o.rudder;
 
-  // Борт паруса берём у физики: там он с запасом на перекидывание, и парус
-  // не должен телепортироваться от каждого колебания ветра.
-  const side = boat.rigSide;
+  // Борт паруса берём у физики: там он с запасом на перекидывание и меняется
+  // за конечное время, так что гик переходит плавно, а не телепортируется.
+  // До первого шага физики он ещё не поставлен.
+  const side = boat.rigSide != null ? boat.rigSide : 1;
   shapeSails(side, (t.alphaDeg || 0) < 4);
 
   const amp = 0.10 + 0.035 * boat.o.windSpeed;

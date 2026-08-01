@@ -595,7 +595,9 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyH') { autopilot = !autopilot; apHeading = boat.psi; }
   if (e.code === 'KeyC') cycleCam();
   if (e.code === 'KeyG') setDebug(!debugOn);
-  if (e.code === 'KeyD') saveDump();
+  // Не D: она занята рулём вместе со стрелкой вправо (WASD), и дамп
+  // сохранялся на каждое нажатие при повороте. P далеко от обеих рук.
+  if (e.code === 'KeyP') saveDump();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 

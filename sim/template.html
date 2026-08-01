@@ -170,11 +170,14 @@ addEventListener('error', e => {
 });
 </script>
 <script type="module">
+/*__THREE__*/
+// Наш код целиком в отдельном блоке, вместе с данными: вклеенная сборка three
+// объявляет в области видимости модуля больше двух тысяч имён, и наши бы с
+// ними столкнулись.
+{
 const PACK = /*__PACK__*/ null;
 const MESH = /*__MESH__*/ null;
 const BUILD = /*__BUILD__*/ null;
-/*__THREE__*/
-{
 /*__WIND__*/
 /*__TRACE__*/
 /*__PHYSICS__*/

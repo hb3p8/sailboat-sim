@@ -18,6 +18,19 @@ import sys
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
 
+# Вендорится один файл: сборка three.webgpu, прогнанная через esbuild.
+# Подробности и порядок обновления — в viewer/vendor/README.md. Коротко: у
+# три­х исходных сборок three между собой перекрёстные импорты с
+# переименованием (`log as log$1`), и простая склейка на них ломается.
+THREE_BUNDLE = "three.webgpu.js"
+
+
+def three_bundle(strip):
+    """Прочитать вендоренный three и снять с него import/export."""
+    path = os.path.join(ROOT, "viewer", "vendor", THREE_BUNDLE)
+    return strip(open(path).read())
+
+
 def _git(*args):
     """Спросить git, молча вернув пустую строку, если его нет."""
     try:
@@ -32,7 +45,11 @@ def strip_modules(src):
     """Убрать import/export: код вклеивается в общий блок, а не грузится."""
     src = re.sub(r"^\s*import\s.*?;\s*$", "", src, flags=re.M)
     src = re.sub(r"^\s*export\s+(const|let|class|function)\s", r"\1 ", src, flags=re.M)
-    src = re.sub(r"^\s*export\s*\{[^}]*\};?\s*$", "", src, flags=re.M)
+    # Реэкспорт `export {...} from './three.core.js';` — у three.webgpu.js такой
+    # есть, и он длиной в шестьдесят тысяч символов. Во вклеенном виде он не
+    # нужен и не имеет смысла: ядро уже здесь же, в той же области видимости.
+    src = re.sub(r"^\s*export\s*\{[^}]*\}\s*(from\s*['\"][^'\"]*['\"])?;?\s*$",
+                 "", src, flags=re.M)
     return src
 
 
@@ -48,7 +65,7 @@ def main():
     pack = json.load(open(pack_path))
     mesh = json.load(open(mesh_path))
     tpl = open(os.path.join(sim, "template.html")).read()
-    three = open(os.path.join(ROOT, "viewer", "vendor", "three.module.js")).read()
+    three = three_bundle(strip_modules)
 
     # Отметка сборки: по ней дамп состояния можно привязать к коду, который
     # его породил. Без этого «воспроизведи вот этот случай» через неделю

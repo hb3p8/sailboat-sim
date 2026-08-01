@@ -39,9 +39,13 @@ const SKY = new Color(0xa8c4d8);
 // сорок пять метров чистой воды не помещалось даже одного.
 scene.fog = new Fog(SKY, 110, 420);
 const camera = new PerspectiveCamera(52, 1, 0.15, 2000);
-const renderer = new WebGLRenderer({ antialias: true });
+// WebGPU. Если его нет, рендерер сам откатывается на WebGL2 — код при этом
+// один и тот же, TSL компилируется и туда и туда.
+const renderer = new WebGPURenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-renderer.setClearColor(SKY);
+// Фон задаётся сценой, а не setClearColor: у WebGPU-рендерера очистка цветом
+// до неба не доходит, и небо остаётся чёрным.
+scene.background = SKY;
 stage.appendChild(renderer.domElement);
 
 scene.add(new HemisphereLight(0xe8f4ff, 0x2b4a63, 2.4));
@@ -56,11 +60,10 @@ scene.add(sun);
 // бесконечное море.
 
 const SEA = 220, SEG = 150;
+const SEA_COLOUR = 0x2c5c7d;
 const seaGeo = new PlaneGeometry(SEA, SEA, SEG, SEG);
 seaGeo.rotateX(-Math.PI / 2);
-const seaMat = new MeshStandardMaterial({
-  color: 0x2c5c7d, roughness: 0.28, metalness: 0.12,
-});
+const seaMat = new MeshStandardNodeMaterial({ roughness: 0.28, metalness: 0.12 });
 const sea = new Mesh(seaGeo, seaMat);
 scene.add(sea);
 const seaBase = seaGeo.attributes.position.array.slice();
@@ -80,57 +83,67 @@ const CELL = SEA / SEG;
 // хеш на беззнаковых тридцатидвухбитных. Это принципиально. Вода должна
 // показывать ровно то поле, по которому считаются силы, иначе отладочный вид
 // начнёт врать — а он затем и нужен, чтобы не врал.
-const SEA_UNIFORMS = {
-  uGust: { value: 0 },
-  uWindDir: { value: 0 },
-  uWindSpeed: { value: 6 },
-  uTime: { value: 0 },
-};
+//
+// Написано на TSL, то есть обычным кодом, а не строкой с GLSL внутри. До
+// перехода на WebGPU это была врезка в чужие шейдерные заготовки через
+// onBeforeCompile: приём, завязанный на точный текст `#include <begin_vertex>`
+// и `vec4 diffuseColor = ...` в исходниках three. Он молча отваливался бы при
+// первом же обновлении библиотеки.
+// Имена TSL живут в одной области видимости с вклеенным three, и какое-нибудь
+// из них может оказаться перекрыто одноимённой обычной функцией — так уже
+// вышло с clamp: в ядре есть числовой clamp, он молча вернул число вместо
+// узла, и вода стала чёрной без единой ошибки в консоли. Проверка ловит это
+// сразу и с внятным текстом; методы узлов (x.clamp(a, b)) такой опасности не
+// подвержены и ниже используются везде, где можно.
+for (const [name, fn] of [['float', float], ['uint', uint], ['vec2', vec2],
+                          ['vec3', vec3], ['color', color], ['uniform', uniform]]) {
+  if (typeof fn !== 'function' || typeof fn(1).mul !== 'function') {
+    throw new Error('TSL: имя ' + name +
+      ' перекрыто — вклеенная сборка three объявляет своё, узел не получается');
+  }
+}
 
-const SEA_NOISE = `
-uniform float uGust;
-uniform float uWindDir;
-uniform float uWindSpeed;
-uniform float uTime;
-varying vec2 vSeaXZ;
-float svHash(int i, int j) {
-  uint h = uint(i) * 374761393u + uint(j) * 668265263u;
-  h = (h ^ (h >> 13u)) * 1274126177u;
-  return float(h ^ (h >> 16u)) / 2147483647.5 - 1.0;
-}
-float svNoise(vec2 p) {
-  vec2 fl = floor(p);
-  int i = int(fl.x), j = int(fl.y);
-  vec2 f = p - fl;
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  float a = svHash(i, j), b = svHash(i + 1, j);
-  float c = svHash(i, j + 1), d = svHash(i + 1, j + 1);
-  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-float svGust(vec2 p) {
-  float c = cos(uWindDir), s = sin(uWindDir);
-  float along = -(p.x * c + p.y * s) - uWindSpeed * uTime;
-  float across = -p.x * s + p.y * c;
-  return 0.55 * svNoise(vec2(along / 130.0, across / 42.0))
-       + 0.30 * svNoise(vec2(along / 52.0 + 37.1, across / 17.0 + 19.7))
-       + 0.15 * svNoise(vec2(along / 21.0 + 74.2, across / 7.0 + 39.4));
-}
-`;
+const seaGust = uniform(0);
+const seaWindDir = uniform(0);
+const seaWindSpeed = uniform(6);
+const seaTime = uniform(0);
 
-// Целочисленный хеш требует GLSL ES 3.00, то есть WebGL2. Если его нет —
-// вода просто останется ровной: лучше без ряби, чем с непохожей рябью.
-if (renderer.capabilities.isWebGL2) {
-  seaMat.onBeforeCompile = shader => {
-    Object.assign(shader.uniforms, SEA_UNIFORMS);
-    shader.vertexShader = 'varying vec2 vSeaXZ;\n' + shader.vertexShader.replace(
-      '#include <begin_vertex>',
-      '#include <begin_vertex>\n  vSeaXZ = (modelMatrix * vec4(position, 1.0)).xz;');
-    shader.fragmentShader = SEA_NOISE + shader.fragmentShader.replace(
-      'vec4 diffuseColor = vec4( diffuse, opacity );',
-      'vec4 diffuseColor = vec4( diffuse, opacity );\n' +
-      '  diffuseColor.rgb *= clamp(1.0 - 3.0 * uGust * svGust(vSeaXZ), 0.25, 1.8);');
-  };
-}
+// Всё написано методами узлов (x.mul(y), x.clamp(a, b)), а не свободными
+// функциями. Свободные имена TSL живут в той же области видимости, что и
+// вклеенный three, и там уже есть, например, числовой clamp из ядра — он
+// молча возвращает число вместо узла, и вода становится чёрной. У методов
+// такой опасности нет: они берутся с самого узла.
+const svHash = Fn(([ix, iy]) => {
+  const h = uint(ix).mul(uint(374761393)).add(uint(iy).mul(uint(668265263))).toVar();
+  h.assign(h.bitXor(h.shiftRight(uint(13))).mul(uint(1274126177)));
+  return h.bitXor(h.shiftRight(uint(16))).toFloat().div(2147483647.5).sub(1.0);
+});
+
+const svNoise = Fn(([p]) => {
+  const fl = p.floor().toVar();
+  const i = fl.x.toInt().toVar();
+  const j = fl.y.toInt().toVar();
+  const f = p.sub(fl).toVar();
+  const u = f.mul(f).mul(f.mul(2.0).oneMinus().add(1.0)).toVar();   // 3 − 2f
+  const a = svHash(i, j);
+  const b = svHash(i.add(1), j);
+  const c = svHash(i, j.add(1));
+  const d = svHash(i.add(1), j.add(1));
+  return a.mix(b, u.x).mix(c.mix(d, u.x), u.y);
+});
+
+const svGust = Fn(([p]) => {
+  const c = seaWindDir.cos(), s = seaWindDir.sin();
+  const along = p.x.mul(c).add(p.y.mul(s)).negate()
+                 .sub(seaWindSpeed.mul(seaTime)).toVar();
+  const across = p.x.mul(s).negate().add(p.y.mul(c)).toVar();
+  return svNoise(vec2(along.div(130.0), across.div(42.0))).mul(0.55)
+    .add(svNoise(vec2(along.div(52.0).add(37.1), across.div(17.0).add(19.7))).mul(0.30))
+    .add(svNoise(vec2(along.div(21.0).add(74.2), across.div(7.0).add(39.4))).mul(0.15));
+});
+
+seaMat.colorNode = color(SEA_COLOUR).mul(
+  svGust(positionWorld.xz).mul(seaGust).mul(3.0).oneMinus().clamp(0.25, 1.8));
 
 function waveHeight(x, z, t, dx, dz, amp) {
   const a = Math.sin((x * dx + z * dz) * 0.28 + t * 1.35);
@@ -728,10 +741,10 @@ function frame() {
   }
   seaGeo.attributes.position.needsUpdate = true;
   if ((tick & 1) === 0) seaGeo.computeVertexNormals();
-  SEA_UNIFORMS.uGust.value = boat.wind.o.gust;
-  SEA_UNIFORMS.uWindDir.value = boat.wind.o.dir;
-  SEA_UNIFORMS.uWindSpeed.value = boat.wind.o.speed;
-  SEA_UNIFORMS.uTime.value = boat.t;
+  seaGust.value = boat.wind.o.gust;
+  seaWindDir.value = boat.wind.o.dir;
+  seaWindSpeed.value = boat.wind.o.speed;
+  seaTime.value = boat.t;
   updateGrid(ix, iy, now, dirX, dirZ, amp);
   if (debugOn) {
     updateField(ix, iy, now);
@@ -952,4 +965,10 @@ document.getElementById('dump').addEventListener('click', saveDump);
 window.sv20dump = dumpState;
 shapeSails(1, false);
 setDebug(false);
-frame();
+// WebGPU поднимается асинхронно: устройство запрашивается у системы. До этого
+// рисовать нечем, поэтому цикл запускается после init.
+renderer.init().then(() => { resize(); frame(); }).catch(err => {
+  const box = document.getElementById('crash');
+  box.hidden = false;
+  box.textContent = 'Не удалось поднять рендерер: ' + (err && err.message || err);
+});

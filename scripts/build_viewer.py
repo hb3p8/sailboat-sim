@@ -16,6 +16,10 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from sv20 import frame  # noqa: E402
 
+# Склейку three держит сборщик симулятора: она одна на оба файла, и
+# расходиться им незачем.
+from build_sim import strip_modules, three_bundle  # noqa: E402
+
 # Штамп — выклеенный в кривые текст, в просмотрщике он бесполезен и весит много.
 SKIP_GROUPS = {"title"}
 
@@ -191,16 +195,15 @@ def main():
         }
         payload["notes"] += hull_notes(hl)
 
-    vendor = os.path.join(ROOT, "viewer", "vendor", "three.module.js")
     tpl = open(os.path.join(ROOT, "viewer", "template.html")).read()
     js = open(os.path.join(ROOT, "viewer", "renderer.js")).read()
-    three = open(vendor).read()
+    three = three_bundle(strip_modules)
 
     html = tpl.replace("/*__DATA__*/ null",
                        json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     # three вклеивается в тот же модуль, что и рендерер: его классы попадают
-    # в лексическую область видимости, а хвостовой `export {...}` в модуле
-    # безвреден. Так просмотрщик остаётся одним файлом без сети и сборщика.
+    # в лексическую область видимости. Так просмотрщик остаётся одним файлом
+    # без сети и сборщика.
     html = html.replace("/*__THREE__*/", three)
     html = html.replace("/*__RENDERER__*/", js)
 

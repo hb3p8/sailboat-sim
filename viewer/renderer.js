@@ -16,7 +16,10 @@ const scene = new Scene();
 const camera = new PerspectiveCamera(32, 1, 20, 400000);
 camera.up.set(0, 0, 1);
 
-const renderer = new WebGLRenderer({ antialias: true, alpha: true });
+// WebGPU. Просмотрщику своих шейдеров не нужно, но сборка three в проекте одна
+// на него и на симулятор, а держать две — верный способ разъехаться версиями.
+// Если WebGPU в браузере нет, рендерер сам откатывается на WebGL2.
+const renderer = new WebGPURenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 stage.insertBefore(renderer.domElement, svg);
 
@@ -720,6 +723,13 @@ for (const g of F.gaps) {
 // ----------------------------------------------------------------- старт
 
 addEventListener('resize', resize);
-resize();
-fitCamera();
-frame();
+// WebGPU поднимается асинхронно: устройство запрашивается у системы, до этого
+// рисовать нечем.
+renderer.init().then(() => {
+  resize();
+  fitCamera();
+  frame();
+}).catch(err => {
+  document.getElementById('hud').textContent =
+    'Не удалось поднять рендерер: ' + (err && err.message || err);
+});

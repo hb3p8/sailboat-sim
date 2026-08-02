@@ -276,6 +276,48 @@ check('хорда убывает к топу',
     open[5].cl < 0.02, 'cl ' + open[5].cl.toFixed(3));
 }
 
+// --- на какую сторону выгнут парус ------------------------------------------
+//
+// Пузо в телеметрии идёт со знаком, и знак этот — не украшение: по нему
+// отрисовка кладёт полотно на подветренную сторону. Пока телеметрия отдавала
+// модуль, нарисованный парус на одном галсе выгибался на наветренную —
+// в ветер. Глазом это видно сразу, а никакой проверкой не ловилось.
+//
+// Проверяется то, что можно проверить без картинки: знак пуза следует за
+// галсом и совпадает со знаком, по которому строит панели сам расчёт.
+{
+  const tack = twa => {
+    const b = new Boat(PACK);
+    b.o.windSpeed = 6; b.o.windDir = twa * D; b.o.sheet = 24 * D; b.o.twist = 8 * D;
+    b.u = 4; b.phi = 8 * D * Math.sign(twa);
+    for (let i = 0; i < 60 * 30; i++) b.step(1 / 30);
+    return { strips: b.telemetry.strips, calc: b.stripCalc, side: b.rigSide };
+  };
+  const stb = tack(60), prt = tack(-60);
+  console.log('\nНа какую сторону выгнут парус (пузо со знаком):\n');
+  console.log('  галс   борт паруса   пузо грота        пузо стакселя');
+  for (const [name, r] of [['правый', stb], ['левый', prt]]) {
+    console.log('  ' + name.padEnd(7) + r.side.toFixed(2).padStart(9) + '   ' +
+      r.strips.slice(0, 3).map(s => s.camber.toFixed(3)).join(' ') + '   ' +
+      r.strips.slice(6, 9).map(s => s.camber.toFixed(3)).join(' '));
+  }
+  console.log('');
+  // Сравниваются только полоски, у которых пузо вообще есть: заполоскавшая
+  // ткань его не держит, и знака у нуля нет.
+  const live = stb.strips.map((s, i) =>
+    Math.abs(s.camber) > 1e-4 && Math.abs(prt.strips[i].camber) > 1e-4);
+  check('на разных галсах парус выгнут в разные стороны',
+    live.some(Boolean) &&
+    stb.strips.every((s, i) => !live[i] ||
+      Math.sign(s.camber) === -Math.sign(prt.strips[i].camber)),
+    live.filter(Boolean).length + ' полосок из ' + live.length + ' с пузом');
+  // Тот самый знак, с которым расчёт строит среднюю линию панелей: если они
+  // разойдутся, нарисованный парус перестанет совпадать с посчитанным.
+  check('знак пуза совпадает со знаком, по которому строит панели расчёт',
+    stb.calc.every((g, i) => Math.sign(g.camber) === Math.sign(g.alpha || 1)) &&
+    prt.calc.every((g, i) => Math.sign(g.camber) === Math.sign(g.alpha || 1)));
+}
+
 // --- запаздывание паруса --------------------------------------------------
 //
 // Смена угла атаки не даёт новой подъёмной силы сразу: сначала с задней

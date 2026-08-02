@@ -286,6 +286,77 @@ const mainSail = sailMesh(0xf7f9fb);
 const jibSail = sailMesh(0xeef2f6);
 boatGroup.add(mainSail, jibSail);
 
+// Колдунчики.
+//
+// Тряска показывает, что парус УЖЕ полощет; колдунчик — что вот-вот начнёт, и
+// в какую сторону править. Это то, по чему на воде и держат настройку, и стоит
+// он дешевле всего: всё нужное уже посчитано.
+//
+// Наветренный поднимается, когда угол атаки падает ниже идеального, то есть
+// когда лодка приведена или шкот перетравлен. Подветренный виснет и мечется,
+// когда угол атаки подходит к срыву — перебран шкот или лодка увалена. Оба
+// стелются по потоку, когда парус настроен.
+const TELL_ROWS = [2, 5, 8];      // строки сетки паруса, где висят ленточки
+const TELL_COL = 5;               // столбец: примерно 15% хорды от шкаторины
+const TELL_SEG = 4;               // звеньев в ленточке
+const TELL_LEN = 0.34;            // длина, м
+const TELL_OFF = 0.03;            // отступ от полотна, м
+const TELL_W = 0.018;             // полуширина ленты, м
+const SAIL_STALL = 13;            // градусов, как в physics.sailCoeffs
+
+// Ленточка — не линия, а узкая полоса: линия толщиной в пиксель на воде не
+// читается, а тут ещё и не утолщается (WebGL везде рисует её в один пиксель).
+// Полосу разворачиваем в плоскости паруса — тогда с наветра, откуда на них и
+// смотрят, она видна плашмя.
+//
+// Рисуем поверх всего (`depthTest: false`), как и латы: подветренный колдунчик
+// смотрят сквозь полотно, ради того его и вешают против наветренного.
+const TELL_VERT = TELL_SEG * 6;   // два треугольника на звено
+
+function telltaleMesh() {
+  const n = TELL_ROWS.length * 2 * TELL_VERT;
+  const g = new BufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute(new Float32Array(n * 3), 3));
+  const col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    // первая половина вершин — наветренные, вторая — подветренные
+    const lee = i >= n / 2;
+    col[i * 3] = lee ? 0.35 : 0.98;
+    col[i * 3 + 1] = lee ? 0.88 : 0.36;
+    col[i * 3 + 2] = lee ? 0.58 : 0.30;
+  }
+  g.setAttribute('color', new Float32BufferAttribute(col, 3));
+  const m = new Mesh(g, new MeshBasicMaterial({
+    vertexColors: true, depthTest: false, side: DoubleSide }));
+  m.renderOrder = 3;
+  m.frustumCulled = false;
+  return m;
+}
+const telltales = [telltaleMesh(), telltaleMesh()];
+boatGroup.add(telltales[0], telltales[1]);
+
+// Одна ленточка: от точки на полотне по потоку, с изломом и трепетом.
+// `bend` — насколько её задирает или роняет, `wob` — насколько мечется.
+function drawTelltale(arr, at, px, py, pz, ux, uz, bend, wob, phase) {
+  let x = px, y = py, z = pz, i = at;
+  const step = TELL_LEN / TELL_SEG;
+  for (let s = 0; s < TELL_SEG; s++) {
+    const f = (s + 1) / TELL_SEG;
+    const a = bend * f + wob * Math.sin(phase + 3 * f);
+    const c = Math.cos(a), sn = Math.sin(a);
+    const nx = x + ux * c * step, ny = y + sn * step, nz = z + uz * c * step;
+    // поперёк ленты, в плоскости паруса: единичное, потому что c² + sin² = 1
+    const wx = sn * ux * TELL_W, wy = -c * TELL_W, wz = sn * uz * TELL_W;
+    const v = [x - wx, y - wy, z - wz,  x + wx, y + wy, z + wz,
+               nx + wx, ny + wy, nz + wz,
+               x - wx, y - wy, z - wz,  nx + wx, ny + wy, nz + wz,
+               nx - wx, ny - wy, nz - wz];
+    for (let j = 0; j < 18; j++) arr[i + j] = v[j];
+    x = nx; y = ny; z = nz; i += 18;
+  }
+  return i;
+}
+
 // Стаксель-шкот и погон под ним. Нарисованы затем, что именно они и объясняют,
 // почему добранный стаксель стоит не в ДП: шкотовый угол тянут к каретке на
 // погоне, к точке у борта.
@@ -350,7 +421,10 @@ function shapeSails(side) {
       // Пузо берётся у ближайшей по высоте полоски: их шесть на парус, строк
       // сетки одиннадцать.
       const g = strips[base + Math.min(5, Math.round(f * 5))] || {};
-      const camber = Math.abs(g.camber || 0) * (g.fill == null ? 1 : g.fill);
+      // Знак пуза берётся из расчёта: он говорит, на какую сторону выгнут
+      // парус. Нормаль ниже — та же самая, что в physics.sailForces, поэтому
+      // нарисованное и посчитанное полотно совпадают.
+      const camber = (g.camber || 0) * (g.fill == null ? 1 : g.fill);
       const draft = Math.min(0.85, Math.max(0.15, g.draft == null ? 0.5 : g.draft));
 
       // Заполаскивание. Физика говорит, какая доля хорды от передней шкаторины
@@ -403,6 +477,45 @@ function shapeSails(side) {
     mesh.geometry.attributes.position.needsUpdate = true;
     mesh.geometry.attributes.color.needsUpdate = true;
     mesh.geometry.computeVertexNormals();
+
+    // Колдунчики: по три пары на парус, на тех же строках сетки.
+    //
+    // Пороги здесь — не подгонка, а перевод посчитанного в видимое. Запас угла
+    // над идеальным меньше трёх градусов — наветренный начинает подниматься;
+    // угол атаки подошёл к срыву ближе трёх градусов — подветренный виснет.
+    // Между этими двумя состояниями и лежит правильная настройка.
+    const tt = telltales[k].geometry.attributes.position.array;
+    const half = tt.length / 2;
+    let iw = 0, il = half;
+    for (const r of TELL_ROWS) {
+      const g = strips[base + Math.min(5, Math.round((r / (SAIL_ROWS - 1)) * 5))] || {};
+      const at = (r * SAIL_COLS + TELL_COL) * 3;
+      const ax = a[at], ay = a[at + 1], az = a[at + 2];
+      // направление хорды на этой строке — из соседнего по хорде узла
+      const nx2 = a[at + 3] - ax, nz2 = a[at + 5] - az;
+      const len = Math.hypot(nx2, nz2) || 1;
+      const ux = nx2 / len, uz = nz2 / len;
+      // подветренная сторона — та, куда выгнут парус
+      const lee = Math.sign(g.camber || 1);
+      const offX = -uz * TELL_OFF * lee, offZ = ux * TELL_OFF * lee;
+
+      const margin = (g.margin || 0) / D;
+      // 13° — тот же угол срыва, по которому считаются коэффициенты паруса
+      const stall = SAIL_STALL - Math.abs(g.alpha || 0) / D;
+      const lift = Math.min(1, Math.max(0, (3 - margin) / 4));
+      const droop = Math.min(1, Math.max(0, (3 - stall) / 4));
+      // Мечется по тому же закону Струхаля, что и заполоскавшее полотно, только
+      // длина здесь своя — самой ленточки.
+      const hz = Math.min(FLAP_MAX_HZ, FLAP_ST * Math.max(1, g.ve || 1) / TELL_LEN);
+      const ph = 2 * Math.PI * hz * boat.t - r;
+
+      iw = drawTelltale(tt, iw, ax - offX, ay, az - offZ, ux, uz,
+                        lift * 1.1, lift * 0.5, ph);
+      il = drawTelltale(tt, il, ax + offX, ay, az + offZ, ux, uz,
+                        -droop * 0.9, droop * 0.6, ph + 2);
+    }
+    telltales[k].geometry.attributes.position.needsUpdate = true;
+    telltales[k].geometry.computeBoundingSphere();
   });
 
   // Шкот от шкотового угла стакселя к каретке. Шкотовый угол здесь — нижняя
@@ -1242,8 +1355,8 @@ function updateRig(t) {
   const cMax = 0.16;
   const xc = v => 8 + (Math.min(cMax, Math.max(0, v)) / cMax) * (RIG_W - 20);
   svg += axis(3, 'пузо, % хорды', [[8, '0'], [RIG_W - 30, (100 * cMax).toFixed(0)]]);
-  svg += poly(main.map(s => [xc(s.camber), y(s.z)]), 'cam') +
-         poly(jib.map(s => [xc(s.camber), y(s.z)]), 'camj') + '</g>';
+  svg += poly(main.map(s => [xc(Math.abs(s.camber)), y(s.z)]), 'cam') +
+         poly(jib.map(s => [xc(Math.abs(s.camber)), y(s.z)]), 'camj') + '</g>';
 
   rigSvg.innerHTML = svg;
   document.getElementById('rignote').innerHTML =

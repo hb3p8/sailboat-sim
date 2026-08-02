@@ -484,7 +484,7 @@ export class Boat {
         this.stripState.push({
           h: 0, z: 0, area: a, ws: 0, awaDeg: 0, alphaDeg: 0,
           cl: 0, drive: 0, side: 0, geomDeg: 0,
-          luffFrac: 0, slack: 0, ve: 0,
+          luffFrac: 0, slack: 0, ve: 0, margin: 0,
           // Форма сечения из мембраны: пузо в долях хорды, где стоит горб и
           // сколько передней шкаторины ещё держит форму.
           camber: 0, draft: 0.5, fill: 0,
@@ -501,7 +501,7 @@ export class Boat {
       xi: 0, yi: 0, zi: 0, ve: 0, d1: 0, d2: 0, alpha: 0, awa: 0,
       chord: 0, area: 0, live: false,
       slack: 0, camber: 0, draft: 0.5, fill: 0, aWake: 0, camPanel: 0,
-      luffFrac: 0,
+      luffFrac: 0, margin: 0,
     }));
     this.latQ = new Float64Array(NCHORD);
     this.alphaInd = new Float64Array(n);
@@ -732,6 +732,10 @@ export class Boat {
         // Форму передней шкаторины может сорвать двумя способами: углом атаки
         // ниже идеального (парус заполаскивает целиком) и подбоем от соседнего
         // паруса (сминается только у мачты). Держит меньший из двух.
+        // Запас угла атаки над идеальным: сколько ещё можно привестись, прежде
+        // чем передняя шкаторина начнёт мяться. По нему рисуются колдунчики —
+        // они показывают не «уже полощет», а «вот-вот заполощет».
+        g.margin = Math.abs(g.alpha) - mem.ideal;
         const soft = Math.min(fillFactor(q),
                               luffFactor(Math.abs(g.alpha), mem.ideal));
         g.fill = soft * this.strips[i].mastFill;
@@ -822,10 +826,16 @@ export class Boat {
       d.geomDeg = -rigSide * g.alpha / DEG;
       d.indDeg = -rigSide * ai / DEG;
       d.cl = Math.abs(k.cl); d.drive = f1; d.side = f2;
-      d.camber = Math.abs(g.camber) * g.fill; d.draft = g.draft; d.fill = g.fill;
+      // Пузо СО ЗНАКОМ: на другом галсе парус выгнут в другую сторону, и
+      // отрисовке этот знак нужен ровно так же, как расчёту. Пока телеметрия
+      // отдавала модуль, нарисованный парус на одном из галсов выгибался на
+      // наветренную сторону — то есть внутрь ветра. Ловится это только глазом
+      // и только на одном галсе, поэтому ниже стоит проверка.
+      d.camber = g.camber * g.fill; d.draft = g.draft; d.fill = g.fill;
       // Для отрисовки: доля хорды в пузыре, запас ткани и местный поток —
       // из них берутся размах, частота и место тряски.
       d.luffFrac = g.luffFrac; d.slack = g.slack; d.ve = g.ve;
+      d.margin = g.margin;
     }
 
     if (out.area > 0) {

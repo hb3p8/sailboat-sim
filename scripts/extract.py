@@ -201,6 +201,8 @@ def render_report(doc):
             L.append("| %s: нижняя шкаторина | %.0f мм |" % (name, s["foot_mm"]))
         L.append("| Мачта | наклон %.1f° в корму, топ Z = %.0f мм |"
                  % (sp["mast"]["rake_deg"], sp["mast"]["top_mm"][1]))
+        L.append("| Профиль мачты | %.0f мм у палубы, %.0f мм у топа |"
+                 % tuple(sp["mast"]["width_mm"]))
         L.append("| Гик | %.0f мм, на высоте %.0f мм |"
                  % (sp["boom"]["length_mm"], sp["boom"]["gooseneck_mm"][1]))
         L.append("| Штаг | от X = %.0f мм до узла на Z = %.0f мм |"

@@ -147,7 +147,29 @@ def _find_mast(segs):
                 best = (off, line, fwd, min([b["a"], b["b"]], key=lambda p: p[0]), m)
     if best[0] > 60.0:
         raise SailPlanError("дощечка не села ни на одну грань мачты")
-    return best[1], best[2], best[3], best[4]
+
+    # Ширина профиля мачты — передняя грань минус задняя. Задняя уже найдена,
+    # по ней стоит шкаторина; передняя — самая дальняя вперёд параллель. Она
+    # короче задней: выше узла мачта сужается, и грань там ломается.
+    #
+    # Нужна ширина затем, что мачта стоит перед гротом и портит ему поток у
+    # передней шкаторины. Чем толще мачта относительно хорды, тем больше
+    # потеря, и это единственное, чем она задаётся.
+    luff = best[1]
+    luff_ang = math.degrees(math.atan2(luff[1][1], luff[1][0]))
+    # Грань засчитывается только на своей высоте и не дальше четверти метра
+    # вперёд от задней: параллелей у мачты хватает — ликпаз, оковка гика,
+    # погон, — и без этих двух условий в «мачту» попадает что попало.
+    faces = [(m["a"][1], m["b"][1], _line(m["a"], m["b"])) for m in segs
+             if m["len"] > 1200.0 and abs(m["ang"] - luff_ang) < 2.0]
+
+    def width_at(z):
+        w = [_at_z(f, z) - _at_z(luff, z) for lo, hi, f in faces if lo <= z <= hi]
+        return max([v for v in w if 0.0 <= v <= 250.0] + [0.0])
+
+    top_z = max(best[4]["a"][1], best[4]["b"][1])
+    width = (width_at(2000.0), width_at(top_z - 200.0))
+    return best[1], best[2], best[3], best[4], width
 
 
 def _find_boom(segs, mast):
@@ -406,7 +428,7 @@ def find_sail_plan(subpaths, datum, sheer_pts=None, deck_pts=None, plan_box=None
     """
     segs = _segments(subpaths, datum)
 
-    mast, head_fwd, head_aft, mast_seg = _find_mast(segs)
+    mast, head_fwd, head_aft, mast_seg, mast_width = _find_mast(segs)
     boom, boom_seg = _find_boom(segs, mast)
     tack = _intersect(mast, boom)
     boom_aft = min([boom_seg["a"], boom_seg["b"]], key=lambda p: p[0])
@@ -496,6 +518,7 @@ def find_sail_plan(subpaths, datum, sheer_pts=None, deck_pts=None, plan_box=None
             "deck_mm": None if mast_deck is None else rd([mast_deck])[0],
             "top_mm": rd([mast_top])[0],
             "rake_deg": round(math.degrees(math.atan2(-mast[1][0], mast[1][1])), 2),
+            "width_mm": [round(mast_width[0], 1), round(mast_width[1], 1)],
         },
         "boom": {
             "gooseneck_mm": rd([(_at_z(boom, tack[1]), tack[1])])[0],

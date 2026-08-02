@@ -16,6 +16,10 @@
 export const TRACE_FIELDS = [
   // состояние лодки — по нему она восстанавливается целиком
   't', 'x', 'y', 'psi', 'u', 'v', 'r', 'phi', 'p_', 'rigSide', 'hike',
+  // Запаздывающие углы атаки полосок — тоже состояние: парус выходит на
+  // новую подъёмную силу не мгновенно. Единственное поле-массив в записи;
+  // числом их не сделать, полосок может стать больше или меньше.
+  'lag',
   // органы управления и условия — всё, что можно тронуть на ходу
   'rudder', 'sheet', 'twist', 'twistEff', 'draft',
   'windSpeed', 'windDir', 'gust', 'shift', 'crewHike', 'crewMass', 'sailScale',
@@ -53,6 +57,7 @@ export function traceFrame(boat) {
     // Момент откренивания — тоже состояние: экипаж отзывается с запаздыванием.
     // Без него запись не воспроизводится, и это поймал тест, а не глаз.
     r9(boat.hike),
+    boat.alphaLag ? Array.from(boat.alphaLag, r9) : null,
     r9(boat.o.rudder), r9(boat.o.sheet), r9(boat.o.twist), r4(boat.twistEff),
     r9(boat.o.draft),
     r9(boat.o.windSpeed), r9(boat.o.windDir),
@@ -90,6 +95,10 @@ export function restoreFrom(boat, frame, index) {
   boat.phi = g('phi'); boat.p_ = g('p_'); boat.t = g('t');
   boat.rigSide = g('rigSide');
   if (index.hike != null) boat.hike = g('hike');
+  const lag = g('lag');
+  if (lag && boat.alphaLag && lag.length === boat.alphaLag.length) {
+    boat.alphaLag.set(lag);
+  }
 }
 
 // Подать в лодку органы управления и условия из кадра.

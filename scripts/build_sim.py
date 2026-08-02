@@ -24,6 +24,10 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 # переименованием (`log as log$1`), и простая склейка на них ломается.
 THREE_BUNDLE = "three.webgpu.js"
 
+# Всё, что вклеивается в страницу, в порядке объявления.
+MODULES = ["wind.js", "vlm.js", "membrane.js", "waves.js", "trace.js",
+           "physics.js", "main.js"]
+
 
 def three_bundle(strip):
     """Прочитать вендоренный three и снять с него import/export."""
@@ -90,18 +94,19 @@ def main():
     html = html.replace("/*__THREE__*/", three)
     # Порядок важен: physics.js берёт WindField из wind.js, а импорты при
     # вклейке снимаются — значит поле ветра должно быть объявлено раньше.
-    html = html.replace("/*__WIND__*/",
-                        strip_modules(open(os.path.join(sim, "wind.js")).read()))
-    html = html.replace("/*__VLM__*/",
-                        strip_modules(open(os.path.join(sim, "vlm.js")).read()))
-    html = html.replace("/*__MEMBRANE__*/",
-                        strip_modules(open(os.path.join(sim, "membrane.js")).read()))
-    html = html.replace("/*__TRACE__*/",
-                        strip_modules(open(os.path.join(sim, "trace.js")).read()))
-    html = html.replace("/*__PHYSICS__*/",
-                        strip_modules(open(os.path.join(sim, "physics.js")).read()))
-    html = html.replace("/*__MAIN__*/",
-                        strip_modules(open(os.path.join(sim, "main.js")).read()))
+    # Порядок важен: импорты при вклейке снимаются, значит то, что берут
+    # другие, должно быть объявлено раньше. Список полный и проверяется ниже:
+    # забыть в нём новый модуль — значит собрать страницу, которая падает на
+    # первом же обращении к нему, и узнать об этом только в браузере. Так уже
+    # дважды и вышло.
+    for name in MODULES:
+        html = html.replace("/*__%s__*/" % name.split(".")[0].upper(),
+                            strip_modules(open(os.path.join(sim, name)).read()))
+
+    have = set(f for f in os.listdir(sim) if f.endswith(".js"))
+    missed = have - set(MODULES)
+    if missed:
+        raise SystemExit("в сборку не попали модули: " + ", ".join(sorted(missed)))
 
     # Незаполненные метки — это молча выпавший из сборки модуль. Проверяется
     # здесь, а не в браузере: пустая страница с синтаксической ошибкой на

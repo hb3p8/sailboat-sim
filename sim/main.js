@@ -233,12 +233,40 @@ boatGroup.add(boomPivot);
 // это стало видно сразу: латы торчали за шкаторину.
 // Строк по высоте стало больше: у грота серп ломаной в пять звеньев, и на
 // семи станциях он срезался.
-const SAIL_ROWS = 11, SAIL_COLS = 5;
+// Строк по высоте — по числу полосок с запасом; столбцов по хорде много и они
+// сгущены к передней шкаторине. Пузырь заполаскивания живёт в передней пятой
+// части хорды, и на прежних пяти столбцах он целиком помещался в одну ячейку:
+// нарисовать в ней бегущую волну нечем.
+const SAIL_ROWS = 11, SAIL_COLS = 18;
+
+// Доля хорды для столбца c. Показатель больше единицы сгущает точки к нулю,
+// то есть к мачте и штагу.
+const chordAt = c => Math.pow(c / (SAIL_COLS - 1), 1.6);
+
+// Число Струхаля для бьющего полотна. У флага частота колебаний примерно
+// равна 0.3·V/L, где L — длина свободной части; у смятой передней шкаторины
+// механизм тот же. В двенадцать узлов ветра на метровом пузыре выходит около
+// двух герц — столько парус и бьёт.
+const FLAP_ST = 0.3;
+
+// Длина волны тряски по высоте, м: заполаскивание бежит по шкаторине вверх,
+// а не хлопает всем полотном сразу.
+const FLAP_SPAN = 1.6;
+
+// Потолок частоты. У короткого пузыря по формуле выходит за десять герц, а
+// картинка идёт тридцать кадров в секунду: показать такое нечем, и вместо
+// тряски получается дрожь от недосэмплирования. Пять герц глаз читает как
+// «бьёт», и на тридцати кадрах они ещё различимы.
+const FLAP_MAX_HZ = 5;
 
 function sailMesh(colour) {
   const g = new BufferGeometry();
-  g.setAttribute('position',
-    new Float32BufferAttribute(new Float32Array(SAIL_ROWS * SAIL_COLS * 3), 3));
+  const n = SAIL_ROWS * SAIL_COLS;
+  g.setAttribute('position', new Float32BufferAttribute(new Float32Array(n * 3), 3));
+  // Цвет по вершинам — им затемняется смятая ткань: она ловит свет иначе, и
+  // без этого бьющий парус на картинке отличается от стоящего только формой.
+  const col = new Float32Array(n * 3).fill(1);
+  g.setAttribute('color', new Float32BufferAttribute(col, 3));
   const idx = [];
   for (let r = 0; r < SAIL_ROWS - 1; r++) {
     for (let c = 0; c < SAIL_COLS - 1; c++) {
@@ -249,6 +277,7 @@ function sailMesh(colour) {
   g.setIndex(idx);
   const m = new Mesh(g, new MeshStandardMaterial({
     color: new Color(colour), roughness: 0.9, side: DoubleSide,
+    vertexColors: true,
   }));
   m.frustumCulled = false;
   return m;
@@ -304,6 +333,7 @@ function shapeSails(side) {
   boat.sails.forEach((sail, k) => {
     const mesh = k === 0 ? mainSail : jibSail;
     const a = mesh.geometry.attributes.position.array;
+    const col = mesh.geometry.attributes.color.array;
     const base = k * 6;
     // Обводы — снятые с чертежа ломаные, те же самые, по которым физика режет
     // парус на полоски. У грота отсюда берётся серп: задняя шкаторина выгнута
@@ -322,21 +352,56 @@ function shapeSails(side) {
       const g = strips[base + Math.min(5, Math.round(f * 5))] || {};
       const camber = Math.abs(g.camber || 0) * (g.fill == null ? 1 : g.fill);
       const draft = Math.min(0.85, Math.max(0.15, g.draft == null ? 0.5 : g.draft));
+
+      // Заполаскивание. Физика говорит, какая доля хорды от передней шкаторины
+      // потеряла нагрузку; здесь эта доля начинает биться.
+      //
+      // Всё, чем задаётся тряска, посчитано, а не назначено. Размах — из
+      // запаса ткани: лишняя длина укладывается полуволной, и из равенства
+      // длин выходит A = (2/π)·L·√σ. Частота — по Струхалю от местного потока
+      // и длины смятого участка, как у флага. Волна бежит по хорде назад и по
+      // шкаторине вверх.
+      //
+      // В силы это не входит: потери уже сидят в наполнении, а здесь только
+      // картинка. Время берётся физическое, поэтому записанный прогон
+      // выглядит при воспроизведении так же.
+      const lf = Math.min(1, g.luffFrac || 0);
+      const flap = lf > 0.02 && chord > 0.05;
+      let amp = 0, om = 0;
+      if (flap) {
+        const L = lf * chord;
+        amp = (2 / Math.PI) * L * Math.sqrt(Math.max(0, g.slack || 0));
+        const hz = Math.min(FLAP_MAX_HZ, FLAP_ST * Math.max(1, g.ve || 1) / L);
+        om = 2 * Math.PI * hz;
+      }
+      const phase = om * boat.t - h / FLAP_SPAN;
+
       // хорда идёт в корму и под ветер, нормаль к ней смотрит туда же
       const ux = -Math.cos(sh), uy = Math.sin(sh) * side;
       const nx = -uy, ny = ux;
       for (let c = 0; c < SAIL_COLS; c++) {
-        const t = c / (SAIL_COLS - 1);
+        const t = chordAt(c);
         // Горб на своей доле хорды: две сопряжённые полуволны синуса, слева от
         // горба и справа. Глубина — посчитанное пузо.
         const u = t < draft ? 0.5 * t / draft : 0.5 + 0.5 * (t - draft) / (1 - draft);
-        const bulge = camber * chord * Math.sin(Math.PI * u);
-        a[i++] = xLuff + chord * t * ux + bulge * nx;
-        a[i++] = h;
-        a[i++] = chord * t * uy + bulge * ny;
+        let bow = camber * chord * Math.sin(Math.PI * u);
+        let shade = 1;
+        if (flap && t < lf) {
+          // Полотно закреплено на шкаторине и держится там, где нагрузка
+          // ещё есть, — значит размах нулевой на обоих концах пузыря.
+          const v = t / lf;
+          bow += amp * Math.sin(Math.PI * v) * Math.sin(phase - Math.PI * v);
+          shade = 1 - 0.3 * Math.sin(Math.PI * v);
+        }
+        a[i] = xLuff + chord * t * ux + bow * nx;
+        a[i + 1] = h;
+        a[i + 2] = chord * t * uy + bow * ny;
+        col[i] = shade; col[i + 1] = shade; col[i + 2] = shade;
+        i += 3;
       }
     }
     mesh.geometry.attributes.position.needsUpdate = true;
+    mesh.geometry.attributes.color.needsUpdate = true;
     mesh.geometry.computeVertexNormals();
   });
 

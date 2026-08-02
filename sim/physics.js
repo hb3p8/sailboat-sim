@@ -17,7 +17,7 @@
 
 import { WindField } from './wind.js';
 import { Lattice } from './vlm.js';
-import { membraneCamber, slackOf, fillFactor, luffFactor, sectionLift } from './membrane.js';
+import { membraneCamber, slackOf, fillFactor, luffFactor, luffFraction, sectionLift } from './membrane.js';
 import { seaState, addedResistance } from './waves.js';
 
 const DEG = Math.PI / 180;
@@ -484,6 +484,7 @@ export class Boat {
         this.stripState.push({
           h: 0, z: 0, area: a, ws: 0, awaDeg: 0, alphaDeg: 0,
           cl: 0, drive: 0, side: 0, geomDeg: 0,
+          luffFrac: 0, slack: 0, ve: 0,
           // Форма сечения из мембраны: пузо в долях хорды, где стоит горб и
           // сколько передней шкаторины ещё держит форму.
           camber: 0, draft: 0.5, fill: 0,
@@ -500,6 +501,7 @@ export class Boat {
       xi: 0, yi: 0, zi: 0, ve: 0, d1: 0, d2: 0, alpha: 0, awa: 0,
       chord: 0, area: 0, live: false,
       slack: 0, camber: 0, draft: 0.5, fill: 0, aWake: 0, camPanel: 0,
+      luffFrac: 0,
     }));
     this.latQ = new Float64Array(NCHORD);
     this.alphaInd = new Float64Array(n);
@@ -730,9 +732,28 @@ export class Boat {
         // Форму передней шкаторины может сорвать двумя способами: углом атаки
         // ниже идеального (парус заполаскивает целиком) и подбоем от соседнего
         // паруса (сминается только у мачты). Держит меньший из двух.
-        g.fill = Math.min(fillFactor(q),
-                          luffFactor(Math.abs(g.alpha), mem.ideal))
-                 * this.strips[i].mastFill;
+        const soft = Math.min(fillFactor(q),
+                              luffFactor(Math.abs(g.alpha), mem.ideal));
+        g.fill = soft * this.strips[i].mastFill;
+        // Где именно смялась ткань — для отрисовки.
+        //
+        // Два слагаемых берутся по-разному, и путать их нельзя. Подбой от
+        // соседнего паруса виден в самой нагрузке: она переворачивается у
+        // передней шкаторины, и место перелома даёт границу пузыря прямо.
+        // А заполаскивание по углу атаки границы не имеет — там мягчает всё
+        // сечение сразу, и доля берётся из того, сколько формы осталось.
+        //
+        // Первое время здесь стояло 1 − наполнение на оба случая, и подбитый
+        // стакселем грот бился всем полотном, хотя мнётся у него только
+        // передняя треть.
+        //
+        // Третье слагаемое — на случай, когда нагрузка спереди не перевернулась,
+        // а просто исчезла: перелома тогда нет, а держать форму уже нечем.
+        // Дальше первой панели такое смятие без перелома не идёт, отсюда 1/3.
+        g.luffFrac = Math.min(1, Math.max(
+          luffFraction(q),
+          (1 - fillFactor(q)) / NCHORD,
+          1 - luffFactor(Math.abs(g.alpha), mem.ideal)));
         // Γ = π·b·V·(α − α₀): отсюда эффективный угол. Угол нулевой подъёмной
         // силы теперь свой у каждой полоски — тот, что дало ей пузо.
         const aEff = G / (Math.PI * g.chord * g.ve) -
@@ -802,6 +823,9 @@ export class Boat {
       d.indDeg = -rigSide * ai / DEG;
       d.cl = Math.abs(k.cl); d.drive = f1; d.side = f2;
       d.camber = Math.abs(g.camber) * g.fill; d.draft = g.draft; d.fill = g.fill;
+      // Для отрисовки: доля хорды в пузыре, запас ткани и местный поток —
+      // из них берутся размах, частота и место тряски.
+      d.luffFrac = g.luffFrac; d.slack = g.slack; d.ve = g.ve;
     }
 
     if (out.area > 0) {

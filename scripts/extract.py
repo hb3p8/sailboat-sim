@@ -56,8 +56,8 @@ def main():
     sheer_pts = [datum.profile(p) for p in key["sheer_profile"].points]
     deck_pts = [datum.plan(p) for p in key["deck_starboard"].points]
     feats = features.extract(subpaths, datum, views.plan_box, sheer_pts)
-    feats["sail_plan"] = sailplan.find_sail_plan(subpaths, datum,
-                                                 sheer_pts, deck_pts)
+    feats["sail_plan"] = sailplan.find_sail_plan(subpaths, datum, sheer_pts,
+                                                 deck_pts, views.plan_box)
 
     frame_doc = {
         "source": {"file": os.path.basename(pdf), "media_box_pt": list(media),

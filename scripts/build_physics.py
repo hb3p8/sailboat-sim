@@ -250,6 +250,65 @@ def main():
         "%s %d тр." % (k, len(v["indices"]) // 3) for k, v in meshes.items()))
 
 
+def _jib_sheeting(jib, track):
+    """Насколько остро вообще можно выбрать стаксель.
+
+    Шкотовый угол держат две шкаторины — нижняя и задняя, — а концы у них
+    закреплены: галсовый угол на форштевне, фаловый на штаге. Значит шкотовый
+    ходит не как попало, а по окружности вокруг штага. Шкот тянет его к
+    каретке на погоне, и ближе к ДП, чем ближайшая к каретке точка этой
+    окружности, парус не выбрать никаким усилием.
+
+    Отсюда и берётся наименьший вынос. Раньше его не было вовсе: шкот в модели
+    был просто углом, и добранный стаксель ложился в диаметральную плоскость —
+    чего на настоящей лодке не бывает.
+    """
+    if track is None:
+        return None
+    tack = (jib["tack"][0], 0.0, jib["tack"][1])
+    head = (jib["head_aft"][0], 0.0, jib["head_aft"][1])
+    clew = (jib["clew"][0], 0.0, jib["clew"][1])
+    lead = (track["car_mm"][0], track["car_mm"][1], track["deck_z_mm"])
+
+    def sub(a, b):
+        return tuple(p - q for p, q in zip(a, b))
+
+    def dot(a, b):
+        return sum(p * q for p, q in zip(a, b))
+
+    def nrm(a):
+        return math.sqrt(dot(a, a))
+
+    foot = nrm(sub(clew, tack))
+    axis = sub(head, tack)
+    axis = tuple(c / nrm(axis) for c in axis)
+    mid = tuple(tack[i] + dot(sub(clew, tack), axis) * axis[i] for i in range(3))
+    e1 = sub(clew, mid)
+    radius = nrm(e1)
+    e1 = tuple(c / radius for c in e1)
+    e2 = (axis[1] * e1[2] - axis[2] * e1[1],
+          axis[2] * e1[0] - axis[0] * e1[2],
+          axis[0] * e1[1] - axis[1] * e1[0])
+
+    best = None
+    for k in range(0, 9001):
+        a = -k * 0.01 * math.pi / 180.0        # шкотовый уходит на подветренный борт
+        c = tuple(mid[i] + radius * (math.cos(a) * e1[i] + math.sin(a) * e2[i])
+                  for i in range(3))
+        d = nrm(sub(c, lead))
+        if best is None or d < best[0]:
+            best = (d, c)
+    d, c = best
+    return {"lead_m": [round(v / 1000.0, 4) for v in lead],
+            "track_m": [[round(track["aft_mm"][0] / 1000.0, 4),
+                         round(track["aft_mm"][1] / 1000.0, 4)],
+                        [round(track["fwd_mm"][0] / 1000.0, 4),
+                         round(track["fwd_mm"][1] / 1000.0, 4)]],
+            "min_set_deg": round(math.degrees(math.asin(abs(c[1]) / foot)), 2),
+            "clew_hard_m": [round(v / 1000.0, 4) for v in c],
+            "sheet_m": round(d / 1000.0, 4)}
+
+
 def _rig(sp):
     """Риг по обводам, снятым с плана парусности (`sv20/sailplan.py`).
 
@@ -276,6 +335,7 @@ def _rig(sp):
                 "area_m2": s["area_m2"]}
 
     main, jib = sp["main"], sp["jib"]
+    sheeting = _jib_sheeting(jib, sp.get("jib_track"))
     total = main["area_m2"] + jib["area_m2"]
     mast_top, mast_deck = sp["mast"]["top_mm"], sp["mast"]["deck_mm"]
     shroud = sp["shroud"]
@@ -301,7 +361,8 @@ def _rig(sp):
         "ce_height_m": round((main["centroid_mm"][1] * main["area_m2"] +
                               jib["centroid_mm"][1] * jib["area_m2"])
                              / total / 1000.0, 4),
-        "sails": {"main": poly(main), "jib": poly(jib)},
+        "sails": {"main": poly(main),
+                  "jib": dict(poly(jib), sheeting=sheeting)},
         "forestay": {"stem": m(sp["forestay"]["stem_mm"]),
                      "hounds": m(sp["forestay"]["hounds_mm"])},
         "shroud": None if shroud is None else {

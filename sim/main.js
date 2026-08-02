@@ -257,6 +257,28 @@ const mainSail = sailMesh(0xf7f9fb);
 const jibSail = sailMesh(0xeef2f6);
 boatGroup.add(mainSail, jibSail);
 
+// Стаксель-шкот и погон под ним. Нарисованы затем, что именно они и объясняют,
+// почему добранный стаксель стоит не в ДП: шкотовый угол тянут к каретке на
+// погоне, к точке у борта.
+const jibSheetGeo = new BufferGeometry();
+jibSheetGeo.setAttribute('position',
+  new Float32BufferAttribute(new Float32Array(6), 3));
+const jibSheet = new Line(jibSheetGeo,
+  new LineBasicMaterial({ color: 0x3d4650 }));
+jibSheet.frustumCulled = false;
+boatGroup.add(jibSheet);
+{
+  const sh = rig.sails.jib.sheeting;
+  if (sh) {
+    for (const board of [1, -1]) {
+      const g = new BufferGeometry().setFromPoints([
+        new Vector3(sh.track_m[0][0], sh.lead_m[2], sh.track_m[0][1] * board),
+        new Vector3(sh.track_m[1][0], sh.lead_m[2], sh.track_m[1][1] * board)]);
+      boatGroup.add(new Line(g, new LineBasicMaterial({ color: 0x8d98a4 })));
+    }
+  }
+}
+
 // Парус рисуется ровно там, где стоит в расчёте: шкот его только ограничивает,
 // а твист берётся действующий, вместе с той добавкой, которую даёт провисший
 // шкот. Иначе на потравленных шкотах нарисованный парус стоит колом, а
@@ -266,7 +288,8 @@ function shapeSails(side, luffing) {
   // Та же формула, что в physics.sailForces: парус держится шкотом до своего
   // предела, дальше сваливается по потоку.
   const setOf = sail => {
-    const held = Math.min(boat.o.sheet, awa);
+    const trim = Math.max(sail.minSet || 0, boat.o.sheet);
+    const held = Math.min(trim, awa);
     const over = Math.min(1, Math.max(0, (boat.o.sheet - sail.maxSheet) / (25 * D)));
     return held + (awa - held) * over;
   };
@@ -302,6 +325,20 @@ function shapeSails(side, luffing) {
     mesh.geometry.attributes.position.needsUpdate = true;
     mesh.geometry.computeVertexNormals();
   });
+
+  // Шкот от шкотового угла стакселя к каретке. Шкотовый угол здесь — нижняя
+  // точка задней шкаторины нарисованного паруса, то есть ровно та, что
+  // получилась из расчёта.
+  const sh = rig.sails.jib.sheeting;
+  if (sh) {
+    const a = jibSail.geometry.attributes.position.array;
+    const k = (SAIL_COLS - 1) * 3;
+    const p = jibSheetGeo.attributes.position.array;
+    p[0] = a[k]; p[1] = a[k + 1]; p[2] = a[k + 2];
+    p[3] = sh.lead_m[0]; p[4] = sh.lead_m[2]; p[5] = sh.lead_m[1] * side;
+    jibSheetGeo.attributes.position.needsUpdate = true;
+    jibSheetGeo.computeBoundingSphere();
+  }
 }
 
 // --- бурун и дорожка пути -----------------------------------------------------

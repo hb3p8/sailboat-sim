@@ -292,9 +292,20 @@ export class Boat {
     // градусов нечем: травить дальше — значит просто отпустить парус, а не
     // вынести его. За пределом он не стоит на упоре, а сваливается по потоку
     // и полощет; переход растянут на SHEET_GIVE, чтобы не было скачка.
+    //
+    // minSet — наименьший вынос, острее которого парус не выбрать. У грота
+    // его нет: гик ходит от самой ДП. У стакселя есть, и он не назначен, а
+    // посчитан по геометрии (scripts/build_physics.py, _jib_sheeting): концы
+    // обеих шкаторин закреплены, поэтому шкотовый угол ходит по окружности
+    // вокруг штага, а шкот тянет его к каретке на погоне — к точке у борта, а
+    // не в ДП. Ближе к ДП, чем ближайшая точка этой окружности, парус не
+    // выбрать никаким усилием.
+    const jib = rig.sails.jib;
     const sails = [
-      Object.assign({ maxSheet: 90 * DEG }, rig.sails.main),
-      Object.assign({ maxSheet: 35 * DEG }, rig.sails.jib),
+      Object.assign({ maxSheet: 90 * DEG, minSet: 0 }, rig.sails.main),
+      Object.assign({ maxSheet: 35 * DEG,
+                      minSet: (jib.sheeting ? jib.sheeting.min_set_deg : 0) * DEG },
+                    jib),
     ];
     // Отрисовка строит поверхность парусов по этим же обводам и по тому же
     // закону твиста. Иначе нарисованный парус и посчитанный расходятся, и
@@ -336,7 +347,7 @@ export class Boat {
         const f = span > 1e-9 ? (h - zLo) / span : 0.5;
         a *= norm;
         this.strips.push({
-          area: a, ar: ar, maxSheet: s.maxSheet,
+          area: a, ar: ar, maxSheet: s.maxSheet, minSet: s.minSet,
           h: h,                               // высота по мачте, без крена
           hLo: hLo, hHi: hHi,                 // границы размаха полоски
           chordLo: chordAt(hLo), chordHi: chordAt(hHi),
@@ -454,7 +465,9 @@ export class Boat {
     for (let i = 0; i < NS; i++) {
       const st = this.strips[i], d = this.stripState[i], g = calc[i];
       const area = st.area * scale;
-      const sheet = this.o.sheet + twist * st.twistF;
+      // Выбрать острее, чем позволяет погон, нельзя: дальше шкот тянул бы
+      // шкотовый угол сквозь каретку.
+      const sheet = Math.max(st.minSet, this.o.sheet) + twist * st.twistF;
       const chord = st.chord;
       // Положение полоски в горизонтной системе. Точка приложения — центр
       // давления её хорды, а не мачта: поэтому при потраве шкота парусность

@@ -298,6 +298,82 @@ def _find_shroud(segs, mast):
     return _line(best["a"], best["b"]), best["b"]
 
 
+def _find_jib_track(subpaths, datum, plan_box, deck_pts, x_range=(3000.0, 5000.0)):
+    """Погон стаксель-шкота на виде сверху.
+
+    Признак — две длинные тонкие параллели, между которыми насверлены дырки.
+    Параллелей на носовой палубе хватает и без погона (одна только рама люка
+    даёт четыре), а вот отверстий по всей длине нет ни у чего другого: по ним
+    погон и опознаётся.
+
+    Нужен он затем, что шкотовый угол стакселя тянут не в ДП, а к каретке на
+    этом рельсе, и острее её парус не выбрать.
+    """
+    if plan_box is None or not deck_pts:
+        return None
+    x0, y0, x1, y1 = plan_box
+    segs = []
+    for sp in subpaths:
+        if not all(x0 <= p[0] <= x1 and y0 <= p[1] <= y1 for p in sp.points):
+            continue
+        if len(sp.points) != 2:
+            continue
+        a, b = datum.plan(sp.points[0]), datum.plan(sp.points[1])
+        if a[0] > b[0]:
+            a, b = b, a
+        length = math.hypot(b[0] - a[0], b[1] - a[1])
+        if length < 200.0 or length > 500.0:
+            continue
+        mx, my = (a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0
+        if not (x_range[0] <= mx <= x_range[1]) or my <= 0:
+            continue
+        f = abs(my) / max(1.0, _half_beam(deck_pts, mx))
+        if not (0.2 <= f <= 0.65):
+            continue
+        segs.append((a, b, math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))))
+
+    holes = []
+    for sp in subpaths:
+        if len(sp.points) < 4 or not all(x0 <= p[0] <= x1 and y0 <= p[1] <= y1
+                                         for p in sp.points):
+            continue
+        q = [datum.plan(p) for p in sp.points]
+        w = max(p[0] for p in q) - min(p[0] for p in q)
+        h = max(p[1] for p in q) - min(p[1] for p in q)
+        if not (6.0 <= w <= 45.0 and 6.0 <= h <= 45.0):
+            continue
+        holes.append((sum(p[0] for p in q) / len(q), sum(p[1] for p in q) / len(q)))
+
+    best = None
+    for i in range(len(segs)):
+        for j in range(i + 1, len(segs)):
+            a, b, ang = segs[i]
+            c, d, ang2 = segs[j]
+            if abs(ang - ang2) > 1.0:
+                continue
+            gap = abs((a[1] + b[1]) / 2.0 - (c[1] + d[1]) / 2.0)
+            if not (8.0 <= gap <= 50.0):
+                continue
+            if min(b[0], d[0]) - max(a[0], c[0]) < 150.0:
+                continue
+            mid = _line(((a[0] + c[0]) / 2.0, (a[1] + c[1]) / 2.0),
+                        ((b[0] + d[0]) / 2.0, (b[1] + d[1]) / 2.0))
+            lo, hi = min(a[0], c[0]), max(b[0], d[0])
+            n = sum(1 for p in holes
+                    if lo <= p[0] <= hi and _off(mid, p) < 40.0)
+            if n >= 4 and (best is None or n > best[0]):
+                best = (n, a, b, c, d)
+    if best is None:
+        return None
+    _, a, b, c, d = best
+    aft = ((a[0] + c[0]) / 2.0, (a[1] + c[1]) / 2.0)
+    fwd = ((b[0] + d[0]) / 2.0, (b[1] + d[1]) / 2.0)
+    return {"aft_mm": [round(aft[0], 1), round(aft[1], 1)],
+            "fwd_mm": [round(fwd[0], 1), round(fwd[1], 1)],
+            "car_mm": [round((aft[0] + fwd[0]) / 2.0, 1),
+                       round((aft[1] + fwd[1]) / 2.0, 1)]}
+
+
 def _half_beam(deck_pts, x):
     """Полуширина по линии борта на виде сверху в заданной абсциссе."""
     pts = sorted(deck_pts)
@@ -320,12 +396,13 @@ def _deck_z(sheer_pts, x):
     return pts[0][1] if x < pts[0][0] else pts[-1][1]
 
 
-def find_sail_plan(subpaths, datum, sheer_pts=None, deck_pts=None):
+def find_sail_plan(subpaths, datum, sheer_pts=None, deck_pts=None, plan_box=None):
     """Обводы обоих парусов, рангоут и стоячий такелаж, всё в миллиметрах.
 
     `sheer_pts` — линия борта на виде сбоку, `deck_pts` — она же на виде
-    сверху. Нужны, чтобы посадить на палубу пятку мачты и путенс вант: на
-    самом плане парусности их закрывает вид сверху.
+    сверху, `plan_box` — габарит вида сверху. Нужны, чтобы посадить на палубу
+    пятку мачты, путенс вант и погон стаксель-шкота: на самом плане парусности
+    их закрывает вид сверху, а погона там нет вовсе.
     """
     segs = _segments(subpaths, datum)
 
@@ -352,6 +429,7 @@ def find_sail_plan(subpaths, datum, sheer_pts=None, deck_pts=None):
             % (total, SAIL_AREA_DRAWN_M2))
 
     shroud = _find_shroud(segs, mast)
+    track = _find_jib_track(subpaths, datum, plan_box, deck_pts)
 
     mast_top = max([mast_seg["a"], mast_seg["b"]], key=lambda p: p[1])
     # Пятка мачты на чертеже не видна — её закрывает вид сверху, — поэтому за
@@ -381,6 +459,14 @@ def find_sail_plan(subpaths, datum, sheer_pts=None, deck_pts=None):
                           math.atan2(shroud[0][1][1], shroud[0][1][0])), 2)}
         if deck_pts:
             shroud_out["chainplate_y_mm"] = round(_half_beam(deck_pts, x), 1)
+
+    # Погон лежит на палубе, и его высота на плане не показана — берётся с
+    # линии борта в той же абсциссе.
+    track_out = None
+    if track is not None:
+        track_out = dict(track)
+        if sheer_pts:
+            track_out["deck_z_mm"] = round(_deck_z(sheer_pts, track["car_mm"][0]), 1)
 
     return {
         "main": {
@@ -420,6 +506,7 @@ def find_sail_plan(subpaths, datum, sheer_pts=None, deck_pts=None):
         "forestay": {"stem_mm": rd([fore["stay"][0]])[0],
                      "hounds_mm": rd([fore["stay"][1]])[0]},
         "shroud": shroud_out,
+        "jib_track": track_out,
         "area_total_m2": round(total, 3),
         "area_drawn_m2": SAIL_AREA_DRAWN_M2,
     }

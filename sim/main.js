@@ -283,7 +283,7 @@ boatGroup.add(jibSheet);
 // а твист берётся действующий, вместе с той добавкой, которую даёт провисший
 // шкот. Иначе на потравленных шкотах нарисованный парус стоит колом, а
 // посчитанный полощет.
-function shapeSails(side, luffing) {
+function shapeSails(side) {
   const awa = boat.telemetry ? boat.telemetry.awaDeg * D : Math.PI;
   // Та же формула, что в physics.sailForces: парус держится шкотом до своего
   // предела, дальше сваливается по потоку.
@@ -295,10 +295,16 @@ function shapeSails(side, luffing) {
   };
   boomPivot.rotation.y = setOf(boat.sails[0]) * side;
   const twist = boat.twistEff || boat.o.twist;
-  const belly = luffing ? 0.02 : 0.10;      // пузо, доля хорды
+  // Пузо и положение горба больше не назначаются: их посчитала мембрана, по
+  // полоске на каждую. Раньше здесь стояло 0.10 хорды по синусу — то есть
+  // картинка жила отдельно от расчёта и врала вдвойне: и глубиной (в физике
+  // было 0.026), и тем, что горб всегда стоял на середине. Теперь у смятого
+  // спереди паруса горб уезжает назад ровно так, как получилось в расчёте.
+  const strips = boat.stripCalc;
   boat.sails.forEach((sail, k) => {
     const mesh = k === 0 ? mainSail : jibSail;
     const a = mesh.geometry.attributes.position.array;
+    const base = k * 6;
     // Обводы — снятые с чертежа ломаные, те же самые, по которым физика режет
     // парус на полоски. У грота отсюда берётся серп: задняя шкаторина выгнута
     // в корму почти на две трети метра, и на картинке это сразу узнаётся.
@@ -311,12 +317,20 @@ function shapeSails(side, luffing) {
       const h = zLo + f * (zHi - zLo);
       const xLuff = luffAt(h), chord = Math.max(0, xLuff - leechAt(h));
       const sh = setOf(sail) + twist * Math.pow(f, 1.3);
+      // Пузо берётся у ближайшей по высоте полоски: их шесть на парус, строк
+      // сетки одиннадцать.
+      const g = strips[base + Math.min(5, Math.round(f * 5))] || {};
+      const camber = Math.abs(g.camber || 0) * (g.fill == null ? 1 : g.fill);
+      const draft = Math.min(0.85, Math.max(0.15, g.draft == null ? 0.5 : g.draft));
       // хорда идёт в корму и под ветер, нормаль к ней смотрит туда же
       const ux = -Math.cos(sh), uy = Math.sin(sh) * side;
       const nx = -uy, ny = ux;
       for (let c = 0; c < SAIL_COLS; c++) {
         const t = c / (SAIL_COLS - 1);
-        const bulge = belly * chord * Math.sin(Math.PI * t);
+        // Горб на своей доле хорды: две сопряжённые полуволны синуса, слева от
+        // горба и справа. Глубина — посчитанное пузо.
+        const u = t < draft ? 0.5 * t / draft : 0.5 + 0.5 * (t - draft) / (1 - draft);
+        const bulge = camber * chord * Math.sin(Math.PI * u);
         a[i++] = xLuff + chord * t * ux + bulge * nx;
         a[i++] = h;
         a[i++] = chord * t * uy + bulge * ny;
@@ -767,7 +781,7 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => { keys[e.code] = false; });
 
 const ui = {};
-for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist'])
+for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draft'])
   ui[id] = document.getElementById(id);
 
 const CAMS = ['погоня', 'сбоку', 'с борта', 'сверху', 'свободная'];
@@ -842,6 +856,7 @@ function readControls(dt) {
   o.crewMass = o.crewHike > 0 ? 240 : 0;
   o.sailScale = parseFloat(ui.sailscale.value);
   o.twist = parseFloat(ui.twist.value) * D;
+  o.draft = parseFloat(ui.draft.value) / 100;
   // Порывистость одним ползунком: сильнее дует — сильнее и заходит. Порознь
   // эти две вещи на воде не встречаются, а два ползунка вместо одного только
   // мешают понять, что происходит.
@@ -911,7 +926,7 @@ function frame() {
   // за конечное время, так что гик переходит плавно, а не телепортируется.
   // До первого шага физики он ещё не поставлен.
   const side = boat.rigSide != null ? boat.rigSide : 1;
-  shapeSails(side, (t.alphaDeg || 0) < 4);
+  shapeSails(side);
 
   const amp = 0.10 + 0.035 * boat.o.windSpeed;
   sea.position.set(Math.round(ix / CELL) * CELL, 0, Math.round(iy / CELL) * CELL);
@@ -1077,10 +1092,15 @@ function updateRose(t) {
 
 // Панель рига: что происходит по высоте паруса.
 //
-// Три столбца с общей вертикальной осью — высотой над водой. Первый показывает
-// профиль ветра, второй угол атаки каждой полоски, третий её вклад в боковую
-// силу. Вместе они отвечают на вопрос, ради которого всё это и делалось:
-// почему верх паруса работает не так, как низ, и что с этим делает твист.
+// Четыре столбца с общей вертикальной осью — высотой над водой. Первый
+// показывает профиль ветра, второй угол атаки каждой полоски, третий её вклад
+// в боковую силу. Вместе они отвечают на вопрос, ради которого всё это и
+// делалось: почему верх паруса работает не так, как низ, и что с этим делает
+// твист.
+//
+// Четвёртый — посчитанное мембраной пузо. Оно тут не для красоты: пузо
+// показывает, где парус ещё держит форму, а где ткань смялась и он превратился
+// в плоскую тряпку. Ноль в этом столбце и есть заполаскивание.
 const rigSvg = document.getElementById('rig');
 const RIG_W = 96, RIG_H = 132, RIG_PAD = 16;
 
@@ -1151,6 +1171,13 @@ function updateRig(t) {
   }
   svg += '</g>';
 
+  // --- пузо: сколько его осталось после того, как посчиталась форма
+  const cMax = 0.16;
+  const xc = v => 8 + (Math.min(cMax, Math.max(0, v)) / cMax) * (RIG_W - 20);
+  svg += axis(3, 'пузо, % хорды', [[8, '0'], [RIG_W - 30, (100 * cMax).toFixed(0)]]);
+  svg += poly(main.map(s => [xc(s.camber), y(s.z)]), 'cam') +
+         poly(jib.map(s => [xc(s.camber), y(s.z)]), 'camj') + '</g>';
+
   rigSvg.innerHTML = svg;
   document.getElementById('rignote').innerHTML =
     'ЦП по нагрузке <b>' + (t.ceHeightM || 0).toFixed(2) + ' м</b>' +
@@ -1164,7 +1191,7 @@ document.getElementById('dump').addEventListener('click', saveDump);
 // Тот же дамп доступен из консоли — удобно, когда файл забирать некуда:
 // copy(JSON.stringify(sv20dump()))
 window.sv20dump = dumpState;
-shapeSails(1, false);
+shapeSails(1);
 setDebug(false);
 // WebGPU поднимается асинхронно: устройство запрашивается у системы. До этого
 // рисовать нечем, поэтому цикл запускается после init.

@@ -75,7 +75,7 @@
   #dump:hover { background: rgba(255,255,255,.14); }
   #dump:active { background: rgba(255,255,255,.22); }
   #rigcard { bottom: 52px; left: 14px; padding: 8px 10px 6px; }
-  #rig { display: block; width: 288px; height: 132px; }
+  #rig { display: block; width: 384px; height: 132px; }
   #rig .cap {
     fill: var(--dim); font-size: 8.5px; text-anchor: middle;
     font-family: inherit;
@@ -85,6 +85,8 @@
   #rig .zero { stroke: rgba(110,231,168,.45); stroke-dasharray: 2 2; }
   #rig .stall { stroke: rgba(255,120,100,.45); stroke-dasharray: 2 2; }
   #rig .w { fill: none; stroke: #7fc4ff; stroke-width: 1.6; }
+  #rig .cam { fill: none; stroke: #f0c674; stroke-width: 1.6; }
+  #rig .camj { fill: none; stroke: #b39554; stroke-width: 1.3; stroke-dasharray: 3 2; }
   #rig .a { fill: none; stroke: #e6edf4; stroke-width: 1.6; }
   #rig .aj { fill: none; stroke: #9aa8b8; stroke-width: 1.3; stroke-dasharray: 3 2; }
   #rig .bm { fill: rgba(255,207,90,.75); }
@@ -133,11 +135,14 @@
     <input id="gust" type="range" min="0" max="0.45" step="0.01" value="0.18"></label>
   <label><span class="cap"><span>Твист паруса</span><span id="v-twist"></span></span>
     <input id="twist" type="range" min="0" max="30" step="1" value="8"></label>
+
+  <label><span class="cap"><span>Пузо парусов</span><span id="v-draft"></span></span>
+    <input id="draft" type="range" min="40" max="130" step="5" value="100"></label>
   <div class="cap"><span>Камера</span><span id="cammode">погоня</span></div>
   <button id="dump" type="button">Сдампать состояние</button>
 </div>
 <div id="rigcard" class="card" hidden>
-  <svg id="rig" viewBox="0 0 288 132"></svg>
+  <svg id="rig" viewBox="0 0 384 132"></svg>
   <div id="rignote"></div>
 </div>
 <div id="keys" class="card">
@@ -181,6 +186,7 @@ const MESH = /*__MESH__*/ null;
 const BUILD = /*__BUILD__*/ null;
 /*__WIND__*/
 /*__VLM__*/
+/*__MEMBRANE__*/
 /*__TRACE__*/
 /*__PHYSICS__*/
 /*__MAIN__*/
@@ -195,6 +201,7 @@ const BUILD = /*__BUILD__*/ null;
     sailscale: v => '×' + (+v).toFixed(2),
     gust: v => (+v === 0 ? 'ровный' : '±' + (+v * 100).toFixed(0) + '%'),
     twist: v => (+v).toFixed(0) + '°',
+    draft: v => (+v).toFixed(0) + '%',
   };
   for (const id of Object.keys(fmt)) {
     const el = document.getElementById(id), out = document.getElementById('v-' + id);

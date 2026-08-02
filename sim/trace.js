@@ -17,7 +17,7 @@ export const TRACE_FIELDS = [
   // состояние лодки — по нему она восстанавливается целиком
   't', 'x', 'y', 'psi', 'u', 'v', 'r', 'phi', 'p_', 'rigSide', 'hike',
   // органы управления и условия — всё, что можно тронуть на ходу
-  'rudder', 'sheet', 'twist', 'twistEff',
+  'rudder', 'sheet', 'twist', 'twistEff', 'draft',
   'windSpeed', 'windDir', 'gust', 'shift', 'crewHike', 'crewMass', 'sailScale',
   // показания — для сверки при воспроизведении и для разбора без пересчёта
   'speedKn', 'heelDeg', 'leewayDeg', 'driveN', 'sideN', 'alphaDeg',
@@ -26,25 +26,38 @@ export const TRACE_FIELDS = [
 
 // Поля, которые при воспроизведении надо подавать обратно в лодку.
 export const TRACE_INPUTS = [
-  'rudder', 'sheet', 'twist', 'windSpeed', 'windDir',
+  'rudder', 'sheet', 'twist', 'draft', 'windSpeed', 'windDir',
   'crewHike', 'crewMass', 'sailScale',
 ];
 
+// Округление разное, и не для красоты.
+//
+// Состояние и органы управления — то, из чего прогон восстанавливается, —
+// пишутся с девятью знаками. После мембраны модель стала заметно чувствительнее:
+// парус работает у самого горба кривой сечения, где наклон крутой, и возмущение
+// начальной скорости усиливается примерно в триста раз за двадцать пять секунд.
+// Прежних четырёх знаков на это уже не хватает — своё же округление вырастает
+// до сотых долей узла.
+//
+// Показания округляются по-прежнему до четвёртого знака: их никуда не подают,
+// они только для сверки и разбора, и на них уходит половина объёма файла.
+const r9 = v => Math.round((v || 0) * 1e9) / 1e9;
 const r4 = v => Math.round((v || 0) * 1e4) / 1e4;
 
 export function traceFrame(boat) {
   const t = boat.telemetry;
   if (!t) return null;
   return [
-    r4(boat.t), r4(boat.x), r4(boat.y), r4(boat.psi),
-    r4(boat.u), r4(boat.v), r4(boat.r), r4(boat.phi), r4(boat.p_), boat.rigSide,
+    r9(boat.t), r9(boat.x), r9(boat.y), r9(boat.psi),
+    r9(boat.u), r9(boat.v), r9(boat.r), r9(boat.phi), r9(boat.p_), boat.rigSide,
     // Момент откренивания — тоже состояние: экипаж отзывается с запаздыванием.
     // Без него запись не воспроизводится, и это поймал тест, а не глаз.
-    r4(boat.hike),
-    r4(boat.o.rudder), r4(boat.o.sheet), r4(boat.o.twist), r4(boat.twistEff),
-    r4(boat.o.windSpeed), r4(boat.o.windDir),
-    r4(boat.wind.o.gust), r4(boat.wind.o.shift),
-    r4(boat.o.crewHike), r4(boat.o.crewMass), r4(boat.o.sailScale),
+    r9(boat.hike),
+    r9(boat.o.rudder), r9(boat.o.sheet), r9(boat.o.twist), r4(boat.twistEff),
+    r9(boat.o.draft),
+    r9(boat.o.windSpeed), r9(boat.o.windDir),
+    r9(boat.wind.o.gust), r9(boat.wind.o.shift),
+    r9(boat.o.crewHike), r9(boat.o.crewMass), r9(boat.o.sailScale),
     r4(t.speedKn), r4(t.heelDeg), r4(t.leewayDeg), r4(t.driveN), r4(t.sideN),
     r4(t.alphaDeg), r4(t.awaDeg), r4(t.twsKn),
   ];

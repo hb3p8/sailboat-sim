@@ -42,8 +42,14 @@ def _git(*args):
 
 
 def strip_modules(src):
-    """Убрать import/export: код вклеивается в общий блок, а не грузится."""
-    src = re.sub(r"^\s*import\s.*?;\s*$", "", src, flags=re.M)
+    """Убрать import/export: код вклеивается в общий блок, а не грузится.
+
+    Импорт может занимать несколько строк — поэтому DOTALL и нежадный поиск до
+    первой точки с запятой. С построчным разбором такой импорт оставался в
+    тексте и ронял всю сборку синтаксической ошибкой, причём молча: страница
+    открывалась пустой, а ошибка была на семьдесят восьмой тысяче строк.
+    """
+    src = re.sub(r"^[ \t]*import\s[^;]*?;[ \t]*$", "", src, flags=re.M | re.S)
     src = re.sub(r"^\s*export\s+(const|let|class|function)\s", r"\1 ", src, flags=re.M)
     # Реэкспорт `export {...} from './three.core.js';` — у three.webgpu.js такой
     # есть, и он длиной в шестьдесят тысяч символов. Во вклеенном виде он не
@@ -88,12 +94,21 @@ def main():
                         strip_modules(open(os.path.join(sim, "wind.js")).read()))
     html = html.replace("/*__VLM__*/",
                         strip_modules(open(os.path.join(sim, "vlm.js")).read()))
+    html = html.replace("/*__MEMBRANE__*/",
+                        strip_modules(open(os.path.join(sim, "membrane.js")).read()))
     html = html.replace("/*__TRACE__*/",
                         strip_modules(open(os.path.join(sim, "trace.js")).read()))
     html = html.replace("/*__PHYSICS__*/",
                         strip_modules(open(os.path.join(sim, "physics.js")).read()))
     html = html.replace("/*__MAIN__*/",
                         strip_modules(open(os.path.join(sim, "main.js")).read()))
+
+    # Незаполненные метки — это молча выпавший из сборки модуль. Проверяется
+    # здесь, а не в браузере: пустая страница с синтаксической ошибкой на
+    # семидесятой тысяче строк — не то, по чему такое ищут.
+    left = re.findall(r"/\*__[A-Z]+__\*/", html)
+    if left:
+        raise SystemExit("в шаблоне остались метки: " + ", ".join(sorted(set(left))))
 
     dst = os.path.join(sim, "index.html")
     with open(dst, "w") as f:

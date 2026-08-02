@@ -170,18 +170,59 @@ boatGroup.add(rudderPivot);
 const rig = PACK.rig;
 const spar = new MeshStandardMaterial({
   color: 0xc3ccd4, roughness: 0.35, metalness: 0.6 });
-const mast = new Mesh(
-  new CylinderGeometry(0.05, 0.062, rig.mast_height_m, 10), spar);
-mast.position.set(rig.mast_x_m, rig.mast_height_m / 2 + 0.62, 0);
+const wireMat = new MeshStandardMaterial({
+  color: 0x7d8894, roughness: 0.4, metalness: 0.8 });
+
+// Трос или трубка между двумя точками. Всё стоячее такелажное хозяйство
+// вычерчено на плане парусности, и здесь оно ставится по снятым точкам, а не
+// на глаз: штаг от форштевня к узлу на мачте, ванты от путенсов туда же.
+function strut(a, b, radius, mat) {
+  const dir = new Vector3().subVectors(b, a);
+  const m = new Mesh(new CylinderGeometry(radius, radius, dir.length(), 6), mat);
+  m.position.copy(a).addScaledVector(dir, 0.5);
+  m.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), dir.clone().normalize());
+  return m;
+}
+
+// Мачта с наклоном: на чертеже она завалена в корму на три с половиной
+// градуса, и это видно — топ уходит на полметра назад от пятки.
+const mastFoot = new Vector3(rig.mast_x_m, rig.mast_deck_z_m, 0);
+const mastTop = new Vector3(rig.mast_top_x_m, rig.mast_height_m, 0);
+const mast = strut(mastFoot, mastTop, 0.055, spar);
 boatGroup.add(mast);
 
-const boom = new Mesh(new CylinderGeometry(0.045, 0.045, 2.9, 8), spar);
+const boom = new Mesh(new CylinderGeometry(0.045, 0.045, rig.boom_m, 8), spar);
 boom.rotation.z = Math.PI / 2;
-boom.position.set(-1.45, 0, 0);
+boom.position.set(-rig.boom_m / 2, 0, 0);
 const boomPivot = new Group();
-boomPivot.position.set(rig.mast_x_m, 1.0, 0);
+boomPivot.position.set(rig.sails.main.tack[0], rig.boom_z_m, 0);
 boomPivot.add(boom);
 boatGroup.add(boomPivot);
+
+// Штаг и ванты. Спредеры на чертеже не показаны — их закрывает наложенный
+// сверху вид сверху, — но без них вантина с таким выносом не держалась бы,
+// поэтому они ставятся упором в саму вантину на половине высоты узла.
+// Проекция вантины на чертеже прямая, изломов у неё нет, так что и здесь она
+// рисуется прямой, а спредер её только подпирает.
+{
+  const fs = rig.forestay;
+  boatGroup.add(strut(new Vector3(fs.stem[0], fs.stem[1], 0),
+                      new Vector3(fs.hounds[0], fs.hounds[1], 0), 0.012, wireMat));
+  const sh = rig.shroud;
+  if (sh) {
+    const tang = new Vector3(sh.tang[0], sh.tang[1], 0);
+    const SPREADER_F = 0.48;    // доля высоты узла, где стоит спредер
+    for (const board of [1, -1]) {
+      const foot = new Vector3(sh.chainplate[0], sh.chainplate[1],
+                               sh.chainplate_y_m * board);
+      boatGroup.add(strut(foot, tang, 0.010, wireMat));
+      const tip = new Vector3().lerpVectors(foot, tang, SPREADER_F);
+      const onMast = new Vector3().lerpVectors(mastFoot, mastTop,
+        (tip.y - mastFoot.y) / (mastTop.y - mastFoot.y));
+      boatGroup.add(strut(onMast, tip, 0.018, spar));
+    }
+  }
+}
 
 // --- паруса -----------------------------------------------------------------
 
@@ -190,7 +231,9 @@ boatGroup.add(boomPivot);
 // угол и выгнута пузом под ветер. Раньше здесь была отдельная приблизительная
 // заглушка из пяти точек, и нарисованный парус жил своей жизнью — с твистом
 // это стало видно сразу: латы торчали за шкаторину.
-const SAIL_ROWS = 7, SAIL_COLS = 5;
+// Строк по высоте стало больше: у грота серп ломаной в пять звеньев, и на
+// семи станциях он срезался.
+const SAIL_ROWS = 11, SAIL_COLS = 5;
 
 function sailMesh(colour) {
   const g = new BufferGeometry();
@@ -233,14 +276,17 @@ function shapeSails(side, luffing) {
   boat.sails.forEach((sail, k) => {
     const mesh = k === 0 ? mainSail : jibSail;
     const a = mesh.geometry.attributes.position.array;
-    const zLo = Math.max(sail.tack[1], sail.clew[1]), zHi = sail.head[1];
-    const edge = (e, z) => e[0] + (sail.head[0] - e[0]) * (z - e[1]) /
-                                  (sail.head[1] - e[1]);
+    // Обводы — снятые с чертежа ломаные, те же самые, по которым физика режет
+    // парус на полоски. У грота отсюда берётся серп: задняя шкаторина выгнута
+    // в корму почти на две трети метра, и на картинке это сразу узнаётся.
+    const zLo = Math.max(sail.tack[1], sail.clew[1]);
+    const zHi = Math.min(sail.head[1], sail.head_aft[1]);
+    const luffAt = edgeFn(sail.luff), leechAt = edgeFn(sail.leech);
     let i = 0;
     for (let r = 0; r < SAIL_ROWS; r++) {
       const f = r / (SAIL_ROWS - 1);
       const h = zLo + f * (zHi - zLo);
-      const xLuff = edge(sail.tack, h), chord = Math.max(0, xLuff - edge(sail.clew, h));
+      const xLuff = luffAt(h), chord = Math.max(0, xLuff - leechAt(h));
       const sh = setOf(sail) + twist * Math.pow(f, 1.3);
       // хорда идёт в корму и под ветер, нормаль к ней смотрит туда же
       const ux = -Math.cos(sh), uy = Math.sin(sh) * side;
@@ -706,7 +752,7 @@ stage.addEventListener('pointerdown', e => {
 });
 stage.addEventListener('pointermove', e => {
   if (!freeCam.drag) return;
-  freeCam.az -= (e.clientX - freeCam.drag.x) * 0.008;
+  freeCam.az += (e.clientX - freeCam.drag.x) * 0.008;
   freeCam.el += (e.clientY - freeCam.drag.y) * 0.006;
   freeCam.el = Math.max(-0.5, Math.min(1.4, freeCam.el));
   freeCam.drag = { x: e.clientX, y: e.clientY };

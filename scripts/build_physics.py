@@ -48,6 +48,10 @@ RESIDUARY = [
 
 FORM_FACTOR = 1.12      # (1+k): надбавка на форму к трению плоской пластины
 
+# Площадь спинакера из ТТХ конструктора (tihonovdesign.ru/610). Оттуда же —
+# грот 15.5 и стаксель 7.5 м², и эти две цифры обмер чертежа подтвердил.
+SPINNAKER_M2 = 27.0
+
 
 def resistance_curve(lwl_mm, wetted_m2, mass_kg, v_max=9.0, n=45):
     """Сопротивление корпуса по скорости: трение по ITTC плюс остаточное."""
@@ -213,7 +217,7 @@ def main():
                             rudder["thickness_ratio"], 1.25,
                             rudder["x_stock_mm"] / 1000.0),
         },
-        "rig": _rig(),
+        "rig": _rig(feats["sail_plan"]),
     }
 
     with open(os.path.join(dst, "physics.json"), "w") as f:
@@ -246,41 +250,72 @@ def main():
         "%s %d тр." % (k, len(v["indices"]) // 3) for k, v in meshes.items()))
 
 
-def _rig(mast_x=3.55, mast_h=9.0, boom=2.85, main=16.5, jib=8.5):
-    """Центр парусности как центр тяжести двух треугольников.
+def _rig(sp):
+    """Риг по обводам, снятым с плана парусности (`sv20/sailplan.py`).
 
-    Раньше он брался в мачте, и это была ошибка: грот стоит позади мачты,
-    стаксель впереди, и их общий центр оказывается почти на полметра в корму
-    от неё. Полметра плеча на шестиметровой лодке — разница между валкостью
-    и приводливостью, что на воде и вылезло.
+    До обмера паруса задавались треугольниками из головы: площади брались из
+    ТТХ магазина (16.5 и 8.5 м²), а углы ставились «примерно там». Сходилось
+    плохо. Чертёж говорит другое: у грота большой серп, фаловый угол на
+    восемьдесят сантиметров выше, чем предполагалось, а стаксель заметно
+    меньше — 7.1 м² вместо 8.5. Сумма 22.85 м² сходится со штампом самого
+    чертежа (23 м²) до полупроцента, так что верить нужно ей, а не круглым
+    двадцати пяти с сайта магазина.
+
+    Центр парусности теперь считается по настоящим контурам, а не по
+    треугольникам, и от этого поднимается на восемьдесят сантиметров: серп
+    грота — это площадь наверху, и кренящий момент она даёт соответствующий.
     """
-    def centroid(pts, area):
-        return (sum(p[0] for p in pts) / 3.0, sum(p[1] for p in pts) / 3.0, area)
+    def m(p):
+        return [round(p[0] / 1000.0, 4), round(p[1] / 1000.0, 4)]
 
-    m = centroid([(mast_x, 1.0), (mast_x, mast_h * 0.95),
-                  (mast_x - boom, 1.05)], main)
-    # Шкотовый угол стакселя у мачты, а не в метре с лишним позади неё.
-    # Прежние координаты пришли из рисовалки и означали 150-процентную геную:
-    # нижняя шкаторина 3.6 м при переднем треугольнике в 2.4 м. По площади это
-    # не сходится — 8.5 м² при треугольнике 0.5·2.4·6.84 = 8.2 м², то есть
-    # стаксель примерно стопроцентный. Разница не косметическая: с генуей её
-    # задняя шкаторина ложилась поверх грота, и в вихревой решётке грот от
-    # такого соседства просто умирал.
-    j = centroid([(mast_x + 2.4, 0.9), (mast_x + 0.12, mast_h * 0.76),
-                  (mast_x, 1.05)], jib)
-    total = main + jib
+    def poly(s):
+        return {"tack": m(s["tack"]), "head": m(s["head"]),
+                "head_aft": m(s["head_aft"]), "clew": m(s["clew"]),
+                "luff": [m(p) for p in s["luff"]],
+                "leech": [m(p) for p in s["leech"]],
+                "area_m2": s["area_m2"]}
+
+    main, jib = sp["main"], sp["jib"]
+    total = main["area_m2"] + jib["area_m2"]
+    mast_top, mast_deck = sp["mast"]["top_mm"], sp["mast"]["deck_mm"]
+    shroud = sp["shroud"]
     return {
-        "main_area_m2": main, "jib_area_m2": jib,
-        "spinnaker_area_m2": calibrate.TARGET["sail_area_downwind_m2"] - 25.0,
-        "mast_x_m": mast_x, "mast_height_m": mast_h, "boom_m": boom,
-        "ce_x_m": (m[0] * main + j[0] * jib) / total,
-        "ce_height_m": (m[1] * main + j[1] * jib) / total,
+        "main_area_m2": main["area_m2"], "jib_area_m2": jib["area_m2"],
+        "sail_area_m2": round(total, 3),
+        # Спинакера на чертеже нет, и остаётся он числом из ТТХ конструктора:
+        # 27 м². Прежняя формула (56 полных минус лавировочные) брала оба
+        # числа с сайта магазина; после обмера она стала мешать источники и
+        # выдавала 33 м² там, где конструктор пишет 27. Пока спинакера в
+        # симуляторе нет, это только запись в пакете.
+        "spinnaker_area_m2": SPINNAKER_M2,
+        "mast_x_m": round(mast_deck[0] / 1000.0, 4),
+        "mast_top_x_m": round(mast_top[0] / 1000.0, 4),
+        "mast_height_m": round(mast_top[1] / 1000.0, 4),
+        "mast_deck_z_m": round(mast_deck[1] / 1000.0, 4),
+        "mast_rake_deg": sp["mast"]["rake_deg"],
+        "boom_m": round(sp["boom"]["length_mm"] / 1000.0, 4),
+        "boom_z_m": round(sp["boom"]["gooseneck_mm"][1] / 1000.0, 4),
+        "ce_x_m": round((main["centroid_mm"][0] * main["area_m2"] +
+                         jib["centroid_mm"][0] * jib["area_m2"])
+                        / total / 1000.0, 4),
+        "ce_height_m": round((main["centroid_mm"][1] * main["area_m2"] +
+                              jib["centroid_mm"][1] * jib["area_m2"])
+                             / total / 1000.0, 4),
+        "sails": {"main": poly(main), "jib": poly(jib)},
+        "forestay": {"stem": m(sp["forestay"]["stem_mm"]),
+                     "hounds": m(sp["forestay"]["hounds_mm"])},
+        "shroud": None if shroud is None else {
+            "tang": m(shroud["tang_mm"]),
+            "chainplate": m(shroud["chainplate_mm"]),
+            "chainplate_y_m": round(shroud.get("chainplate_y_mm", 0.0)
+                                    / 1000.0, 4)},
         "windage_area_m2": 1.15,     # корпус, рангоут и экипаж в потоке
         "windage_cd": 0.85,
         "windage_height_m": 1.1,
-        "note": ("Площади парусов из ТТХ конструктора, положение мачты снято "
-                 "с чертежа. Центр парусности посчитан как центр тяжести "
-                 "треугольников грота и стакселя, а не взят в мачте."),
+        "note": ("Обводы обоих парусов, рангоут и стоячий такелаж сняты с "
+                 "плана парусности 610.pdf. Сумма площадей сходится с "
+                 "парусностью из штампа чертежа; паспортные 25 м² с сайта "
+                 "магазина ей противоречат и не используются."),
     }
 
 

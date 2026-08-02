@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
-from sv20 import calibrate, features, frame, layers, pdf_paths  # noqa: E402
+from sv20 import calibrate, features, frame, layers, pdf_paths, sailplan  # noqa: E402
 
 
 def project(groups, datum):
@@ -54,7 +54,10 @@ def main():
     fr = frame.build(subpaths, datum, key, calibrate.SPEC,
                      views.title_box, media)
     sheer_pts = [datum.profile(p) for p in key["sheer_profile"].points]
+    deck_pts = [datum.plan(p) for p in key["deck_starboard"].points]
     feats = features.extract(subpaths, datum, views.plan_box, sheer_pts)
+    feats["sail_plan"] = sailplan.find_sail_plan(subpaths, datum,
+                                                 sheer_pts, deck_pts)
 
     frame_doc = {
         "source": {"file": os.path.basename(pdf), "media_box_pt": list(media),
@@ -92,6 +95,10 @@ def main():
     print("профиль пера киля с чертежа: хорда %.1f мм, толщина %.1f%% на %.0f%% хорды"
           % (ks["chord_mm"], 100 * ks["thickness_ratio"],
              ks["max_thickness_at_pct_chord"]))
+    sp = feats["sail_plan"]
+    print("паруса с чертежа: грот %.2f + стаксель %.2f = %.2f кв.м "
+          "(в штампе %.1f)" % (sp["main"]["area_m2"], sp["jib"]["area_m2"],
+                               sp["area_total_m2"], sp["area_drawn_m2"]))
     print("слои: " + ", ".join("%s=%d" % (k, v["paths"])
                                for k, v in frame_doc["layer_summary"].items()))
     print("записано в %s/: frame.json, drawing.json, report.md" % outdir)
@@ -179,6 +186,38 @@ def render_report(doc):
                      "длине подъёма обязано быть постоянным. Это снимает вопрос о "
                      "сужении пера: его нет.\n"
                      % (tr["length_mm"] - ks["chord_mm"]))
+
+    sp = (doc.get("features") or {}).get("sail_plan")
+    if sp:
+        L.append("## План парусности\n")
+        L.append("Обводы обоих парусов прослежены по листу целиком. Задняя "
+                 "шкаторина в середине закрыта наложенным сверху видом сверху "
+                 "и разорвана — разрыв прошит по продолжению направления.\n")
+        L.append("| Что | Значение |")
+        L.append("|---|---|")
+        for name, s in (("Грот", sp["main"]), ("Стаксель", sp["jib"])):
+            L.append("| %s: площадь | %.2f м² |" % (name, s["area_m2"]))
+            L.append("| %s: передняя шкаторина | %.0f мм |" % (name, s["luff_mm"]))
+            L.append("| %s: нижняя шкаторина | %.0f мм |" % (name, s["foot_mm"]))
+        L.append("| Мачта | наклон %.1f° в корму, топ Z = %.0f мм |"
+                 % (sp["mast"]["rake_deg"], sp["mast"]["top_mm"][1]))
+        L.append("| Гик | %.0f мм, на высоте %.0f мм |"
+                 % (sp["boom"]["length_mm"], sp["boom"]["gooseneck_mm"][1]))
+        L.append("| Штаг | от X = %.0f мм до узла на Z = %.0f мм |"
+                 % (sp["forestay"]["stem_mm"][0], sp["forestay"]["hounds_mm"][1]))
+        if sp.get("shroud"):
+            L.append("| Ванты | путенс X = %.0f мм, оковка на Z = %.0f мм |"
+                     % (sp["shroud"]["chainplate_mm"][0], sp["shroud"]["tang_mm"][1]))
+        L.append("")
+        L.append("Сумма площадей — **%.2f м²** против **%.0f м²** в штампе того "
+                 "же чертежа: расхождение %.1f%%. Это и есть проверка обмера. "
+                 "Порознь тоже сходится: у конструктора на сайте стоит грот "
+                 "15.5 и стаксель 7.5 м², снято 15.72 и 7.12. Паспортные 25 м² "
+                 "с сайта магазина обоим источникам противоречат; у чертежа и "
+                 "вес другой (550 против 590 кг), и осадка (1.60 против 1.55).\n"
+                 % (sp["area_total_m2"], sp["area_drawn_m2"],
+                    100.0 * abs(sp["area_total_m2"] - sp["area_drawn_m2"])
+                    / sp["area_drawn_m2"]))
 
     L.append("## Чего на чертеже нет\n")
     for g in doc["gaps"]:

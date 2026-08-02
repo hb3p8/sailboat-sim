@@ -401,6 +401,7 @@ function shapeSails(side) {
   // было 0.026), и тем, что горб всегда стоял на середине. Теперь у смятого
   // спереди паруса горб уезжает назад ровно так, как получилось в расчёте.
   const strips = boat.stripCalc;
+  const tele = boat.telemetry && boat.telemetry.strips;
   boat.sails.forEach((sail, k) => {
     const mesh = k === 0 ? mainSail : jibSail;
     const a = mesh.geometry.attributes.position.array;
@@ -488,7 +489,9 @@ function shapeSails(side) {
     const half = tt.length / 2;
     let iw = 0, il = half;
     for (const r of TELL_ROWS) {
-      const g = strips[base + Math.min(5, Math.round((r / (SAIL_ROWS - 1)) * 5))] || {};
+      const si = base + Math.min(5, Math.round((r / (SAIL_ROWS - 1)) * 5));
+      const g = strips[si] || {};
+      const d = (tele && tele[si]) || {};
       const at = (r * SAIL_COLS + TELL_COL) * 3;
       const ax = a[at], ay = a[at + 1], az = a[at + 2];
       // направление хорды на этой строке — из соседнего по хорде узла
@@ -500,8 +503,13 @@ function shapeSails(side) {
       const offX = -uz * TELL_OFF * lee, offZ = ux * TELL_OFF * lee;
 
       const margin = (g.margin || 0) / D;
-      // 13° — тот же угол срыва, по которому считаются коэффициенты паруса
-      const stall = SAIL_STALL - Math.abs(g.alpha || 0) / D;
+      // Срыв меряется углом атаки ПОСЛЕ скоса — тем, под которым сечение
+      // стоит в потоке. По углу к хорде подветренный колдунчик дёргался почти
+      // на любой настройке: у грота за стакселем и у стакселя за штагом угол к
+      // хорде порядка пятнадцати градусов даже тогда, когда поток на них
+      // приходит почти по касательной. 13° — тот же угол срыва, по которому
+      // считаются коэффициенты паруса.
+      const stall = SAIL_STALL - Math.abs(d.alphaDeg || 0);
       const lift = Math.min(1, Math.max(0, (3 - margin) / 4));
       const droop = Math.min(1, Math.max(0, (3 - stall) / 4));
       // Мечется по тому же закону Струхаля, что и заполоскавшее полотно, только
@@ -952,6 +960,13 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyH') { autopilot = !autopilot; apHeading = boat.psi; }
   if (e.code === 'KeyC') cycleCam();
   if (e.code === 'KeyG') setDebug(!debugOn);
+  // Подсказки прячутся по умолчанию: карточка длинная и закрывала собой
+  // ползунки условий, а нужна она один раз — прочитать и убрать.
+  if (e.key === '?' || e.key === '/') {
+    const n = document.getElementById('note');
+    n.hidden = !n.hidden;
+    document.body.classList.toggle('hints', !n.hidden);
+  }
   // Не D: она занята рулём вместе со стрелкой вправо (WASD), и дамп
   // сохранялся на каждое нажатие при повороте. P далеко от обеих рук.
   if (e.code === 'KeyP') saveDump();

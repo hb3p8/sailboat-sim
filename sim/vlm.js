@@ -44,9 +44,31 @@
 
 const EPS = 1e-10;
 
+// Ядро вихря: на каком расстоянии нить перестаёт быть нитью.
+//
+// Био — Савар растёт как 1/r, и у бесконечно тонкой нити скорость рядом с ней
+// не ограничена ничем. В решётке это не отвлечённая беда: сходящие вихри уходят
+// по потоку через весь риг, и стоит пелене стакселя пройти вплотную к
+// контрольной точке грота, как влияние уходит в бесконечность, матрица теряет
+// обусловленность, а решение — смысл. Ловилось это так: при совершенно гладкой
+// правой части суммарная циркуляция рига скакала между соседними шагами со 161
+// на −127 и обратно. В силы это почти не выходило — скос упирался в
+// ограничитель, а наполнение и без того лежало на нуле, — но модель в такие
+// моменты решала не ту задачу, какую думала.
+//
+// Лечится тем же, чем во всех решётках: у нити появляется ядро радиуса rc,
+// внутри которого скорость не растёт. Физически это и есть правда — настоящая
+// пелена не нить, а слой конечной толщины, и разрешать её ближе, чем на
+// расстояние между соседними нитями, дискретизация всё равно не может.
+// Радиус приходит последним доводом, `rc2` — его квадрат; ноль — прежнее
+// поведение. Задаётся он полем `core` решётки, в метрах.
+//
+// В обеих формулах ниже c2 — квадрат «плеча»: у отрезка это (|r0|·d)², у
+// полубесконечной нити просто d². Поэтому ограничитель у них выглядит
+// по-разному, а означает одно и то же: ближе rc не подходить.
 // Скорость от отрезка вихревой нити P1→P2 единичной циркуляции в точке P.
 // Классический Био — Савар в форме, не требующей делить на длину отрезка.
-function segment(px, py, pz, ax, ay, az, bx, by, bz, out) {
+function segment(px, py, pz, ax, ay, az, bx, by, bz, out, rc2) {
   const r1x = px - ax, r1y = py - ay, r1z = pz - az;
   const r2x = px - bx, r2y = py - by, r2z = pz - bz;
   const cx = r1y * r2z - r1z * r2y;
@@ -59,13 +81,14 @@ function segment(px, py, pz, ax, ay, az, bx, by, bz, out) {
   const r0x = bx - ax, r0y = by - ay, r0z = bz - az;
   const f = (r0x * r1x + r0y * r1y + r0z * r1z) / l1 -
             (r0x * r2x + r0y * r2y + r0z * r2z) / l2;
-  const k = f / (4 * Math.PI * c2);
+  const l0 = r0x * r0x + r0y * r0y + r0z * r0z;
+  const k = f / (4 * Math.PI * Math.max(c2, rc2 * l0));
   out[0] = cx * k; out[1] = cy * k; out[2] = cz * k;
 }
 
 // Скорость от полубесконечной нити, начинающейся в P1 и уходящей по единичному
 // вектору u. Предел отрезка, у которого второй конец ушёл на бесконечность.
-function tail(px, py, pz, ax, ay, az, ux, uy, uz, out) {
+function tail(px, py, pz, ax, ay, az, ux, uy, uz, out, rc2) {
   const rx = px - ax, ry = py - ay, rz = pz - az;
   const cx = uy * rz - uz * ry;
   const cy = uz * rx - ux * rz;
@@ -73,7 +96,8 @@ function tail(px, py, pz, ax, ay, az, ux, uy, uz, out) {
   const c2 = cx * cx + cy * cy + cz * cz;
   const l = Math.sqrt(rx * rx + ry * ry + rz * rz);
   if (c2 < EPS || l < EPS) { out[0] = out[1] = out[2] = 0; return; }
-  const k = (1 + (ux * rx + uy * ry + uz * rz) / l) / (4 * Math.PI * c2);
+  const k = (1 + (ux * rx + uy * ry + uz * rz) / l) /
+            (4 * Math.PI * Math.max(c2, rc2));
   out[0] = cx * k; out[1] = cy * k; out[2] = cz * k;
 }
 
@@ -85,6 +109,7 @@ export class Lattice {
     this.gamma = new Float64Array(n);
     this.aInd = new Float64Array(n);        // скос потока, рад
     this.aWake = new Float64Array(n);       // скос от одной пелены, рад
+    this.core = 0;                          // радиус ядра вихревой нити, м
     this.panels = [];
     for (let i = 0; i < n; i++) {
       this.panels.push({
@@ -115,6 +140,7 @@ export class Lattice {
   // получается примерно вдвое больше настоящего, и грот в расчёте умирает.
   build(ux, uy, uz, self, ground) {
     const n = this.n, P = this.panels, v = this._v, t = this._t;
+    const rc2 = this.core * this.core;
     const mir = this._mir || (this._mir = {
       a: [0, 0, 0], b: [0, 0, 0], ta: [0, 0, 0], tb: [0, 0, 0] });
     const reflect = (src, dst) => { dst[0] = src[0]; dst[1] = src[1]; dst[2] = -src[2]; };
@@ -138,15 +164,15 @@ export class Lattice {
         // они и дают скос от собственной сходящей вихревой пелены.
         v[0] = v[1] = v[2] = 0;
         if (self || i !== j) {
-          segment(ci[0], ci[1], ci[2], A[0], A[1], A[2], B[0], B[1], B[2], v);
+          segment(ci[0], ci[1], ci[2], A[0], A[1], A[2], B[0], B[1], B[2], v, rc2);
         }
-        segment(ci[0], ci[1], ci[2], TA[0], TA[1], TA[2], A[0], A[1], A[2], t);
+        segment(ci[0], ci[1], ci[2], TA[0], TA[1], TA[2], A[0], A[1], A[2], t, rc2);
         v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        segment(ci[0], ci[1], ci[2], B[0], B[1], B[2], TB[0], TB[1], TB[2], t);
+        segment(ci[0], ci[1], ci[2], B[0], B[1], B[2], TB[0], TB[1], TB[2], t, rc2);
         v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        tail(ci[0], ci[1], ci[2], TB[0], TB[1], TB[2], ux, uy, uz, t);
+        tail(ci[0], ci[1], ci[2], TB[0], TB[1], TB[2], ux, uy, uz, t, rc2);
         v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        tail(ci[0], ci[1], ci[2], TA[0], TA[1], TA[2], ux, uy, uz, t);
+        tail(ci[0], ci[1], ci[2], TA[0], TA[1], TA[2], ux, uy, uz, t, rc2);
         v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
         let kij = v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
         if (ground) {
@@ -156,17 +182,17 @@ export class Lattice {
           reflect(TA, mir.ta); reflect(TB, mir.tb);
           v[0] = v[1] = v[2] = 0;
           segment(ci[0], ci[1], ci[2], mir.a[0], mir.a[1], mir.a[2],
-                  mir.b[0], mir.b[1], mir.b[2], t);
+                  mir.b[0], mir.b[1], mir.b[2], t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
           segment(ci[0], ci[1], ci[2], mir.ta[0], mir.ta[1], mir.ta[2],
-                  mir.a[0], mir.a[1], mir.a[2], t);
+                  mir.a[0], mir.a[1], mir.a[2], t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
           segment(ci[0], ci[1], ci[2], mir.b[0], mir.b[1], mir.b[2],
-                  mir.tb[0], mir.tb[1], mir.tb[2], t);
+                  mir.tb[0], mir.tb[1], mir.tb[2], t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          tail(ci[0], ci[1], ci[2], mir.tb[0], mir.tb[1], mir.tb[2], ux, uy, uz, t);
+          tail(ci[0], ci[1], ci[2], mir.tb[0], mir.tb[1], mir.tb[2], ux, uy, uz, t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          tail(ci[0], ci[1], ci[2], mir.ta[0], mir.ta[1], mir.ta[2], ux, uy, uz, t);
+          tail(ci[0], ci[1], ci[2], mir.ta[0], mir.ta[1], mir.ta[2], ux, uy, uz, t, rc2);
           v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
           kij -= v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
         }
@@ -192,26 +218,26 @@ export class Lattice {
         const my = (P[i].a[1] + P[i].b[1]) / 2;
         const mz = (P[i].a[2] + P[i].b[2]) / 2;
         v[0] = v[1] = v[2] = 0;
-        segment(mx, my, mz, TA[0], TA[1], TA[2], A[0], A[1], A[2], t);
+        segment(mx, my, mz, TA[0], TA[1], TA[2], A[0], A[1], A[2], t, rc2);
         v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        segment(mx, my, mz, B[0], B[1], B[2], TB[0], TB[1], TB[2], t);
+        segment(mx, my, mz, B[0], B[1], B[2], TB[0], TB[1], TB[2], t, rc2);
         v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        tail(mx, my, mz, TB[0], TB[1], TB[2], ux, uy, uz, t);
+        tail(mx, my, mz, TB[0], TB[1], TB[2], ux, uy, uz, t, rc2);
         v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        tail(mx, my, mz, TA[0], TA[1], TA[2], ux, uy, uz, t);
+        tail(mx, my, mz, TA[0], TA[1], TA[2], ux, uy, uz, t, rc2);
         v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
         let kwij = v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
         if (ground) {
           v[0] = v[1] = v[2] = 0;
           segment(mx, my, mz, mir.ta[0], mir.ta[1], mir.ta[2],
-                  mir.a[0], mir.a[1], mir.a[2], t);
+                  mir.a[0], mir.a[1], mir.a[2], t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
           segment(mx, my, mz, mir.b[0], mir.b[1], mir.b[2],
-                  mir.tb[0], mir.tb[1], mir.tb[2], t);
+                  mir.tb[0], mir.tb[1], mir.tb[2], t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          tail(mx, my, mz, mir.tb[0], mir.tb[1], mir.tb[2], ux, uy, uz, t);
+          tail(mx, my, mz, mir.tb[0], mir.tb[1], mir.tb[2], ux, uy, uz, t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          tail(mx, my, mz, mir.ta[0], mir.ta[1], mir.ta[2], ux, uy, uz, t);
+          tail(mx, my, mz, mir.ta[0], mir.ta[1], mir.ta[2], ux, uy, uz, t, rc2);
           v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
           kwij -= v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
         }
@@ -297,13 +323,14 @@ export class Lattice {
   // отрисовка обновляет линии в несколько раз реже.
   induced(px, py, pz, ux, uy, uz, ground, out) {
     const n = this.n, P = this.panels, t = this._t;
+    const rc2 = this.core * this.core;
     out[0] = out[1] = out[2] = 0;
     const add = (A, B, TA, TB, sign) => {
-      segment(px, py, pz, A[0], A[1], A[2], B[0], B[1], B[2], t);
+      segment(px, py, pz, A[0], A[1], A[2], B[0], B[1], B[2], t, rc2);
       out[0] += sign * t[0]; out[1] += sign * t[1]; out[2] += sign * t[2];
-      tail(px, py, pz, TB[0], TB[1], TB[2], ux, uy, uz, t);
+      tail(px, py, pz, TB[0], TB[1], TB[2], ux, uy, uz, t, rc2);
       out[0] += sign * t[0]; out[1] += sign * t[1]; out[2] += sign * t[2];
-      tail(px, py, pz, TA[0], TA[1], TA[2], ux, uy, uz, t);
+      tail(px, py, pz, TA[0], TA[1], TA[2], ux, uy, uz, t, rc2);
       out[0] -= sign * t[0]; out[1] -= sign * t[1]; out[2] -= sign * t[2];
     };
     const m = this._mirTmp || (this._mirTmp = {

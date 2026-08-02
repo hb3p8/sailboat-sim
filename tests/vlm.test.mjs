@@ -187,5 +187,51 @@ check('индуктивное сопротивление согласуется 
     (side.front / g0).toFixed(3) + ' и ' + (side.back / g0).toFixed(3));
 }
 
+// --- скорость в произвольной точке ----------------------------------------------
+//
+// `induced` считает наведённую скорость где угодно, а не только на панелях: по
+// ней рисуются линии тока. Живёт она отдельно от матрицы влияния и потому легко
+// от неё отстаёт — так и вышло: при добавлении ядра вихря в матрицу радиус до
+// `induced` не доехал, и вся отрисовка потока валилась с ошибкой, которую было
+// видно только при нажатии G.
+//
+// Проверяется тождеством: в контрольной точке нормальная составляющая того, что
+// вернёт `induced`, обязана совпасть со строкой матрицы влияния, умноженной на
+// циркуляции. Это одни и те же нити, посчитанные двумя разными кусками кода.
+{
+  const n = 6;
+  const lat = new Lattice(n);
+  lat.core = 0.05;
+  for (let i = 0; i < n; i++) {
+    const p = lat.panels[i];
+    const y0 = -1.5 + 0.5 * i, y1 = y0 + 0.5;
+    const back = i >= 3;                        // второй ряд — позади и выше
+    const x = back ? 1.4 : 0.25, z = back ? 0.3 : 0;
+    p.a[0] = x; p.a[1] = y0; p.a[2] = z;
+    p.b[0] = x; p.b[1] = y1; p.b[2] = z;
+    p.ta[0] = x; p.ta[1] = y0; p.ta[2] = z;
+    p.tb[0] = x; p.tb[1] = y1; p.tb[2] = z;
+    p.c[0] = x + 0.3; p.c[1] = (y0 + y1) / 2; p.c[2] = z;
+    p.nrm[0] = 0; p.nrm[1] = 0; p.nrm[2] = 1;
+    p.chord = 1; p.speed = 1;
+  }
+  lat.build(1, 0, 0, true, true);
+  for (let i = 0; i < n; i++) lat.gamma[i] = 0.3 + 0.1 * i;
+  const v = [0, 0, 0];
+  let worst = 0;
+  for (let i = 0; i < n; i++) {
+    const c = lat.panels[i].c, nr = lat.panels[i].nrm;
+    lat.induced(c[0], c[1], c[2], 1, 0, 0, true, v);
+    const direct = v[0] * nr[0] + v[1] * nr[1] + v[2] * nr[2];
+    let byMatrix = 0;
+    for (let j = 0; j < n; j++) byMatrix += lat.k[i * n + j] * lat.gamma[j];
+    worst = Math.max(worst, Math.abs(direct - byMatrix));
+  }
+  console.log('Скорость в точке против матрицы влияния: расхождение ' +
+    worst.toExponential(1) + '\n');
+  check('induced совпадает с матрицей влияния в контрольных точках',
+    worst < 1e-12, worst.toExponential(1));
+}
+
 console.log((failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');
 process.exit(failures ? 1 : 0);

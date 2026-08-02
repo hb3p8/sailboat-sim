@@ -318,7 +318,12 @@ def build_keel_case(features, z_bottom, z_top, wall=6.0, n_round=8):
 
 def build_rudder(features, sail_area_m2, area_frac=0.010, z_top=50.0,
                  z_tip=-1000.0, taper=0.65, thickness_ratio=0.12):
-    """Навесной руль по снятой с чертежа оси и площади от парусности."""
+    """Навесной руль по снятой с чертежа оси и площади от парусности.
+
+    `sail_area_m2` — лавировочная парусность; её считает `sailplan`, по снятым
+    с того же чертежа обводам. Круглое число из ТТХ сюда не годится: оно на два
+    метра больше обмерного, и вся разница ушла бы в перо.
+    """
     stock = features["rudder_stock"]
     pintles = features["rudder_pintles"]
     x_stock = stock["x_mm"] if stock else 0.0

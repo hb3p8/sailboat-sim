@@ -24,7 +24,7 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from sv20 import (appendages, calibrate, exporters, features, hullmodel,  # noqa: E402
-                  hydro, meshops, pdf_paths, stability)
+                  hydro, meshops, pdf_paths, sailplan, stability)
 
 LODS = [("hull", 140, 32), ("hull_lod1", 70, 18)]
 
@@ -77,7 +77,7 @@ def main():
     keel = appendages.build_keel(feats, hull.z_keel(x_keel),
                                  calibrate.TARGET["draft_max_mm"],
                                  calibrate.TARGET["ballast_kg"])
-    rudder = appendages.build_rudder(feats, calibrate.TARGET["sail_area_upwind_m2"])
+    rudder = appendages.build_rudder(feats, sailplan.upwind_area_m2(feats))
     case = appendages.build_keel_case(feats, hull.z_keel(x_keel) - 5.0,
                                       appendages.TRUNK_TOP_MM)
 

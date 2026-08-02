@@ -781,7 +781,8 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => { keys[e.code] = false; });
 
 const ui = {};
-for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draft'])
+for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draft',
+                  'fetch'])
   ui[id] = document.getElementById(id);
 
 const CAMS = ['погоня', 'сбоку', 'с борта', 'сверху', 'свободная'];
@@ -857,6 +858,7 @@ function readControls(dt) {
   o.sailScale = parseFloat(ui.sailscale.value);
   o.twist = parseFloat(ui.twist.value) * D;
   o.draft = parseFloat(ui.draft.value) / 100;
+  o.fetch = parseFloat(ui.fetch.value) * 1000;
   // Порывистость одним ползунком: сильнее дует — сильнее и заходит. Порознь
   // эти две вещи на воде не встречаются, а два ползунка вместо одного только
   // мешают понять, что происходит.

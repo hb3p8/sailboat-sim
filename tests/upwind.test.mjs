@@ -13,9 +13,17 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
 
+import { Pool } from './lib/pool.mjs';
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const PACK = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
+const PACK_PATH = join(ROOT, 'out/export/physics.json');
+const PACK = JSON.parse(readFileSync(PACK_PATH, 'utf8'));
 const D = Math.PI / 180;
+
+// Перебор настроек идёт по всем ядрам сразу: установившиеся ходы друг от друга
+// не зависят, а их здесь сотни. Модель при этом одна и та же — рабочий поток
+// гоняет тот же steady() из tests/lib/steady.mjs.
+const pool = new Pool(PACK_PATH, PACK);
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -30,80 +38,92 @@ const wrapPi = a => {
   return a;
 };
 
-function run(twaDeg, sheetDeg, opts = {}) {
-  const b = new Boat(PACK);
-  b.o.windSpeed = opts.wind ?? 6;
-  b.o.windDir = twaDeg * D;
-  b.o.sheet = sheetDeg * D;
-  b.o.twist = (opts.twist ?? 0) * D;
-  b.o.crewHike = opts.hike ?? 0;
-  b.o.crewMass = b.o.crewHike > 0 ? 240 : 0;
-  b.u = 3.0;
-  b.phi = 18 * D;
-  let worst = { u: 0, heel: 0 };
-  for (let i = 0; i < (opts.secs ?? 70) * 30; i++) {
-    const err = wrapPi(0 - b.psi);
-    b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * err - 0.9 * b.r)));
-    b.step(1 / 30);
-    worst.u = Math.max(worst.u, Math.abs(b.u));
-    worst.heel = Math.max(worst.heel, Math.abs(b.phi / D));
-  }
-  const t = b.telemetry;
-  const track = twaDeg + Math.abs(t.leewayDeg);
-  return {
-    b, t, track, worst,
-    vmg: t.speedKn * Math.cos(track * D),
-    helm: b.o.rudder / D,
-    headingErr: wrapPi(0 - b.psi) / D,
-    finite: [b.u, b.v, b.r, b.phi, b.psi].every(Number.isFinite),
-  };
-}
-
-// Настройки подбираем перебором: на каждом курсе свои. Твист здесь наравне со
-// шкотом — с профилем ветра по высоте он стал настоящим органом управления, а
-// не украшением: в свежий ветер им сбрасывают мощность с верха паруса.
-// Перебор в два прохода: сперва грубо по всей сетке, потом мелко вокруг
-// найденного. Прежний одноступенчатый перебор с шагом 4° по шкоту и 10° по
-// твисту после мембраны стал врать: отклик паруса сузился, соседние узлы сетки
-// попадают в разные режимы, и «оптимум» скачет на четыре процента по VMG.
-// Ловилось это как несуществующие провалы — будто лодка в четырнадцать метров
-// в секунду идёт хуже, чем в одиннадцать, и при этом круче. На мелкой сетке
-// оба провала исчезают: и там и там оптимум на 40°, а VMG растёт.
+// Перебор настроек в два прохода: сперва грубо по всей сетке, потом мелко
+// вокруг найденного. Прежний одноступенчатый перебор с шагом 4° по шкоту и 10°
+// по твисту после мембраны стал врать: отклик паруса сузился, соседние узлы
+// сетки попадают в разные режимы, и «оптимум» скачет на четыре процента по
+// VMG. Ловилось это как несуществующие провалы поляры.
 //
-// Два прохода стоят столько же, сколько один грубый, а оптимум находят там,
-// где он есть.
-function best(twaDeg, opts) {
-  let top = null, fastest = 0;
-  const probe = (sh, tw) => {
-    const r = run(twaDeg, sh, Object.assign({ twist: tw }, opts));
-    if (!r.finite) return;
-    fastest = Math.max(fastest, r.t.speedKn);
-    if (!top || r.vmg > top.vmg) { top = r; top.sheet = sh; top.twist = tw; }
-  };
-  for (let sh = 6; sh <= 34; sh += 7) for (let tw = 0; tw <= 32; tw += 16) probe(sh, tw);
-  const sh0 = top.sheet, tw0 = top.twist;
-  for (const dsh of [-3.5, 0, 3.5]) {
-    for (const dtw of [-8, 0, 8]) {
-      if (dsh === 0 && dtw === 0) continue;
-      probe(Math.max(2, sh0 + dsh), Math.max(0, tw0 + dtw));
+// Оба прохода раздаются в пул целиком, по всем точкам сразу: чем крупнее
+// порция, тем меньше доля пересылки.
+const SH_COARSE = [6, 13, 20, 27, 34];
+const TW_COARSE = [0, 16, 32];
+
+function specs(points, shs, tws) {
+  const out = [];
+  for (const p of points) {
+    for (const sh of shs) {
+      for (const tw of tws) out.push(Object.assign({}, p, { sheet: sh, twist: tw }));
     }
   }
-  top.fastest = fastest;
-  return top;
+  return out;
+}
+
+// Лучшая настройка на каждую точку. `points` — список условий без настроек.
+async function bestMany(points) {
+  const pick = (all, list) => {
+    const byPoint = points.map(() => null);
+    const per = all.length / points.length;
+    all.forEach((r, i) => {
+      const k = Math.floor(i / per);
+      if (!r || !r.finite) return;
+      const cur = byPoint[k];
+      if (!cur || r.vmg > cur.r.vmg) byPoint[k] = { r: r, spec: list[i] };
+      if (cur) cur.fastest = Math.max(cur.fastest || 0, r.speedKn);
+    });
+    all.forEach((r, i) => {
+      const k = Math.floor(i / per);
+      if (r && r.finite && byPoint[k]) {
+        byPoint[k].fastest = Math.max(byPoint[k].fastest || 0, r.speedKn);
+      }
+    });
+    return byPoint;
+  };
+
+  const l1 = specs(points, SH_COARSE, TW_COARSE);
+  const w1 = pick(await pool.map(l1), l1);
+
+  // уточнение вокруг найденного, своё на каждую точку
+  const l2 = [];
+  w1.forEach((w, k) => {
+    const sh0 = w ? w.spec.sheet : 20, tw0 = w ? w.spec.twist : 16;
+    for (const dsh of [-3.5, 0, 3.5]) {
+      for (const dtw of [-8, 0, 8]) {
+        if (dsh === 0 && dtw === 0) continue;
+        l2.push(Object.assign({}, points[k],
+          { sheet: Math.max(2, sh0 + dsh), twist: Math.max(0, tw0 + dtw) }));
+      }
+    }
+  });
+  const r2 = await pool.map(l2);
+  const per2 = l2.length / points.length;
+  r2.forEach((r, i) => {
+    const k = Math.floor(i / per2);
+    if (!r || !r.finite) return;
+    const cur = w1[k];
+    if (!cur) { w1[k] = { r: r, spec: l2[i], fastest: r.speedKn }; return; }
+    cur.fastest = Math.max(cur.fastest || 0, r.speedKn);
+    if (r.vmg > cur.r.vmg) { cur.r = r; cur.spec = l2[i]; }
+  });
+
+  return w1.map(w => w && Object.assign({}, w.r,
+    { sheet: w.spec.sheet, twist: w.spec.twist, fastest: w.fastest }));
 }
 
 console.log('\nПоляра в лавировку, истинный ветер 6 м/с (11.7 уз), экипаж на борту.');
 console.log('Шкот на каждом курсе подобран под наибольший VMG.\n');
 console.log('  TWA  шкот твист  узлы   крен   дрейф   курс   VMG    руль  ошибка');
-const polar = [];
-for (let twa = 30; twa <= 70; twa += 5) {
-  const r = best(twa, { hike: 1 });
-  polar.push({ twa, r });
-  console.log('  ' + String(twa).padStart(3) + '° ' + r.sheet.toFixed(0).padStart(4) +
+const polarTwa = [];
+for (let twa = 30; twa <= 70; twa += 5) polarTwa.push(twa);
+const polarRows = await bestMany(polarTwa.map(twa => ({ twa: twa, hike: 1 })));
+const polar = polarTwa.map((twa, i) => ({ twa: twa, r: polarRows[i] }));
+for (const p of polar) {
+  const r = p.r;
+  console.log('  ' + String(p.twa).padStart(3) + '° ' + r.sheet.toFixed(0).padStart(4) +
     '° ' + r.twist.toFixed(0).padStart(4) + '° ' +
-    r.t.speedKn.toFixed(2).padStart(6) + ' ' +
-    r.t.heelDeg.toFixed(1).padStart(6) + '° ' +
-    r.t.leewayDeg.toFixed(1).padStart(6) + '° ' +
+    r.speedKn.toFixed(2).padStart(6) + ' ' +
+    r.heelDeg.toFixed(1).padStart(6) + '° ' +
+    r.leewayDeg.toFixed(1).padStart(6) + '° ' +
     r.track.toFixed(0).padStart(5) + '° ' + r.vmg.toFixed(2).padStart(5) + ' ' +
     r.helm.toFixed(1).padStart(6) + '° ' + r.headingErr.toFixed(1).padStart(8) + '°');
 }
@@ -143,7 +163,7 @@ check('лавировочный угол между 80 и 110 градусами
   (2 * bestRow.r.track).toFixed(0) + '°');
 check('дрейф падает при уваливании',
   polar.every((p, i) => i === 0 ||
-    Math.abs(p.r.t.leewayDeg) <= Math.abs(polar[i - 1].r.t.leewayDeg) + 0.3));
+    Math.abs(p.r.leewayDeg) <= Math.abs(polar[i - 1].r.leewayDeg) + 0.3));
 // Приводливость и лёгкость на руле — две стороны одного: коэффициент
 // HULL_HEEL_YAW подогнан под наблюдение владельца («с брошенным рулём слегка
 // приводится»), и за это приходится держать перо. На своём угле VMG выходит
@@ -154,9 +174,9 @@ check('руля везде нужно немного',
   'наибольший ' + Math.max(...polar.map(p => Math.abs(p.r.helm))).toFixed(1) +
   '°, на угле VMG ' + Math.abs(bestRow.r.helm).toFixed(1) + '°');
 check('скорость нигде не выходит за разумное',
-  polar.every(p => p.r.worst.u * 1.94384 < 16),
+  polar.every(p => p.r.worstU * 1.94384 < 16),
   'наибольшая мгновенная ' +
-  Math.max(...polar.map(p => p.r.worst.u * 1.94384)).toFixed(1) + ' уз');
+  Math.max(...polar.map(p => p.r.worstU * 1.94384)).toFixed(1) + ' уз');
 
 // --- по силе ветра ------------------------------------------------------------
 
@@ -164,22 +184,53 @@ check('скорость нигде не выходит за разумное',
 // в свежий ветер она упирается не в паруса, а в собственную остойчивость.
 console.log('\nЛавировка при разной силе ветра, экипаж на борту:\n');
 console.log('  ветер   лучший TWA  шкот твист   узлы   крен    VMG   лавир.угол');
-const byWind = [];
-for (const wind of [3, 4.5, 6, 8, 11, 14]) {
+const WINDS = [3, 4.5, 6, 8, 11, 14];
+const WIND_TWA = [32, 37, 42, 47, 52];
+const windPoints = [];
+for (const wind of WINDS) {
+  for (const twa of WIND_TWA) windPoints.push({ wind: wind, twa: twa, hike: 1 });
+}
+const windRows = await bestMany(windPoints);
+const byWind = WINDS.map((wind, wi) => {
   let top = null;
-  for (let twa = 32; twa <= 52; twa += 5) {
-    const r = best(twa, { wind, hike: 1 });
-    if (r && (!top || r.vmg > top.vmg)) { top = r; top.twa = twa; }
-  }
-  byWind.push({ wind, top });
-  console.log('  ' + (wind + ' м/с').padEnd(8) + String(top.twa).padStart(7) + '° ' +
+  WIND_TWA.forEach((twa, ti) => {
+    const r = windRows[wi * WIND_TWA.length + ti];
+    if (r && (!top || r.vmg > top.vmg)) { top = Object.assign({}, r, { twa: twa }); }
+  });
+  return { wind: wind, top: top };
+});
+for (const w of byWind) {
+  const top = w.top;
+  console.log('  ' + (w.wind + ' м/с').padEnd(8) + String(top.twa).padStart(7) + '° ' +
     top.sheet.toFixed(0).padStart(5) + '° ' + top.twist.toFixed(0).padStart(4) + '° ' +
-    top.t.speedKn.toFixed(2).padStart(6) + ' ' + top.t.heelDeg.toFixed(0).padStart(5) +
+    top.speedKn.toFixed(2).padStart(6) + ' ' + top.heelDeg.toFixed(0).padStart(5) +
     '° ' + top.vmg.toFixed(2).padStart(6) + '   ' + (2 * top.track).toFixed(0) + '°');
 }
 console.log('');
-check('с усилением ветра VMG растёт',
-  byWind.every((w, i) => i === 0 || w.top.vmg > byWind[i - 1].top.vmg - 0.05));
+// VMG растёт с ветром, пока лодку не начинает ограничивать МОРЕ, а не паруса.
+//
+// Раньше проверка требовала роста на всём диапазоне, и это было верно ровно
+// потому, что лодка ходила по гладкой воде. С появлением волнения картина
+// стала другой и правильной: на фиксированном разгоне высота волны растёт с
+// ветром линейно, добавочное сопротивление — как её квадрат, а тяга у
+// перегруженной лодки упирается в остойчивость. Оттого VMG выходит на горб
+// около восьми метров в секунду и дальше медленно спадает. Так на воде и
+// бывает: в свежий ветер по короткой злой волне лавироваться хуже, чем в
+// умеренный по гладкой.
+//
+// Проверяется теперь два утверждения: до горба VMG растёт, после горба не
+// обваливается.
+const vmgs = byWind.map(w => w.top.vmg);
+const peak = Math.max(...vmgs), iPeak = vmgs.indexOf(peak);
+check('до горба VMG растёт с ветром',
+  vmgs.slice(0, iPeak + 1).every((v, i) => i === 0 || v > vmgs[i - 1] - 0.05),
+  'горб на ' + byWind[iPeak].wind + ' м/с, VMG ' + peak.toFixed(2));
+check('за горбом VMG не обваливается',
+  vmgs.slice(iPeak).every(v => v > 0.8 * peak),
+  'наименьший ' + Math.min(...vmgs.slice(iPeak)).toFixed(2) + ' против горба ' +
+  peak.toFixed(2));
+check('горб не на самом краю диапазона', iPeak > 0 && iPeak < vmgs.length - 1,
+  byWind[iPeak].wind + ' м/с');
 check('в сильный ветер прирост VMG выдыхается',
   byWind[byWind.length - 1].top.vmg - byWind[byWind.length - 2].top.vmg <
   byWind[2].top.vmg - byWind[1].top.vmg,
@@ -193,9 +244,9 @@ check('перегруженная ветром лодка идёт полнее,
 // вместе с мачтой, и на крене он падает. Без этого лодка ложилась на 58° и
 // продолжала идти лавировку десять узлов.
 check('крен упирается в потолок, а не растёт с ветром без предела',
-  byWind.every(w => Math.abs(w.top.t.heelDeg) < 30),
+  byWind.every(w => Math.abs(w.top.heelDeg) < 30),
   'наибольший ' +
-  Math.max(...byWind.map(w => Math.abs(w.top.t.heelDeg))).toFixed(0) + '°');
+  Math.max(...byWind.map(w => Math.abs(w.top.heelDeg))).toFixed(0) + '°');
 // Ради этого и разбивали риг на полоски. Твист имеет смысл только тогда, когда
 // у разных высот разный ветер и разный угол атаки: в слабый ветер лодка
 // недогружена и добирает всё, что может, а в свежий раскрывает верх паруса и
@@ -223,21 +274,27 @@ check('нужный твист растёт с ветром',
 // а в свежий это разница между «идём» и «лежим».
 console.log('\nОткренивание втроём, TWA 45°:\n');
 console.log('  ветер    в ДП: крен, узлы, VMG      на борту: крен, узлы, VMG');
-const hikeRows = [];
-for (const wind of [6, 11]) {
-  const a = best(45, { wind }), b = best(45, { wind, hike: 1 });
-  hikeRows.push({ wind, a, b });
-  console.log('  ' + (wind + ' м/с').padEnd(8) +
-    a.t.heelDeg.toFixed(0).padStart(6) + '° ' + a.t.speedKn.toFixed(2).padStart(6) +
-    ' ' + a.vmg.toFixed(2).padStart(6) + '        ' +
-    b.t.heelDeg.toFixed(0).padStart(6) + '° ' + b.t.speedKn.toFixed(2).padStart(6) +
-    ' ' + b.vmg.toFixed(2).padStart(6));
+const hikeWinds = [6, 11];
+const hikePts = [];
+for (const wind of hikeWinds) {
+  hikePts.push({ twa: 45, wind: wind, hike: 0 });
+  hikePts.push({ twa: 45, wind: wind, hike: 1 });
+}
+const hikeRes = await bestMany(hikePts);
+const hikeRows = hikeWinds.map((wind, i) => ({
+  wind: wind, a: hikeRes[2 * i], b: hikeRes[2 * i + 1] }));
+for (const h of hikeRows) {
+  console.log('  ' + (h.wind + ' м/с').padEnd(8) +
+    h.a.heelDeg.toFixed(0).padStart(6) + '° ' + h.a.speedKn.toFixed(2).padStart(6) +
+    ' ' + h.a.vmg.toFixed(2).padStart(6) + '        ' +
+    h.b.heelDeg.toFixed(0).padStart(6) + '° ' + h.b.speedKn.toFixed(2).padStart(6) +
+    ' ' + h.b.vmg.toFixed(2).padStart(6));
 }
 console.log('');
 check('откренивание уменьшает крен',
-  hikeRows.every(h => h.b.t.heelDeg < h.a.t.heelDeg - 1));
+  hikeRows.every(h => Math.abs(h.b.heelDeg) < Math.abs(h.a.heelDeg) - 1));
 check('откренивание прибавляет ход',
-  hikeRows.every(h => h.b.t.speedKn > h.a.t.speedKn));
+  hikeRows.every(h => h.b.speedKn > h.a.speedKn));
 check('в свежий ветер откренивание даёт больше, чем в слабый',
   (hikeRows[1].b.vmg - hikeRows[1].a.vmg) >
   (hikeRows[0].b.vmg - hikeRows[0].a.vmg),

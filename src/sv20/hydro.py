@@ -91,6 +91,11 @@ def hydrostatics(hull, z_wl=0.0, n=160, rho=RHO_SEA):
     # поперечный момент инерции площади ватерлинии: 2/3 ∫ y³ dx
     it = _simpson(xs, [(2.0 / 3.0) * y ** 3 for y in halfb])      # мм⁴
     bm = it / vol                                                 # мм
+    # продольный, относительно центра тяжести площади ватерлинии. Нужен для
+    # собственного периода килевой качки, а тот — для добавочного
+    # сопротивления на волнении: у резонанса оно и живёт.
+    il = _simpson(xs, [2.0 * y * (x - lcf) ** 2 for y, x in zip(halfb, xs)])
+    bml = il / vol                                                # мм
 
     am = max(area)
     x_am = xs[area.index(am)]
@@ -117,6 +122,8 @@ def hydrostatics(hull, z_wl=0.0, n=160, rho=RHO_SEA):
         "bm_mm": bm,
         "kb_plus_bm_mm": vcb + bm,
         "i_transverse_m4": it / 1.0e12,
+        "bml_mm": bml,
+        "i_longitudinal_m4": il / 1.0e12,
         "lcb_mm": lcb,
         "lcb_pct_lwl_from_aft": 100.0 * (lcb - xa) / lwl,
         "lcf_mm": lcf,

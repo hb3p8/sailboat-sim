@@ -29,6 +29,7 @@ sim: physics
 # от проблем отрисовки и не запускается из Makefile.
 test: physics
 	node tests/membrane.test.mjs
+	node tests/waves.test.mjs
 	node tests/vlm.test.mjs
 	node tests/wind.test.mjs
 	node tests/replay.test.mjs

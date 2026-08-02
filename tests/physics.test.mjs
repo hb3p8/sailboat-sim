@@ -13,8 +13,13 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
 
+import { Pool } from './lib/pool.mjs';
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const PACK = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
+const PACK_PATH = join(ROOT, 'out/export/physics.json');
+const PACK = JSON.parse(readFileSync(PACK_PATH, 'utf8'));
+// Перебор настроек — по всем ядрам: прогоны друг от друга не зависят.
+const pool = new Pool(PACK_PATH, PACK);
 const D = Math.PI / 180;
 const KN = 1.94384;
 
@@ -59,6 +64,10 @@ function sail(twaDeg, sheetDeg, opts = {}) {
 
 console.log("\nУстановившийся ход, истинный ветер 6 м/с (11.7 уз) на стандартных 10 м:\n");
 console.log('  TWA  шкот   узлы   крен   дрейф    AWA   тяга,Н   VMG   курс');
+const SCHEDULE = [[40, 8], [50, 20], [60, 20], [90, 44],
+                  [120, 76], [150, 72], [175, 48]];
+const rowsRaw = await pool.map(SCHEDULE.map(([twa, sheet]) =>
+  ({ twa: twa, sheet: sheet, secs: 120 })));
 const rows = [];
 // Шкот на каждом курсе подобран под лучший ход (в лавировку — под VMG). При
 // жёстко заданном расписании таблица меряет не лодку, а то, насколько удачно
@@ -66,9 +75,9 @@ const rows = [];
 // когда меняется модель паруса. После мембраны парус набирает свою подъёмную
 // силу пузом, а не углом атаки, и рабочие углы стали заметно шире прежних:
 // на галфвинде 44° вместо 30°, на полном 76° вместо 46°.
-for (const [twa, sheet] of [[40, 8], [50, 20], [60, 20], [90, 44],
-                            [120, 76], [150, 72], [175, 48]]) {
-  const r = sail(twa, sheet);
+SCHEDULE.forEach(([twa, sheet], i) => {
+  const r = { t: rowsRaw[i], headingErr: rowsRaw[i].headingErr,
+              b: rowsRaw[i], finite: rowsRaw[i].finite };
   rows.push([twa, sheet, r]);
   console.log('  ' + String(twa).padStart(3) + '° ' + String(sheet).padStart(4) +
     '° ' + r.t.speedKn.toFixed(2).padStart(6) + ' ' +
@@ -76,20 +85,19 @@ for (const [twa, sheet] of [[40, 8], [50, 20], [60, 20], [90, 44],
     r.t.leewayDeg.toFixed(1).padStart(6) + '° ' +
     r.t.awaDeg.toFixed(0).padStart(5) + '° ' +
     r.t.driveN.toFixed(0).padStart(7) + ' ' +
-    r.t.vmg.toFixed(2).padStart(6) + ' ' +
-    r.headingErrDeg.toFixed(1).padStart(6) + '°');
-}
+    r.t.vmgTel.toFixed(2).padStart(6) + ' ' +
+    r.headingErr.toFixed(1).padStart(6) + '°');
+});
 
 console.log('\nПроверки:\n');
 
-const finite = rows.every(([, , r]) =>
-  [r.b.u, r.b.v, r.b.r, r.b.phi, r.b.psi].every(Number.isFinite));
+const finite = rows.every(([, , r]) => r.finite);
 check('модель не расходится ни на одном курсе', finite);
 
-const held = rows.every(([, , r]) => Math.abs(r.headingErrDeg) < 5);
+const held = rows.every(([, , r]) => Math.abs(r.headingErr) < 5);
 check('авторулевой держит курс', held,
   'наибольшая ошибка ' +
-  Math.max(...rows.map(([, , r]) => Math.abs(r.headingErrDeg))).toFixed(1) + '°');
+  Math.max(...rows.map(([, , r]) => Math.abs(r.headingErr))).toFixed(1) + '°');
 
 const awaOk = rows.every(([twa, , r]) => r.t.awaDeg < twa + 2);
 check('кажущийся ветер острее истинного', awaOk);
@@ -108,9 +116,10 @@ check('скорость в бейдевинд правдоподобна',
   beat.speedKn > 3.0 && beat.speedKn < 7.5, beat.speedKn.toFixed(2) + ' уз');
 check('крен в бейдевинд не запредельный', Math.abs(beat.heelDeg) < 35,
   beat.heelDeg.toFixed(1) + '°');
-// Якорь калибровки. Скорость на галфвинде задаётся не расчётом, а кривой
-// RESIDUARY, и она подогнана под оценку владельца лодки. Проверка нужна,
-// чтобы правка кривой не проехала мимо этой оценки незамеченной.
+// Якорь калибровки. Скорость на галфвинде держится на множителе WAVE_SCALE —
+// на сколько занижается посчитанное по Мичеллу волновое сопротивление, — и
+// подобран он под оценку владельца лодки. Проверка нужна, чтобы правка не
+// проехала мимо этой оценки незамеченной.
 //
 // Ветер теперь имеет профиль по высоте, и «11.7 узлов» стало двусмысленным:
 // на стандартных десяти метрах это одно, у центра парусности на 4.1 м — на
@@ -125,15 +134,21 @@ check('крен в бейдевинд не запредельный', Math.abs(b
 // неоткренённой лодке те же условия дают 7.4 вместо 8.4.
 const RIG_WIND = 6.0;                       // м/с на высоте центра парусности
 const anchorWind = RIG_WIND / new Boat(PACK).wind.profile(PACK.rig.ce_height_m);
-let anchor = null, anchorTrim = null;
+const anchorSpecs = [];
 for (const sheet of [20, 26, 32, 38, 44, 50, 56]) {
   for (const twist of [0, 8, 16]) {
-    const r = sail(90, sheet, { wind: anchorWind, twist: twist * D, hike: 1 });
-    if (!anchor || r.t.speedKn > anchor.t.speedKn) {
-      anchor = r; anchorTrim = { sheet, twist };
-    }
+    anchorSpecs.push({ twa: 90, sheet: sheet, twist: twist,
+                       wind: anchorWind, hike: 1, secs: 120 });
   }
 }
+const anchorAll = await pool.map(anchorSpecs);
+let anchor = null, anchorTrim = null;
+anchorAll.forEach((r, i) => {
+  if (!anchor || r.speedKn > anchor.t.speedKn) {
+    anchor = { t: r };
+    anchorTrim = { sheet: anchorSpecs[i].sheet, twist: anchorSpecs[i].twist };
+  }
+});
 console.log('Якорь: у центра парусности ' + (RIG_WIND * KN).toFixed(1) +
   ' уз ветра (на 10 м это ' + (anchorWind * KN).toFixed(1) +
   ' уз), экипаж на борту, шкот ' + anchorTrim.sheet + '° твист ' +
@@ -145,12 +160,13 @@ console.log('Якорь: у центра парусности ' + (RIG_WIND * KN
 // полному местному скосу, где подпор от стакселя на грот выходил тягой из
 // ниоткуда.
 //
-// Оба раза кривую RESIDUARY сознательно не трогали, чтобы не смешивать
-// исправление ошибки с подгонкой. Теперь риг починен, и кривая пересобрана:
-// один множитель 0.72 на всю кривую, форма не менялась. Якорь встал на 8.5 —
-// ровно на оценку владельца.
+// Оба раза кривую сопротивления сознательно не трогали, чтобы не смешивать
+// исправление ошибки с подгонкой. Потом риг починили, кривую пересобрали, а
+// затем заменили расчётом: тихая вода по Мичеллу, волнение отдельным
+// слагаемым. Подгоняемых чисел осталось два, и держат они два наблюдения —
+// этот якорь и лавировочный угол в соседней батарее.
 //
-// Если он снова уедет, сперва искать ошибку в риге, а не крутить кривую.
+// Если якорь снова уедет, сперва искать ошибку в риге, а не крутить множитель.
 check('галфвинд в 11.7 узлах ветра у рига около восьми узлов',
   anchor.t.speedKn > 7.3 && anchor.t.speedKn < 9.2,
   anchor.t.speedKn.toFixed(2) + ' уз');
@@ -202,15 +218,21 @@ check('с брошенным рулём лодка не валится под в
 // проверка мерила не остроту лодки, а то, насколько удачно когда-то угадали
 // настройку; без откренивания лодка валится, теряет ход и «умеет» идти круче,
 // чем на самом деле, — лавировочный угол выходил на десяток градусов уже.
-const beatRows = [30, 45, 60].map(twa => {
-  let top = null;
+const beatTwa = [30, 45, 60];
+const beatSpecs = [];
+for (const twa of beatTwa) {
   for (let sheet = 6; sheet <= 30; sheet += 6) {
     for (const twist of [0, 16]) {
-      const r = sail(twa, sheet, { twist: twist * D, hike: 1 });
-      const track = twa + Math.abs(r.t.leewayDeg);
-      const vmg = r.t.speedKn * Math.cos(track * D);
-      if (!top || vmg > top.vmg) top = { twa, track, vmg };
+      beatSpecs.push({ twa: twa, sheet: sheet, twist: twist, hike: 1, secs: 120 });
     }
+  }
+}
+const beatAll = await pool.map(beatSpecs);
+const beatRows = beatTwa.map((twa, k) => {
+  let top = null;
+  for (let i = k * 10; i < (k + 1) * 10; i++) {
+    const r = beatAll[i];
+    if (!top || r.vmg > top.vmg) top = { twa: twa, track: r.track, vmg: r.vmg };
   }
   return top;
 });

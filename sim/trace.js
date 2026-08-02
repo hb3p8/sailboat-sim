@@ -21,7 +21,7 @@ export const TRACE_FIELDS = [
   // числом их не сделать, полосок может стать больше или меньше.
   'lag',
   // органы управления и условия — всё, что можно тронуть на ходу
-  'rudder', 'sheet', 'twist', 'twistEff', 'draft',
+  'rudder', 'sheet', 'twist', 'twistEff', 'draft', 'fetch',
   'windSpeed', 'windDir', 'gust', 'shift', 'crewHike', 'crewMass', 'sailScale',
   // показания — для сверки при воспроизведении и для разбора без пересчёта
   'speedKn', 'heelDeg', 'leewayDeg', 'driveN', 'sideN', 'alphaDeg',
@@ -30,7 +30,7 @@ export const TRACE_FIELDS = [
 
 // Поля, которые при воспроизведении надо подавать обратно в лодку.
 export const TRACE_INPUTS = [
-  'rudder', 'sheet', 'twist', 'draft', 'windSpeed', 'windDir',
+  'rudder', 'sheet', 'twist', 'draft', 'fetch', 'windSpeed', 'windDir',
   'crewHike', 'crewMass', 'sailScale',
 ];
 
@@ -59,7 +59,7 @@ export function traceFrame(boat) {
     r9(boat.hike),
     boat.alphaLag ? Array.from(boat.alphaLag, r9) : null,
     r9(boat.o.rudder), r9(boat.o.sheet), r9(boat.o.twist), r4(boat.twistEff),
-    r9(boat.o.draft),
+    r9(boat.o.draft), r9(boat.o.fetch),
     r9(boat.o.windSpeed), r9(boat.o.windDir),
     r9(boat.wind.o.gust), r9(boat.wind.o.shift),
     r9(boat.o.crewHike), r9(boat.o.crewMass), r9(boat.o.sailScale),

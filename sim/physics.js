@@ -18,6 +18,7 @@
 import { WindField } from './wind.js';
 import { Lattice } from './vlm.js';
 import { membraneCamber, slackOf, fillFactor, luffFactor, sectionLift } from './membrane.js';
+import { seaState, addedResistance } from './waves.js';
 
 const DEG = Math.PI / 180;
 
@@ -360,6 +361,9 @@ export class Boat {
       // сшито, меньше — фал, оттяжка Каннингема и оттяжка гика выбраны
       // и ткань натянута. Мембрана берёт отсюда запас длины.
       draft: 1.0,
+      // Разгон волны, м. Ноль — гладкая вода, как было раньше. Три километра —
+      // залив, где такая лодка обычно и ходит.
+      fetch: 3000,
     }, opts || {});
 
     // Поле ветра: скорость и направление в опциях — опорные, на десяти метрах.
@@ -933,9 +937,27 @@ export class Boat {
     const rudSide = rf.fy * cphi;
     const rudFx = rf.fx;
 
-    // сопротивление корпуса по таблице
+    // сопротивление корпуса по таблице плюс добавочное на волнении
     const rt = lerpTable(P.resistance.curve, 'v_ms', Math.abs(this.u), 'rt_n');
-    const hullDrag = -Math.sign(this.u || 1) * rt;
+    // Волны бегут ПО ветру, то есть навстречу лодке в лавировку. Проекция
+    // скорости на их направление и решает всё: встречная волна повышает
+    // частоту встречи и загоняет лодку в резонанс, попутная понижает — и на
+    // полном курсе добавочного сопротивления почти нет.
+    const sk = P.seakeeping, hs = P.hydrostatics;
+    let raw = 0;
+    if (sk && this.o.fetch > 0) {
+      const sea = seaState(this.o.windSpeed, this.o.fetch);
+      // курс лодки относительно направления бега волн
+      const rel = wrapPi(this.psi - (this.o.windDir + Math.PI));
+      raw = addedResistance(sea, 2 * Math.PI / sk.heave_period_s,
+                            hs.bwl_m, hs.lwl_m, Math.abs(this.u),
+                            Math.cos(rel), sk.wave_peak);
+      this.seaHs = sea.hs;
+    } else {
+      this.seaHs = 0;
+    }
+    this.wavesN = raw;
+    const hullDrag = -Math.sign(this.u || 1) * (rt + raw);
     const hull = this.hullLateral(this.v, this.r);
 
     // --- уравнения движения

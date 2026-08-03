@@ -443,5 +443,64 @@ check('период качки совпадает с расчётом по ге�
   period != null && Math.abs(period - expected) / expected < 0.15,
   period ? ((period - expected) / expected * 100).toFixed(1) + '%' : 'нет колебаний');
 
+// --- киль и руль как система -----------------------------------------------------
+//
+// Два крыла одно за другим, и заднее сидит в пелене переднего. Скос от киля
+// съедает у пера почти весь угол дрейфа: незаложенный руль на ходу несёт мало,
+// а его подъёмная сила завалена назад — это индуктивное сопротивление сверх
+// собственного.
+//
+// Плюс сопротивление стыка киля с корпусом: в углу, где перо входит в днище,
+// сливаются пограничные слои и сворачивается подковообразный вихрь. Величина
+// по Хёрнеру, из снятых с чертежа толщины и хорды.
+console.log('\nКиль и руль: скос от киля и стык с корпусом\n');
+{
+  const b = new Boat(PACK);
+  b.o.windSpeed = 6; b.o.windDir = 45 * D; b.o.sheet = 14 * D; b.o.twist = 8 * D;
+  b.o.crewHike = 1; b.o.crewMass = 240;
+  b.u = 3; b.phi = 12 * D;
+  for (let i = 0; i < 60 * 30; i++) {
+    b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * -b.psi - 0.9 * b.r)));
+    b.step(1 / 30);
+  }
+  const t = b.telemetry;
+  const k = PACK.foils.keel, r = PACK.foils.rudder;
+  console.log('  дрейф ' + t.leewayDeg.toFixed(1) + '°, руль ' +
+    (b.o.rudder / D).toFixed(1) + '°, боковая киля ' + t.keelLiftN.toFixed(0) +
+    ' Н, пера ' + t.rudderLiftN.toFixed(0) + ' Н');
+  const jq = 0.5 * PACK.environment.rho_water * k.junction_cda_m2 * t.speed * t.speed;
+  console.log('  стык киля с корпусом: cx·S ' + k.junction_cda_m2.toFixed(5) +
+    ' кв.м, на этом ходу ' + jq.toFixed(1) + ' Н из ' + t.resistN.toFixed(0) + '\n');
+
+  check('перо в пелене киля несёт много меньше киля',
+    Math.abs(t.rudderLiftN) < 0.35 * Math.abs(t.keelLiftN),
+    Math.abs(t.rudderLiftN).toFixed(0) + ' против ' + Math.abs(t.keelLiftN).toFixed(0) + ' Н');
+  check('но не ноль: руля лодка слушается',
+    Math.abs(b.o.rudder / D) > 0.5 && Math.abs(b.o.rudder / D) < 8,
+    (b.o.rudder / D).toFixed(1) + '°');
+  // Сопротивление стыка — не подгонка: оно целиком из геометрии сечения.
+  check('стык киля даёт заметную, но не главную долю сопротивления',
+    jq > 0.5 && jq < 0.1 * t.resistN,
+    jq.toFixed(1) + ' Н из ' + t.resistN.toFixed(0) + ' Н');
+}
+
+// Скос обязан исчезать на заднем ходу: там пелена киля уходит ВПЕРЁД, и перо
+// в неё не попадает. Ловится это тем, что на заднем ходу перо несёт наравне с
+// килем, а не втрое меньше.
+{
+  const fwd = new Boat(PACK), back = new Boat(PACK);
+  for (const [b, u] of [[fwd, 2.5], [back, -2.5]]) {
+    b.o.windSpeed = 0.1; b.u = u; b.v = u * Math.tan(6 * D);
+    b.o.rudder = 0; b.o.rudderTarget = null;
+    b.step(1 / 30);
+  }
+  const rf = Math.abs(fwd.telemetry.rudderLiftN) / Math.abs(fwd.telemetry.keelLiftN);
+  const rb = Math.abs(back.telemetry.rudderLiftN) / Math.abs(back.telemetry.keelLiftN);
+  console.log('Доля пера от киля: на переднем ходу ' + rf.toFixed(2) +
+    ', на заднем ' + rb.toFixed(2) + '\n');
+  check('на заднем ходу скоса от киля нет', rb > rf * 2,
+    rf.toFixed(2) + ' против ' + rb.toFixed(2));
+}
+
 console.log('\n' + (failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');
 process.exit(failures ? 1 : 0);

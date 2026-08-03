@@ -277,10 +277,6 @@ function sailMesh(colour) {
   g.setIndex(idx);
   const m = new Mesh(g, new MeshStandardMaterial({
     color: new Color(colour), roughness: 0.9, side: DoubleSide,
-    // Чуть прозрачные: сквозь них угадывается и поток, и колдунчик с
-    // подветренной стороны. Глубину полотно при этом пишет, поэтому линии за
-    // ним честно прячутся — видно их только бледной прорисовкой поверх.
-    transparent: true, opacity: 0.9,
     vertexColors: true,
   }));
   m.frustumCulled = false;
@@ -1017,6 +1013,19 @@ function updateFlow() {
 let debugOn = false;
 function setDebug(on) {
   debugOn = on;
+  // Паруса приспускаются в прозрачность только в отладочном виде: там сквозь
+  // них угадывается и поток, и колдунчик с подветренной стороны. В обычном
+  // полотно должно быть полотном.
+  //
+  // `transparent` переключается вместе с прозрачностью, а не остаётся всегда
+  // включённым: у прозрачного материала своя очередь отрисовки, с сортировкой
+  // по дальности, и держать в ней непрозрачный парус незачем. Смена флага
+  // требует пересборки программы — отсюда needsUpdate.
+  for (const m of [mainSail.material, jibSail.material]) {
+    m.transparent = on;
+    m.opacity = on ? 0.9 : 1;
+    m.needsUpdate = true;
+  }
   field.visible = on;
   battens.visible = on;
   flow.visible = on;

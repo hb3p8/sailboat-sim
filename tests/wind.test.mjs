@@ -542,5 +542,61 @@ console.log('\nРешётка против сечения: подъёмная с
     ', наибольшее ' + Math.max(...rows.map(r => r.best)).toFixed(2));
 }
 
+// --- парусность в потоке --------------------------------------------------------
+//
+// Корпус, стоячий такелаж и экипаж. Долгое время это было одно назначенное
+// число на всё — 0.56 кв.м с одним cx и одной высотой, — и оно оказалось
+// заниженным вчетверо: только надводный борт даёт полтора квадрата спереди и
+// три лагом, да экипаж втроём столько же.
+//
+// Проверяется не величина (её задаёт геометрия), а то, что модель ведёт себя
+// как тело в потоке: тень зависит от курса, сила идёт вдоль кажущегося ветра и
+// растёт как его квадрат, экипаж в кокпите закрыт бортом сильнее, чем на борту.
+console.log('\nПарусность в потоке\n');
+{
+  const b = new Boat(PACK);
+  b.o.crewHike = 1; b.o.crewMass = 240;
+  const at = (x, y) => b.windage({ x: x, y: y, speed: Math.hypot(x, y) });
+  // Все замеры на десяти метрах в секунду: F = ½·ρ·cx·A·V², отсюда и cx·A.
+  const cda = w => 2 * Math.hypot(w.fx, w.fy) / (PACK.environment.rho_air * 100);
+  const bow = at(-10, 0), beam = at(0, -10), close = at(-9.2, -3.9);
+  console.log('  в нос      cx·площадь ' + cda(bow).toFixed(2) +
+    ' кв.м, высота ' + bow.z.toFixed(2) + ' м');
+  console.log('  лагом      cx·площадь ' + cda(beam).toFixed(2) +
+    ' кв.м, высота ' + beam.z.toFixed(2) + ' м');
+  console.log('  бейдевинд  cx·площадь ' + cda(close).toFixed(2) +
+    ' кв.м, высота ' + close.z.toFixed(2) + ' м');
+  b.o.crewHike = 0;
+  const cockpit = cda(at(0, -10));
+  b.o.crewMass = 0;
+  const nocrew = cda(at(0, -10));
+  console.log('  лагом без экипажа ' + nocrew.toFixed(2) +
+    ', экипаж в кокпите ' + cockpit.toFixed(2) +
+    ', экипаж на борту ' + cda(beam).toFixed(2) + ' кв.м\n');
+
+  check('лагом парусности больше, чем в нос', cda(beam) > cda(bow) * 1.5,
+    cda(beam).toFixed(2) + ' против ' + cda(bow).toFixed(2) + ' кв.м');
+  check('в бейдевинд между ними, ближе к носовой',
+    cda(close) > cda(bow) && cda(close) < 0.5 * (cda(bow) + cda(beam)),
+    cda(close).toFixed(2) + ' кв.м');
+  check('экипаж в кокпите закрыт бортом', cockpit > nocrew && cockpit < cda(beam),
+    nocrew.toFixed(2) + ' → ' + cockpit.toFixed(2) + ' → ' + cda(beam).toFixed(2));
+  // Такелаж висит высоко, корпус низко: центр приложения обязан быть между.
+  check('точка приложения выше палубы, но много ниже центра парусности',
+    beam.z > 0.4 && beam.z < 0.5 * PACK.rig.ce_height_m,
+    beam.z.toFixed(2) + ' м при центре парусности ' +
+    PACK.rig.ce_height_m.toFixed(2) + ' м');
+  // Сила квадратична по скорости и направлена ровно по кажущемуся ветру.
+  {
+    const half = b.windage({ x: -5, y: -5, speed: Math.hypot(5, 5) });
+    const full = b.windage({ x: -10, y: -10, speed: Math.hypot(10, 10) });
+    const ratio = Math.hypot(full.fx, full.fy) / Math.hypot(half.fx, half.fy);
+    check('сопротивление растёт как квадрат скорости',
+      Math.abs(ratio - 4) < 1e-9, ratio.toFixed(3) + ' при удвоении');
+    check('сила направлена по кажущемуся ветру',
+      Math.abs(full.fx / full.fy - 1) < 1e-9);
+  }
+}
+
 console.log('\n' + (failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');
 process.exit(failures ? 1 : 0);

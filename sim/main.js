@@ -277,6 +277,10 @@ function sailMesh(colour) {
   g.setIndex(idx);
   const m = new Mesh(g, new MeshStandardMaterial({
     color: new Color(colour), roughness: 0.9, side: DoubleSide,
+    // Чуть прозрачные: сквозь них угадывается и поток, и колдунчик с
+    // подветренной стороны. Глубину полотно при этом пишет, поэтому линии за
+    // ним честно прячутся — видно их только бледной прорисовкой поверх.
+    transparent: true, opacity: 0.9,
     vertexColors: true,
   }));
   m.frustumCulled = false;
@@ -861,19 +865,84 @@ function saveDump() {
 //
 // Линии живут в горизонтной системе лодки — той же, в которой считает риг:
 // курс есть, крена нет. Поэтому у них своя группа.
-const FLOW_LINES = 26, FLOW_STEPS = 44, FLOW_DS = 0.55;
+// Линия — не отрезок, а трубка.
+//
+// Отрезок WebGL везде рисует в один пиксель, толщина не задаётся, и на воде
+// такие линии не читаются вовсе. Готовые «толстые линии» для three.js
+// (Line2/LineMaterial) раздувают отрезок в экранных координатах вершинным
+// шейдером; здесь рендерер узловой, и городить свой шейдер ради этого незачем —
+// пятигранная трубка даёт то же самое и обходится геометрией.
+//
+// У трубки есть и второе достоинство, ради которого она и выбрана. Грани
+// закрашиваются по своему наклону к условному свету, и у линии сам собой
+// появляется тёмный кант. Без него никакая палитра не читается сразу и на
+// тёмной воде, и на белом парусе — светлое пропадает на парусе, тёмное на воде.
+const FLOW_LINES = 26, FLOW_STEPS = 24, FLOW_DS = 0.55;
+const FLOW_SEED = 4.5;        // насколько выше по потоку начинать, м
+const FLOW_SIDES = 5;
+const FLOW_R = 0.032;         // радиус трубки, м
+const FLOW_PTS = FLOW_STEPS + 1;
+const FLOW_LIGHT = [0.35, 0.86, 0.37];   // куда смотрит условный свет
+
+// Палитра расходящаяся, и это не украшение, а то же самое решение, что и у
+// трубки: показывать надо ОТКЛОНЕНИЕ от набегающего потока, а не саму скорость.
+// Поэтому середина шкалы — набегающий поток, и она нейтральная; холодный полюс
+// — подпор перед парусом, тёплый — разгон в щели.
+//
+// Числа не подобраны на глаз. Полюса взяты голубой и янтарный: они
+// противоположны по теплу, различимы при любом виде дальтонизма (ΔE 19 при
+// нормальном зрении, 8 при дейтеранопии) и оба выше 3:1 на воде. Середина —
+// чистый серый и заметно ТЕМНЕЕ полюсов: во-первых, у расходящейся шкалы
+// светлота обязана расти к обоим краям, чтобы величина отклонения читалась и
+// без цвета; во-вторых, светлая середина сливалась с белым парусом — на
+// картинке нельзя было отличить поток от полотна.
+const FLOW_SLOW = [0.247, 0.816, 0.910];   // #3fd0e8
+const FLOW_MID = [0.561, 0.561, 0.561];    // #8f8f8f
+const FLOW_FAST = [0.961, 0.647, 0.141];   // #f5a524
+// Размах шкалы: на сколько долей набегающей растянуты полюса. Взят по самому
+// полю, а не на глаз. Между пятью и девяноста пятью процентами точек скорость
+// лежит в пределах 0.90…1.15 набегающей; при размахе 0.45 в эту вилку попадала
+// только середина шкалы, и картинка выходила сплошь серой. При 0.25 обычное
+// отклонение красится вполсилы, а полностью — только там, где поток и правда
+// стоит или разгоняется вдвое: перед шкаториной и в щели.
+const FLOW_SPAN = 0.25;
+
 const flowGroup = new Group();
 scene.add(flowGroup);
-const flowGeo = new BufferGeometry();
-flowGeo.setAttribute('position',
-  new Float32BufferAttribute(new Float32Array(FLOW_LINES * FLOW_STEPS * 2 * 3), 3));
-flowGeo.setAttribute('color',
-  new Float32BufferAttribute(new Float32Array(FLOW_LINES * FLOW_STEPS * 2 * 3), 3));
-const flow = new LineSegments(flowGeo, new LineBasicMaterial({
-  vertexColors: true, transparent: true, opacity: 0.85, depthTest: false }));
+
+function flowGeometry() {
+  const nv = FLOW_LINES * FLOW_PTS * FLOW_SIDES;
+  const g = new BufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute(new Float32Array(nv * 3), 3));
+  g.setAttribute('color', new Float32BufferAttribute(new Float32Array(nv * 3), 3));
+  const idx = [];
+  for (let l = 0; l < FLOW_LINES; l++) {
+    for (let k = 0; k < FLOW_STEPS; k++) {
+      const a = (l * FLOW_PTS + k) * FLOW_SIDES, b = a + FLOW_SIDES;
+      for (let s = 0; s < FLOW_SIDES; s++) {
+        const s2 = (s + 1) % FLOW_SIDES;
+        idx.push(a + s, b + s, b + s2, a + s, b + s2, a + s2);
+      }
+    }
+  }
+  g.setIndex(idx);
+  return g;
+}
+const flowGeo = flowGeometry();
+// Две прорисовки одной геометрии. Первая — как есть, с тестом глубины: линии
+// прячутся за парусами и корпусом, как всякое тело. Вторая — поверх всего и
+// еле видная: она и даёт увидеть поток за парусом, не ломая при этом ощущение
+// объёма. Приём известный, и он надёжнее полупрозрачных линий, у которых
+// порядок отрисовки всё время не тот.
+const flow = new Mesh(flowGeo, new MeshBasicMaterial({ vertexColors: true }));
 flow.frustumCulled = false;
-flow.renderOrder = 5;
 flowGroup.add(flow);
+const flowGhost = new Mesh(flowGeo, new MeshBasicMaterial({
+  vertexColors: true, transparent: true, opacity: 0.16,
+  depthTest: false, depthWrite: false }));
+flowGhost.frustumCulled = false;
+flowGhost.renderOrder = 6;
+flowGroup.add(flowGhost);
 const flowV = [0, 0, 0];
 
 function updateFlow() {
@@ -886,38 +955,58 @@ function updateFlow() {
   const ux = aw.x / V, uy = aw.y / V;          // куда дует
   const px = -uy, py = ux;                     // поперёк потока
   const rigX = rig.ce_x_m, rigZ = rig.ce_height_m;
-  let n = 0;
+  let at = 0;
   for (let i = 0; i < FLOW_LINES; i++) {
-    // Засев: сетка поперёк потока, с наветра от рига.
+    // Засев: сетка поперёк потока, с наветра от рига. Начинать дальше незачем —
+    // до паруса поток идёт прямо, и длинные прямые хвосты только загораживают
+    // лодку.
     const row = i % 2, col = (i - row) / 2;
-    const lat0 = (col / (FLOW_LINES / 2 - 1) - 0.5) * 7.5;
-    const h = row ? rigZ * 0.45 : rigZ * 1.15;
-    let x = rigX - ux * 9 + px * lat0;
-    let y = -uy * 9 + py * lat0;
+    const lat0 = (col / (FLOW_LINES / 2 - 1) - 0.5) * 6.0;
+    const h = row ? rigZ * 0.45 : rigZ * 1.05;
+    let x = rigX - ux * FLOW_SEED + px * lat0;
+    let y = -uy * FLOW_SEED + py * lat0;
     let z = h;
-    for (let k = 0; k < FLOW_STEPS; k++) {
+    for (let k = 0; k <= FLOW_STEPS; k++) {
       lat.induced(x, y, z, ux, uy, 0, true, flowV);
-      let vx = aw.x + flowV[0], vy = aw.y + flowV[1], vz = flowV[2];
+      const vx = aw.x + flowV[0], vy = aw.y + flowV[1], vz = flowV[2];
       const sp = Math.hypot(vx, vy, vz) || 1;
-      const nx = x + vx / sp * FLOW_DS;
-      const ny = y + vy / sp * FLOW_DS;
-      const nz = Math.max(0.15, z + vz / sp * FLOW_DS);
-      const b = n * 6;
-      p[b] = x; p[b + 1] = z; p[b + 2] = y;
-      p[b + 3] = nx; p[b + 4] = nz; p[b + 5] = ny;
-      // Цвет по скорости относительно набегающей: медленнее синий, быстрее
-      // жёлтый. В щели поток разгоняется — это и должно быть видно.
-      const q = Math.max(0, Math.min(1, (sp / V - 0.75) / 0.6));
-      for (let v = 0; v < 2; v++) {
-        c[b + v * 3] = 0.30 + 0.70 * q;
-        c[b + v * 3 + 1] = 0.55 + 0.35 * q;
-        c[b + v * 3 + 2] = 1.00 - 0.60 * q;
+      // Касательная в осях отрисовки: X в нос, Y вверх, Z вправо.
+      const tx = vx / sp, ty = vz / sp, tz = vy / sp;
+      // Поперечный репер. Линии тока почти горизонтальны, так что мировая
+      // вертикаль годится за опорную и вырождения не даёт.
+      let ax = -tz, ay = 0, az = tx;
+      const al = Math.hypot(ax, az) || 1;
+      ax /= al; az /= al;
+      const bx = ty * az - ay, by = tz * ax - tx * az, bz = -ty * ax;
+
+      const t = Math.max(-1, Math.min(1, (sp / V - 1) / FLOW_SPAN));
+      const lo = t < 0 ? FLOW_SLOW : FLOW_FAST;
+      const w = Math.abs(t);
+      const cr = FLOW_MID[0] + (lo[0] - FLOW_MID[0]) * w;
+      const cg = FLOW_MID[1] + (lo[1] - FLOW_MID[1]) * w;
+      const cb = FLOW_MID[2] + (lo[2] - FLOW_MID[2]) * w;
+
+      for (let s = 0; s < FLOW_SIDES; s++) {
+        const a = 2 * Math.PI * s / FLOW_SIDES;
+        const ca = Math.cos(a), sa = Math.sin(a);
+        const nx = ax * ca + bx * sa, ny = ay * ca + by * sa, nz = az * ca + bz * sa;
+        const o = at * 3;
+        p[o] = x + nx * FLOW_R;
+        p[o + 1] = z + ny * FLOW_R;
+        p[o + 2] = y + nz * FLOW_R;
+        // Затенение по нормали грани: сверху светлее, снизу темнее. Отсюда и
+        // кант, который держит линию читаемой на любом фоне.
+        const d = nx * FLOW_LIGHT[0] + ny * FLOW_LIGHT[1] + nz * FLOW_LIGHT[2];
+        const sh = 0.52 + 0.48 * (0.5 + 0.5 * d);
+        c[o] = cr * sh; c[o + 1] = cg * sh; c[o + 2] = cb * sh;
+        at++;
       }
-      x = nx; y = ny; z = nz;
-      n++;
+      if (k === FLOW_STEPS) break;
+      x += tx * FLOW_DS;
+      z = Math.max(0.15, z + ty * FLOW_DS);
+      y += tz * FLOW_DS;
     }
   }
-  flowGeo.setDrawRange(0, n * 2);
   flowGeo.attributes.position.needsUpdate = true;
   flowGeo.attributes.color.needsUpdate = true;
 }
@@ -928,6 +1017,7 @@ function setDebug(on) {
   field.visible = on;
   battens.visible = on;
   flow.visible = on;
+  flowGhost.visible = on;
   document.getElementById('rigcard').hidden = !on;
 }
 

@@ -42,14 +42,22 @@ def main():
     cache = os.path.join(ROOT, "data", "terrain")
     t = terrain.build(BBOX, args.step, cache, level=args.level)
 
-    h, cov, cover = t.pop("height"), t.pop("water"), t.pop("cover")
+    h, cov = t.pop("height"), t.pop("water")
+    cls, cover_h = t.pop("cover_class"), t.pop("cover_height")
     # Дециметры: диапазон высот здесь — сотни метров, а 0.1 м мельче, чем
     # что-либо в этих данных различимо.
     hi = np.round(h * 10.0).astype(np.int16)
     t["height_dm_b64"] = base64.b64encode(hi.tobytes()).decode()
     t["water_b64"] = base64.b64encode(
         np.round(cov * 255).astype(np.uint8).tobytes()).decode()
-    t["cover_b64"] = base64.b64encode(cover.tobytes()).decode()
+
+    # Класс и высота слоя — в одном байте: два старших бита класс, шесть
+    # младших высота в метрах. Двумя массивами было бы честнее по виду, но
+    # страница вклеивает всё в base64 и растёт на шестьсот килобайт на ровном
+    # месте. Потолок в 63 м отсюда же, и он не жмёт: выше в DSM попадаются
+    # только мачты и шум.
+    t["cover_b64"] = base64.b64encode(
+        ((cls << 6) | np.round(cover_h).astype(np.uint8)).tobytes()).decode()
 
     out = os.path.join(ROOT, "out")
     os.makedirs(out, exist_ok=True)
@@ -60,11 +68,11 @@ def main():
     print("%s — %.0f КБ" % (os.path.relpath(dst, ROOT), os.path.getsize(dst) / 1024))
     print("сетка %d × %d, шаг %.0f м, участок %.2f × %.2f км"
           % (t["nx"], t["ny"], t["step"], t["size"][0] / 1000, t["size"][1] / 1000))
-    print("урез %.1f м, высоты %.1f…%.1f м"
-          % (t["level"], t["hmin"], t["hmax"]))
-    print("вода %.0f%%, лес %.0f%%, застройка %.0f%% площади"
+    print("урез %.1f м, земля %.1f…%.1f м, с лесом и застройкой до %.1f м"
+          % (t["level"], t["hmin"], t["hmax"], t["top_max"]))
+    print("вода %.0f%%, лес %.0f%%, застройка %.0f%% площади; слой до %.0f м"
           % (100 * t["water_fraction"], 100 * t["forest_fraction"],
-             100 * t["urban_fraction"]))
+             100 * t["urban_fraction"], t["cover_max_m"]))
 
 
 if __name__ == "__main__":

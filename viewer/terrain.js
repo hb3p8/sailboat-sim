@@ -25,6 +25,16 @@ function unb64(s, Type) {
 const H = unb64(T.height_dm_b64, Int16Array);
 const WET = unb64(T.water_b64, Uint8Array);
 
+// Слой покрова упакован по байту на ячейку: два старших бита — класс
+// (0 открыто, 1 лес, 2 застройка), шесть младших — высота над землёй в метрах.
+const PACKED = unb64(T.cover_b64, Uint8Array);
+const CLS = new Uint8Array(PACKED.length);
+const CH = new Uint8Array(PACKED.length);
+for (let k = 0; k < PACKED.length; k++) {
+  CLS[k] = PACKED[k] >> 6;
+  CH[k] = PACKED[k] & 63;
+}
+
 const NX = T.nx, NY = T.ny, STEP = T.step, LEVEL = T.level;
 const WIDTH = (NX - 1) * STEP, DEPTH = (NY - 1) * STEP;
 
@@ -69,30 +79,32 @@ placeSun();
 const pos = new Float32Array(NX * NY * 3);
 const col = new Float32Array(NX * NY * 3);
 
-// Гипсометрическая шкала: от поймы к плато. Отсчёт от уреза, а не от нуля
-// высот, — на реке значение имеет высота над водой, а не над Балтикой.
+// Гипсометрическая шкала земли: от поймы к плато. Отсчёт от уреза, а не от
+// нуля высот, — на реке значение имеет высота над водой, а не над Балтикой.
+// Лес и застройка сюда не входят: они отдельной геометрией и своего цвета.
 const RAMP = [
   [0.0, 0x4d6b4a], [6.0, 0x6f8352], [18.0, 0x8b9159],
   [40.0, 0xa89a6c], [80.0, 0xc0b189], [140.0, 0xdcd5c0],
 ];
 
 const c = new Color();
+const tmp = new Color();
 function tint(dh, banded) {
   if (banded) dh = Math.floor(dh / 10) * 10;
   let i = 0;
   while (i < RAMP.length - 2 && dh > RAMP[i + 1][0]) i++;
   const [a, ca] = RAMP[i], [b, cb] = RAMP[i + 1];
   const t = Math.max(0, Math.min(1, (dh - a) / (b - a)));
-  return c.setHex(ca).lerp(new Color(cb), t);
+  return c.setHex(ca).lerp(tmp.setHex(cb), t);
 }
 
 function paint(banded) {
   for (let iy = 0, k = 0; iy < NY; iy++)
     for (let ix = 0; ix < NX; ix++, k++) {
-      const dh = H[k] / 10 - LEVEL;
       // Дно под водой — свой цвет: иначе мель читается как суша, и вся маска
       // берега на просмотре теряет смысл.
-      const t = WET[k] > 127 ? c.setHex(0x2f4a52) : tint(dh, banded);
+      const t = WET[k] > 127 ? c.setHex(0x2f4a52)
+                             : tint(H[k] / 10 - LEVEL, banded);
       col[k * 3] = t.r; col[k * 3 + 1] = t.g; col[k * 3 + 2] = t.b;
     }
   landGeo.attributes.color.needsUpdate = true;
@@ -127,7 +139,87 @@ landGeo.computeVertexNormals();
 
 const land = new Mesh(landGeo, new MeshStandardMaterial({
   vertexColors: true, roughness: 0.95, metalness: 0.0 }));
-scene.add(land);
+
+// Земля и слой едут вместе: подъём высот обязан растягивать их одинаково,
+// иначе лес при первом же движении ползунка отрывается от берега.
+const relief = new Group();
+relief.add(land);
+scene.add(relief);
+
+// ------------------------------------------------------- лес и застройка
+//
+// Отдельной геометрией на каждый класс, а не вмятые в рельеф высотами. Так
+// рельеф остаётся рельефом — по нему можно считать уклон и ветровую тень, не
+// гадая, где холм, а где сосняк на холме, — а слой можно выключить, погасить
+// или заменить чем угодно, не пересобирая выгрузку.
+//
+// Геометрия нарочно простая: крышка по верху слоя и вертикальные стенки там,
+// где массив кончается. Ни отдельных деревьев, ни отдельных домов — с воды
+// квартал и опушка читаются сплошной стеной, а не набором коробок, и ставить
+// туда что-то подробнее значит платить миллионами треугольников за то, чего
+// не видно.
+//
+// Ячейка попадает в слой, только если её класса все четыре узла. Иначе край
+// массива съезжал бы на полклетки наружу и обрастал зубцами по диагоналям.
+
+function coverMesh(cls, colour) {
+  const cw = NX - 1, chh = NY - 1;
+  const capped = new Uint8Array(cw * chh);
+  for (let iy = 0; iy < chh; iy++)
+    for (let ix = 0; ix < cw; ix++) {
+      const a = iy * NX + ix;
+      capped[iy * cw + ix] = (CLS[a] === cls && CLS[a + 1] === cls &&
+                              CLS[a + NX] === cls && CLS[a + NX + 1] === cls)
+                             ? 1 : 0;
+    }
+
+  const vp = [], vi = [];
+  const gx = k => (k % NX) * STEP - WIDTH / 2;
+  const gz = k => -(((k / NX) | 0) * STEP - DEPTH / 2);
+  const ytop = k => H[k] / 10 + CH[k];
+
+  const node = new Int32Array(NX * NY).fill(-1);
+  const put = k => {
+    if (node[k] < 0) { node[k] = vp.length / 3; vp.push(gx(k), ytop(k), gz(k)); }
+    return node[k];
+  };
+  // Стенка своими вершинами: у крышки они на верху слоя, у подошвы на земле,
+  // общих между ними нет.
+  const wall = (k1, k2) => {
+    const n = vp.length / 3;
+    vp.push(gx(k1), H[k1] / 10, gz(k1), gx(k2), H[k2] / 10, gz(k2),
+            gx(k2), ytop(k2), gz(k2), gx(k1), ytop(k1), gz(k1));
+    vi.push(n, n + 1, n + 2, n, n + 2, n + 3);
+  };
+  const nb = (ix, iy) => (ix < 0 || iy < 0 || ix >= cw || iy >= chh)
+                         ? 0 : capped[iy * cw + ix];
+
+  for (let iy = 0; iy < chh; iy++)
+    for (let ix = 0; ix < cw; ix++) {
+      if (!capped[iy * cw + ix]) continue;
+      const a = iy * NX + ix, b = a + 1, d = a + NX, e = d + 1;
+      const p0 = put(a), p1 = put(b), p2 = put(e), p3 = put(d);
+      vi.push(p0, p1, p3, p1, p2, p3);
+      if (!nb(ix, iy - 1)) wall(a, b);
+      if (!nb(ix, iy + 1)) wall(d, e);
+      if (!nb(ix - 1, iy)) wall(a, d);
+      if (!nb(ix + 1, iy)) wall(b, e);
+    }
+
+  const g = new BufferGeometry();
+  g.setAttribute('position', new BufferAttribute(new Float32Array(vp), 3));
+  g.setIndex(vi);
+  g.computeVertexNormals();
+  // DoubleSide намеренно: намотка стенок зависит от того, с какой стороны
+  // ячейки они выросли, и разбираться с восемью случаями ради отбраковки,
+  // которая тут ничего не экономит, — не та цена.
+  return new Mesh(g, new MeshStandardMaterial({
+    color: colour, roughness: 0.92, metalness: 0.0, side: DoubleSide }));
+}
+
+const forest = coverMesh(1, 0x2f4a26);
+const urban = coverMesh(2, 0x8c8377);
+relief.add(forest, urban);
 
 // -------------------------------------------------------------------- вода
 //
@@ -205,8 +297,8 @@ let exag = 1;
 function applyExag() {
   // Растяжение вокруг уреза, а не вокруг нуля высот: урез обязан остаться на
   // месте, иначе вода при подъёме уезжает от берега.
-  land.scale.y = exag;
-  land.position.y = LEVEL * (1 - exag);
+  relief.scale.y = exag;
+  relief.position.y = LEVEL * (1 - exag);
 }
 
 // ------------------------------------------------------------------- камера
@@ -352,6 +444,9 @@ document.getElementById('banded').addEventListener('change', e => {
 document.getElementById('grid').addEventListener('change', e => {
   grid.visible = e.target.checked; needsDraw = true;
 });
+document.getElementById('cover').addEventListener('change', e => {
+  forest.visible = urban.visible = e.target.checked; needsDraw = true;
+});
 for (const b of document.querySelectorAll('#modes button'))
   b.addEventListener('click', () => setMode(b.dataset.mode));
 
@@ -362,8 +457,14 @@ document.getElementById('facts').innerHTML = [
   ['Сетка', T.nx + ' × ' + T.ny + ', шаг ' + T.step + ' м'],
   ['Урез', T.level.toFixed(1) + ' м'],
   ['Высоты', T.hmin.toFixed(0) + '…' + T.hmax.toFixed(0) + ' м'],
-  ['Над водой', (T.hmax - T.level).toFixed(0) + ' м'],
-  ['Воды', (100 * T.water_fraction).toFixed(1) + '% площади'],
+  ['Над водой', (T.top_max - T.level).toFixed(0) + ' м с покровом'],
+  ['Воды', (100 * T.water_fraction).toFixed(1) + '%'],
+  ['Леса', (100 * T.forest_fraction).toFixed(1) + '%, от '
+           + T.cover_min_m.forest.toFixed(0) + ' м'],
+  ['Застройки', (100 * T.urban_fraction).toFixed(1) + '%, от '
+                + T.cover_min_m.urban.toFixed(0) + ' м'],
+  ['Треугольников', ((landGeo.index.count + forest.geometry.index.count
+                      + urban.geometry.index.count) / 3e6).toFixed(2) + ' млн'],
 ].map(([k, v]) => '<tr><td>' + k + '</td><td class="v">' + v + '</td></tr>').join('');
 
 // ------------------------------------------------------------------- кадр
@@ -396,4 +497,5 @@ renderer.init().then(() => { resize(); frame(); }).catch(err => {
   document.getElementById('crash').textContent = 'Рендерер не поднялся: ' + err;
   document.getElementById('crash').style.display = 'block';
 });
+
 

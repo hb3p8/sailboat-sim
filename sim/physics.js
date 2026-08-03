@@ -55,6 +55,42 @@ const NLIN = 3;
 const NLIN_RELAX = 0.65;
 const NLIN_MAX = 20 * DEG;      // насколько вообще позволено править угол
 
+// Берег и мель.
+//
+// Берег — единственное твёрдое ограничение на всей акватории: он снят с OSM и
+// измерен. Мель выдумана целиком: промера нет, дно в выгрузке — условный откос
+// от берега, и вести себя она обязана как выдумка, то есть мягко. Отсюда и
+// разное обхождение: у берега скорость гасится жёстко, на мели только растёт
+// сопротивление.
+//
+// Полширины лодки: ближе этого к урезу борт уже на суше.
+const SHORE_STOP = 1.1;
+// Условный откос дна, м глубины на метр от уреза (тот же, что в выгрузке).
+const SHOAL_SLOPE = 0.06;
+const SHOAL_MAX = 6.0;
+// Во сколько раз растёт сопротивление, когда под килем не остаётся ничего.
+// Число фальшивое ровно настолько же, насколько фальшиво дно под ним.
+const SHOAL_DRAG = 1.5;
+
+// Ветер над водой разгоняется не сразу.
+//
+// Выходя с суши, поток попадает с шероховатости порядка метра (лес, кварталы)
+// на шероховатость воды, и у поверхности разгоняется по мере того, как над
+// водой нарастает внутренний пограничный слой. Толщина его растёт как
+// δ(x) ≈ 0.28·z₀·(x/z₀)^0.8 — при z₀ = 1 м это одиннадцать метров на сотне от
+// берега и семьдесят на километре. То есть в сотне метров от берега стандартная
+// десятиметровая высота ещё внутри слоя, несущего сухопутную шероховатость, а в
+// километре уже нет.
+//
+// Расстояние здесь — то же самое расстояние против ветра до берега, которое
+// считается для разгона волны. Одно поле, два применения.
+//
+// Форма отсюда, множитель подобран: масштаб L даёт формула внутреннего слоя, а
+// глубину провала `A` брать неоткуда. Так и записано, чтобы через месяц это
+// число не выглядело измеренным.
+const WIND_SHORE_A = 0.3;
+const WIND_SHORE_L = 600.0;
+
 // За срывом потенциальное течение неприменимо, и поправка на скос гасится.
 const IND_FADE0 = 20 * DEG;
 const IND_FADE1 = 35 * DEG;
@@ -375,6 +411,13 @@ export class Boat {
     // не меняет ни бита.
     this.cur = { x: 0, y: 0 };
     this.curB = { x: 0, y: 0 };
+    this.shoreN = { x: 0, y: 0 };
+    // Расстояние до берега и множитель ветра — наружу: первое показывается в
+    // HUD и есть половина умения читать реку, второе нужно телеметрии.
+    this.shoreM = null;
+    this.windK = 1;
+    this.shoalK = 0;
+    this.aground = false;
     this.o = Object.assign({
       windSpeed: 6.0,          // истинный ветер, м/с
       windDir: 100 * DEG,      // откуда дует, рад, отсчёт от оси X мира
@@ -588,10 +631,13 @@ export class Boat {
     const w = this.wind.sample(this.x + xb * c - yb * s,
                               this.y + xb * s + yb * c,
                               Math.max(0.3, zb), this.t);
-    const ax = w.x * c + w.y * s - (vx + this.curB.x);
-    const ay = -w.x * s + w.y * c - (vy + this.curB.y);
+    // Множитель за берег: ветер над водой разгоняется не сразу. Один на всю
+    // лодку — он меняется на сотнях метров, а лодка шесть метров длиной.
+    const k = this.windK;
+    const ax = w.x * k * c + w.y * k * s - (vx + this.curB.x);
+    const ay = -w.x * k * s + w.y * k * c - (vy + this.curB.y);
     return { x: ax, y: ay, speed: Math.hypot(ax, ay),
-             angle: Math.atan2(ay, ax), ws: w.speed };
+             angle: Math.atan2(ay, ax), ws: w.speed * k };
   }
 
   // Кажущийся ветер «у лодки» — на высоте центра парусности. Это то, что
@@ -1164,13 +1210,19 @@ export class Boat {
     this.wind.o.speed = this.o.windSpeed;
     this.wind.o.dir = this.o.windDir;
 
-    // Течение — раз в шаг: зависит только от места. Без акватории оба вектора
-    // остаются нулями и ничего не меняют.
+    // Место — раз в шаг: течение, берег, разгон ветра. Всё это меняется на
+    // масштабе сотен метров, а лодка за шаг проходит десяток сантиметров.
+    // Без акватории ничего не считается и всё остаётся как было.
+    this.shoreM = null;
+    this.windK = 1;
     if (this.terrain) {
       this.terrain.current(this.cur);
       const cc = Math.cos(this.psi), ss = Math.sin(this.psi);
       this.curB.x = this.cur.x * cc + this.cur.y * ss;
       this.curB.y = -this.cur.x * ss + this.cur.y * cc;
+      this.shoreM = this.terrain.shore(this.x, this.y);
+      const f = this.terrain.fetch(this.x, this.y, this.o.windDir);
+      if (f !== null) this.windK = 1 - WIND_SHORE_A * Math.exp(-f / WIND_SHORE_L);
     }
 
     // Перестраивать ли матрицу решётки на этом шаге — считается от времени,
@@ -1274,7 +1326,8 @@ export class Boat {
     const rudFx = rf.fx;
 
     // сопротивление корпуса по таблице плюс добавочное на волнении
-    const rt = this.hullResistance(Math.abs(this.u), Math.abs(this.phi) / DEG);
+    const rt = this.hullResistance(Math.abs(this.u), Math.abs(this.phi) / DEG) *
+              (1 + SHOAL_DRAG * (this.shoalK || 0));
     // Волны бегут ПО ветру, то есть навстречу лодке в лавировку. Проекция
     // скорости на их направление и решает всё: встречная волна повышает
     // частоту встречи и загоняет лодку в резонанс, попутная понижает — и на
@@ -1308,6 +1361,21 @@ export class Boat {
       this.seaHs = 0;
     }
     this.wavesN = raw;
+
+    // Мель. Дно выдумано, и потому здесь не стоп, а рост сопротивления: киль
+    // цепляет, лодка тяжелеет, а решение отойти остаётся за рулевым. Само
+    // расстояние до берега при этом показано в HUD цифрой — предупреждает
+    // именно оно, а не поведение лодки.
+    this.shoalK = 0;
+    if (this.shoreM !== null) {
+      const depth = Math.min(SHOAL_MAX, Math.max(0, this.shoreM) * SHOAL_SLOPE);
+      // Осадка — от оси бульба вниз на его радиус: это самая нижняя точка.
+      const bl = P.foils.bulb;
+      const draft = bl ? -bl.z_centre_m + 0.5 * bl.diameter_m : 1.55;
+      // Полный запас при двух осадках под килем, полный рост — когда не
+      // осталось ничего.
+      this.shoalK = Math.max(0, Math.min(1, (2 * draft - depth) / draft));
+    }
     const hullDrag = -Math.sign(this.u || 1) * (rt + raw);
     const hull = this.hullLateral(this.v, this.r);
 
@@ -1391,6 +1459,37 @@ export class Boat {
     this.y += (this.u * s + this.v * c + this.cur.y) * dt;
     this.t += dt;
 
+    // Берег. Единственное твёрдое ограничение на всей акватории: маска снята с
+    // OSM, а не выдумана, — и потому здесь можно жёстко.
+    //
+    // Ограничение ПОЗИЦИОННОЕ, а не по скорости, и это не мелочь. Гасить одну
+    // лишь составляющую скорости в сторону суши мало: у изогнутого берега
+    // «вдоль» по местной нормали всё равно ведёт внутрь, и лодка просачивается —
+    // по десятку сантиметров в секунду, зато безостановочно. Проверено: за
+    // четыре минуты уходила на полтора метра в сушу. Здесь же положение
+    // выталкивается обратно на урез, и просочиться нельзя в принципе.
+    //
+    // Скорость при этом гасится только поперёк берега: вдоль него лодка идёт
+    // свободно, и притереться к урезу, уходя от волны, ей никто не мешает.
+    if (this.terrain) {
+      const d = this.terrain.shore(this.x, this.y);
+      if (d !== null && d < SHORE_STOP) {
+        const n = this.terrain.shoreNormal(this.x, this.y, this.shoreN);
+        if (n.x || n.y) {
+          const push = SHORE_STOP - d;
+          this.x += n.x * push;
+          this.y += n.y * push;
+          const cc = Math.cos(this.psi), ss = Math.sin(this.psi);
+          const nb = n.x * cc + n.y * ss, ns = -n.x * ss + n.y * cc;
+          const into = this.u * nb + this.v * ns;    // <0 — идём на сушу
+          if (into < 0) { this.u -= into * nb; this.v -= into * ns; }
+        }
+        this.aground = true;
+      } else {
+        this.aground = false;
+      }
+    }
+
     this.telemetry = {
       speed: speed, speedKn: speed * 1.94384,
       leewayDeg: leeway / DEG, heelDeg: this.phi / DEG,
@@ -1404,6 +1503,8 @@ export class Boat {
       driveN: sail.fx, sideN: sail.fy,
       resistN: rt, keelLiftN: keelSide, rudderLiftN: rudSide,
       fetchM: this.fetchM, fetchField: this.fetchField,
+      shoreM: this.shoreM, shoalK: this.shoalK || 0, windK: this.windK,
+      aground: this.aground,
       sternway: this.u < -0.15,
       gzM: gz, yawRate: this.r / DEG,
       vmg: speed * Math.cos(this.trueWindAngle()) * 1.94384,

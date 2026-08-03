@@ -1316,8 +1316,20 @@ const capFetch = document.getElementById('v-fetch');
 // Галочка есть только когда есть акватория: без неё переопределять нечего.
 if (!terrain.ready && ui.fetchover) ui.fetchover.closest('label').querySelector('input[type=checkbox]').hidden = true;
 
-const CAMS = ['погоня', 'сбоку', 'с борта', 'сверху', 'свободная'];
-const FREE_CAM = 4;
+// «Сверху» и «с высоты» — не одно и то же, и обе нужны. Первая с двадцати
+// восьми метров: видно лодку, её след и ближайшую сотню метров воды, то есть
+// как она идёт. Вторая с полукилометра: видно, где ты на реке — какой берег
+// ближе, куда уходит плёс, докуда достаёт следующий галс. На бесконечной воде
+// второй смысла не было вовсе, с акваторией она главная.
+const CAMS = ['погоня', 'сбоку', 'с борта', 'сверху', 'с высоты', 'свободная'];
+// Километр с лишним: в кадр входит около двух километров реки, то есть плёс
+// целиком с обоими берегами. Туман на такой высоте приходится отодвигать —
+// он настроен на взгляд с воды, где всё интересное в километре, а отсюда в
+// километре начинается сама картинка.
+const HIGH_CAM_UP = 1200;
+const HIGH_FOG = [4000, 40000];
+const HIGH_CAM = 4;
+const FREE_CAM = 5;
 
 // Свободная камера: облёт вокруг лодки мышью. Нужна, чтобы разглядывать
 // паруса — из готовых точек их толком не видно, а именно там сейчас вся работа.
@@ -1346,7 +1358,7 @@ stage.addEventListener('wheel', e => {
   e.preventDefault();
   freeCam.dist = Math.max(3, Math.min(90, freeCam.dist * Math.exp(e.deltaY * 0.001)));
 }, { passive: false });
-let camMode = 0;
+let camMode = FREE_CAM;
 function cycleCam() {
   camMode = (camMode + 1) % CAMS.length;
   document.getElementById('cammode').textContent = CAMS[camMode];
@@ -1558,6 +1570,7 @@ function frame() {
   else if (camMode === 1) want = at(-2, 5, 3.0);
   else if (camMode === 2) want = at(-1.2, 1.0, 1.9);
   else if (camMode === 3) want = at(-2, 0, 28);
+  else if (camMode === HIGH_CAM) want = at(-60, 0, HIGH_CAM_UP);
   else {
     // Свободная: сферические координаты вокруг лодки, в мировых осях.
     const c = Math.cos(freeCam.el), d = freeCam.dist;
@@ -1565,9 +1578,15 @@ function frame() {
                        rig.mast_height_m * 0.35 + d * Math.sin(freeCam.el),
                        bz + d * c * Math.sin(freeCam.az));
   }
+  // Туман зависит от вида: с воды он в километре, с высоты в четырёх.
+  if (scene.fog) {
+    const hi = camMode === HIGH_CAM;
+    scene.fog.near = hi ? HIGH_FOG[0] : (FAR_WATER ? 900 : 110);
+    scene.fog.far = hi ? HIGH_FOG[1] : (FAR_WATER ? 14000 : 420);
+  }
   const aim = camMode === FREE_CAM
     ? new Vector3(bx + 1.5 * fx, rig.mast_height_m * 0.35, bz + 1.5 * fz)
-    : at(2, 0, camMode === 3 ? 0 : 1.4);
+    : at(2, 0, camMode === 3 || camMode === HIGH_CAM ? 0 : 1.4);
   // Свободную камеру не сглаживаем: под рукой она должна ходить сразу.
   if (camMode === FREE_CAM) { camPos.copy(want); camAim.copy(aim); }
   else {

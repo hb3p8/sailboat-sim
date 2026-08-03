@@ -73,19 +73,65 @@ scene.add(sun);
 
 // ------------------------------------------------------------------- вода
 //
-// Плоскость небольшая и частая: волны должны читаться рядом с лодкой, а даль
-// съедает туман. Сетка ездит за лодкой шагами по ячейке, чтобы не строить
-// бесконечное море.
+// Вода одна на всё: и та, что под лодкой, и та, что до самого тумана. Второй,
+// плоской, для дали нет и не будет — а значит нет и шва между ними, и нет
+// второй реализации цвета. Это то же правило, что уже записано ниже про поле
+// порывов: одно поле — одна реализация. Стоило нарушить его один раз, и вода
+// пошла полосами, а физика при этом была права.
+//
+// Сетка при этом РАВНОМЕРНОЙ быть не может. Волны должны читаться в метре от
+// борта, а вода — доставать до берега в километре; равномерная сетка на такой
+// размах это девять тысяч ячеек в ряду. Поэтому она сгущается к лодке:
+//
+//     x = A·u + B·u³,   u ∈ [−1, 1]
+//
+// Кубическая часть растягивает край, линейная держит середину. A подобрано так,
+// чтобы у лодки ячейка была полтора метра, A + B даёт нужный радиус. У SV20 с
+// акваторией это полтора метра под бортом и двести семьдесят на семи
+// километрах — при тех же ста пятидесяти делениях, что и раньше.
+//
+// Сетка ездит за лодкой шагами по ЦЕНТРАЛЬНОЙ ячейке, чтобы сгущение всегда
+// приходилось на лодку, а рябь и цвет считались по мировым координатам и
+// оттого не ползли.
 
-const SEA = 220, SEG = 150;
+const SEG = 150;
 const SEA_COLOUR = 0x2c5c7d;
-const seaGeo = new PlaneGeometry(SEA, SEA, SEG, SEG);
+// Докуда стелется вода. С акваторией — до тумана, чтобы река доходила до
+// берега; без неё дальше двухсот метров всё равно ничего нет.
+const SEA_FAR = FAR_WATER ? 7000 : 260;
+const CELL = 1.5;                       // ячейка под лодкой, м
+const SEA_A = CELL * (SEG / 2);
+const SEA_B = SEA_FAR - SEA_A;
+const seaGeo = new PlaneGeometry(2, 2, SEG, SEG);
 seaGeo.rotateX(-Math.PI / 2);
+{
+  const p = seaGeo.attributes.position.array;
+  const warp = u => SEA_A * u + SEA_B * u * u * u;
+  for (let i = 0; i < p.length; i += 3) {
+    p[i] = warp(p[i]);
+    p[i + 2] = warp(p[i + 2]);
+  }
+}
 const seaMat = new MeshStandardNodeMaterial({ roughness: 0.28, metalness: 0.12 });
 const sea = new Mesh(seaGeo, seaMat);
+sea.frustumCulled = false;
 scene.add(sea);
 const seaBase = seaGeo.attributes.position.array.slice();
-const CELL = SEA / SEG;
+
+// Вес волны по вершине. Далёкие ячейки в сотни метров волну не разрешают, и
+// считать её там значит не рисовать волну, а разводить рябь из ошибок
+// дискретизации. Гасится она по размеру ячейки, а не по расстоянию: размер и
+// есть то, из-за чего гасить.
+const seaAmp = new Float32Array(seaBase.length / 3);
+{
+  const du = 2 / SEG;
+  for (let i = 0, v = 0; i < seaBase.length; i += 3, v++) {
+    const r = Math.hypot(seaBase[i], seaBase[i + 2]);
+    const u = Math.min(1, r / SEA_FAR);
+    const cell = (SEA_A + 3 * SEA_B * u * u) * du;
+    seaAmp[v] = Math.max(0, Math.min(1, (8 - cell) / 6));
+  }
+}
 
 // Рябь от порывов. На воде усиление ветра видно раньше, чем оно доходит до
 // парусов, — тёмными языками, ползущими по ветру. Это не украшение: без них
@@ -1005,18 +1051,6 @@ function buildTerrainScene() {
       }
     }
 
-  // Дальняя вода — пока заглушка: плоская крышка на урезе под всем участком.
-  // Настоящая, со швом к ближней волновой плоскости и общей функцией цвета,
-  // делается отдельным этапом (docs/terrain-in-sim.md §5.2). Здесь она нужна
-  // ровно затем, чтобы не смотреть на сухое дно там, где должна быть река.
-  const w = (P.nx - 1) * STEP, h = (P.ny - 1) * STEP;
-  const far = new Mesh(new PlaneGeometry(w, h),
-                       new MeshStandardMaterial({ color: SEA_COLOUR,
-                                                  roughness: 0.3, metalness: 0.1 }));
-  far.rotation.x = -Math.PI / 2;
-  far.position.set(P.x0 + w / 2, LEVEL, P.y0 + h / 2);
-  group.add(far);
-
   scene.add(group);
   return { group: group, triangles: tris };
 }
@@ -1451,9 +1485,10 @@ function frame() {
   sea.position.set(Math.round(ix / CELL) * CELL, 0, Math.round(iy / CELL) * CELL);
   const dirX = Math.cos(boat.o.windDir), dirZ = Math.sin(boat.o.windDir);
   const pos = seaGeo.attributes.position.array;
-  for (let i = 0; i < pos.length; i += 3) {
-    pos[i + 1] = waveHeight(seaBase[i] + sea.position.x,
-                            seaBase[i + 2] + sea.position.z, now, dirX, dirZ, amp);
+  for (let i = 0, v = 0; i < pos.length; i += 3, v++) {
+    pos[i + 1] = seaAmp[v] === 0 ? 0
+      : waveHeight(seaBase[i] + sea.position.x, seaBase[i + 2] + sea.position.z,
+                   now, dirX, dirZ, amp * seaAmp[v]);
   }
   seaGeo.attributes.position.needsUpdate = true;
   if ((tick & 1) === 0) seaGeo.computeVertexNormals();

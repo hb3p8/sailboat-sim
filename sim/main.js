@@ -37,8 +37,26 @@ const scene = new Scene();
 const SKY = new Color(0xa8c4d8);
 // Туман отодвинут: порывы на воде — языки по сотне метров, и в прежние
 // сорок пять метров чистой воды не помещалось даже одного.
-scene.fog = new Fog(SKY, 110, 420);
-const camera = new PerspectiveCamera(52, 1, 0.15, 2000);
+// Туман и дальняя плоскость камеры зависят от того, есть ли на что смотреть.
+//
+// На бесконечной воде туман отодвинут нарочно: языки порывов на воде длиной под
+// сотню метров, и в прежние сорок пять метров не помещалось ни одного. Но
+// дальше двухсот метров там всё равно ничего нет.
+//
+// С акваторией берег стоит в километре, плато в пяти, и с прежним туманом их не
+// видно вовсе. Ближняя плоскость поднята с 0.15 до 0.5 м: разрешение буфера
+// глубины падает как квадрат отношения дальней к ближней, и при far = 20 км на
+// трёх километрах 0.15 даёт три метра ряби по рельефу, а 0.5 — метр. Полметра
+// такелаж не режет: ближе к камере в свободном виде ничего не подпускается.
+// Акватория необязательна: без пакета `Terrain` отвечает «не знаю» на всё, и
+// лодка ходит по бесконечной воде ровно как раньше. Объявляется здесь, а не
+// рядом с лодкой, потому что от неё зависит и сцена: туман, дальняя плоскость
+// камеры и сам рельеф.
+const terrain = new Terrain(TERRAIN_PACK);
+const FAR_WATER = terrain.ready;
+scene.fog = new Fog(SKY, FAR_WATER ? 900 : 110, FAR_WATER ? 14000 : 420);
+const camera = new PerspectiveCamera(52, 1, FAR_WATER ? 0.5 : 0.15,
+                                     FAR_WATER ? 20000 : 2000);
 // WebGPU. Если его нет, рендерер сам откатывается на WebGL2 — код при этом
 // один и тот же, TSL компилируется и туда и туда.
 const renderer = new WebGPURenderer({ antialias: true });
@@ -853,6 +871,168 @@ function saveDump() {
   }
 }
 
+// --- акватория: рельеф, покров, дальняя вода ----------------------------------
+//
+// Всё, что ниже, включается только когда есть пакет акватории. Без него ничего
+// не создаётся вовсе, и сцена остаётся прежней — бесконечная вода со знаками.
+//
+// Оси: земля кладётся в те же, в которых ездит лодка, — three = (x, высота, y),
+// X на восток, Y на север. Ошибка знака по Y отражает участок зеркально, и
+// глазом это не ловится совершенно: река на месте, берега на месте. Ловится
+// оно проверкой в tests/terrain.test.mjs и одним взглядом на то, какой берег
+// высокий, — правый, южный.
+
+// Гипсометрическая шкала земли: от поймы к плато, отсчёт от УРЕЗА, а не от
+// нуля высот. На реке значение имеет высота над водой, а не над Балтикой.
+// Та же, что в просмотрщике акватории, — одна картина местности на оба.
+const LAND_RAMP = [
+  [0.0, 0x4d6b4a], [6.0, 0x6f8352], [18.0, 0x8b9159],
+  [40.0, 0xa89a6c], [80.0, 0xc0b189], [140.0, 0xdcd5c0],
+];
+
+// Ячеек в куске сетки. Двести с лишним кусков со своими габаритами: камера
+// стоит в полутора метрах над водой, и половина участка либо за горизонтом,
+// либо за ближним берегом. Отбраковку по пирамиде видимости делает сам three,
+// от нас требуется только не отдавать ему всё одним объектом.
+const CHUNK = 48;
+
+function buildTerrainScene() {
+  const P = TERRAIN_PACK;
+  const NX = P.nx, NY = P.ny, STEP = P.step, LEVEL = P.level;
+  const H = terrain.height, COVER = terrain.cover, SDF = terrain.sdf;
+  const group = new Group();
+  const ca = new Color(), cb = new Color(), cc = new Color();
+
+  const tint = dh => {
+    let i = 0;
+    while (i < LAND_RAMP.length - 2 && dh > LAND_RAMP[i + 1][0]) i++;
+    const [a, hexA] = LAND_RAMP[i], [b, hexB] = LAND_RAMP[i + 1];
+    const t = Math.max(0, Math.min(1, (dh - a) / (b - a)));
+    return ca.setHex(hexA).lerp(cb.setHex(hexB), t);
+  };
+
+  const gx = k => P.x0 + (k % NX) * STEP;
+  const gy = k => P.y0 + ((k / NX) | 0) * STEP;
+
+  // Земля куском. Дно под водой красится своим цветом: иначе мель читается как
+  // суша, и вся береговая черта теряет смысл.
+  const landChunk = (ix0, iy0, nx, ny) => {
+    const pos = new Float32Array(nx * ny * 3);
+    const col = new Float32Array(nx * ny * 3);
+    for (let j = 0, v = 0; j < ny; j++)
+      for (let i = 0; i < nx; i++, v++) {
+        const k = (iy0 + j) * NX + ix0 + i;
+        pos[v * 3] = gx(k); pos[v * 3 + 1] = H[k] / 10; pos[v * 3 + 2] = gy(k);
+        const t = SDF[k] > 128 ? cc.setHex(0x2f4a52) : tint(H[k] / 10 - LEVEL);
+        col[v * 3] = t.r; col[v * 3 + 1] = t.g; col[v * 3 + 2] = t.b;
+      }
+    const idx = [];
+    for (let j = 0; j < ny - 1; j++)
+      for (let i = 0; i < nx - 1; i++) {
+        const a = j * nx + i, b = a + 1, d = a + nx, e = d + 1;
+        // Намотка против часовой при взгляде сверху. Проверять это надо на
+        // бумаге, а не на глаз: «очевидный» порядок обхода даёт нормали вниз,
+        // вся суша уходит в отбраковку задних граней, и экран показывает
+        // пустую воду, а не вывернутый рельеф.
+        idx.push(a, d, b, b, d, e);
+      }
+    const g = new BufferGeometry();
+    g.setAttribute('position', new Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new Float32BufferAttribute(col, 3));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    return new Mesh(g, new MeshStandardMaterial({
+      vertexColors: true, roughness: 0.95, metalness: 0.0 }));
+  };
+
+  // Лес и застройка — отдельной геометрией, а не вмятые в рельеф высотами.
+  // Крышка по верху слоя и вертикальные стенки там, где массив кончается: с
+  // воды квартал и опушка читаются сплошной стеной, а не набором коробок.
+  const coverChunk = (ix0, iy0, nx, ny, cls, colour) => {
+    const vp = [], vi = [], node = new Map();
+    const capped = (i, j) => {
+      if (i < 0 || j < 0 || i >= nx - 1 || j >= ny - 1) return false;
+      const k = (iy0 + j) * NX + ix0 + i;
+      return (COVER[k] >> 6) === cls && (COVER[k + 1] >> 6) === cls &&
+             (COVER[k + NX] >> 6) === cls && (COVER[k + NX + 1] >> 6) === cls;
+    };
+    const ytop = k => H[k] / 10 + (COVER[k] & 0x3F);
+    const put = k => {
+      let n = node.get(k);
+      if (n === undefined) { n = vp.length / 3; node.set(k, n); vp.push(gx(k), ytop(k), gy(k)); }
+      return n;
+    };
+    const wall = (k1, k2) => {
+      const n = vp.length / 3;
+      vp.push(gx(k1), H[k1] / 10, gy(k1), gx(k2), H[k2] / 10, gy(k2),
+              gx(k2), ytop(k2), gy(k2), gx(k1), ytop(k1), gy(k1));
+      vi.push(n, n + 1, n + 2, n, n + 2, n + 3);
+    };
+    for (let j = 0; j < ny - 1; j++)
+      for (let i = 0; i < nx - 1; i++) {
+        if (!capped(i, j)) continue;
+        const k = (iy0 + j) * NX + ix0 + i;
+        const p0 = put(k), p1 = put(k + 1), p2 = put(k + NX + 1), p3 = put(k + NX);
+        vi.push(p0, p3, p1, p1, p3, p2);
+        if (!capped(i, j - 1)) wall(k, k + 1);
+        if (!capped(i, j + 1)) wall(k + NX, k + NX + 1);
+        if (!capped(i - 1, j)) wall(k, k + NX);
+        if (!capped(i + 1, j)) wall(k + 1, k + NX + 1);
+      }
+    if (!vi.length) return null;
+    const g = new BufferGeometry();
+    g.setAttribute('position', new Float32BufferAttribute(new Float32Array(vp), 3));
+    g.setIndex(vi);
+    g.computeVertexNormals();
+    // DoubleSide намеренно: намотка стенок зависит от того, с какой стороны
+    // ячейки они выросли, и разбираться с восемью случаями ради отбраковки,
+    // которая тут ничего не экономит, — не та цена.
+    return new Mesh(g, new MeshStandardMaterial({
+      color: colour, roughness: 0.92, metalness: 0.0, side: DoubleSide }));
+  };
+
+  let tris = 0;
+  for (let iy0 = 0; iy0 < NY - 1; iy0 += CHUNK)
+    for (let ix0 = 0; ix0 < NX - 1; ix0 += CHUNK) {
+      const nx = Math.min(CHUNK + 1, NX - ix0), ny = Math.min(CHUNK + 1, NY - iy0);
+      if (nx < 2 || ny < 2) continue;
+      for (const m of [landChunk(ix0, iy0, nx, ny),
+                       coverChunk(ix0, iy0, nx, ny, 1, 0x2f4a26),
+                       coverChunk(ix0, iy0, nx, ny, 2, 0x8c8377)]) {
+        if (!m) continue;
+        tris += m.geometry.index.count / 3;
+        group.add(m);
+      }
+    }
+
+  // Дальняя вода — пока заглушка: плоская крышка на урезе под всем участком.
+  // Настоящая, со швом к ближней волновой плоскости и общей функцией цвета,
+  // делается отдельным этапом (docs/terrain-in-sim.md §5.2). Здесь она нужна
+  // ровно затем, чтобы не смотреть на сухое дно там, где должна быть река.
+  const w = (P.nx - 1) * STEP, h = (P.ny - 1) * STEP;
+  const far = new Mesh(new PlaneGeometry(w, h),
+                       new MeshStandardMaterial({ color: SEA_COLOUR,
+                                                  roughness: 0.3, metalness: 0.1 }));
+  far.rotation.x = -Math.PI / 2;
+  far.position.set(P.x0 + w / 2, LEVEL, P.y0 + h / 2);
+  group.add(far);
+
+  scene.add(group);
+  return { group: group, triangles: tris };
+}
+
+const terrainScene = terrain.ready ? buildTerrainScene() : null;
+if (terrainScene) {
+  console.log('акватория: %d кусков, %s тыс. треугольников',
+              terrainScene.group.children.length,
+              (terrainScene.triangles / 1000).toFixed(0));
+}
+
+// Акватория стоит на настоящих высотах над эллипсоидом, а лодка — на нуле.
+// Проще опустить участок к нулю, чем поднимать лодку: у лодки в нуле сидят и
+// волны, и след, и знаки.
+if (terrainScene) terrainScene.group.position.y = -TERRAIN_PACK.level;
+
 // --- линии тока вокруг парусов ------------------------------------------------
 //
 // То, что в трубе показывают дымом. Вихревая решётка умеет считать наведённую
@@ -1042,9 +1222,6 @@ function setDebug(on) {
 // авторулевой. Без этого лодка первым делом уваливается в фордевинд, где
 // парус работает одним сопротивлением, — и посмотреть на её поведение
 // не получается, пока не возьмёшь руль.
-// Акватория необязательна: без пакета `Terrain` отвечает «не знаю» на всё, и
-// лодка ходит по бесконечной воде ровно как раньше.
-const terrain = new Terrain(TERRAIN_PACK);
 const boat = new Boat(PACK, terrain);
 const START_TWA = 90 * D;
 boat.o.sheet = 24 * D;

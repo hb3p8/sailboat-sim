@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
+import { Terrain } from '../sim/terrain.js';
 
 import { Pool } from './lib/pool.mjs';
 
@@ -574,6 +575,54 @@ console.log('\nСопротивление корпуса на крене\n');
     }));
   check('за краем таблицы не разваливается',
     Math.abs(b.hullResistance(2.5, 60) - b.hullResistance(2.5, 30)) < 1e-9);
+}
+
+// --- бесконечная вода --------------------------------------------------------
+//
+// Главная проверка всей затеи с акваторией, и самая дешёвая. Лодка обязана
+// ходить без неё: на бесконечной воде гоняются батареи, воспроизводятся прежние
+// записи и меряются ходовые качества лодки, а не места.
+//
+// Проверяется не «примерно так же», а ПОБИТОВО. Отсутствие акватории — это не
+// режим со своими коэффициентами, а отсутствие данных: все выборки отвечают
+// «не знаю», течение равно точному нулю, и сложение с ним не меняет ни одного
+// разряда мантиссы. Если когда-нибудь разойдётся хоть в последнем знаке —
+// значит в горячий путь просочилась ветка, которой там быть не должно.
+console.log('\nБесконечная вода: акватория выключаема\n');
+{
+  const run = terrain => {
+    const b = new Boat(PACK, terrain);
+    b.o.windSpeed = 7; b.o.windDir = 55 * D; b.o.sheet = 18 * D;
+    b.o.twist = 8 * D; b.o.crewHike = 1; b.o.crewMass = 240;
+    b.wind.o.gust = 0.25; b.wind.o.shift = 8 * D;
+    b.u = 3.5; b.phi = 10 * D;
+    for (let i = 0; i < 90 * 30; i++) {
+      b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * wrapPi(0 - b.psi) - 0.9 * b.r)));
+      b.step(1 / 30);
+    }
+    return [b.x, b.y, b.psi, b.u, b.v, b.r, b.phi, b.p_, b.hike, b.t,
+            b.telemetry.speedKn, b.telemetry.driveN, b.telemetry.sideN];
+  };
+  const none = run(undefined);          // акватории нет вовсе
+  const empty = run(new Terrain(null)); // акватория есть, данных в ней нет
+  let worst = 0;
+  for (let i = 0; i < none.length; i++) worst = Math.max(worst, Math.abs(none[i] - empty[i]));
+  console.log('  90 с хода в порывистый ветер, ' + none.length +
+    ' величин состояния: расхождение ' + worst.toExponential(1) + '\n');
+  check('пустая акватория не меняет ни одного разряда', worst === 0,
+    worst.toExponential(1));
+  check('пустая акватория не считается готовой',
+    !(new Terrain(null).ready) && !(new Boat(PACK, new Terrain(null)).terrain));
+  // Течение обязано быть точным нулём, а не «около нуля»: оно складывается со
+  // скоростью каждый шаг, и любой мусор в нём немедленно уедет в положение.
+  {
+    const v = new Terrain(null).current({ x: 1, y: 1 });
+    check('без данных течение — точный ноль',
+      Object.is(v.x, 0) && Object.is(v.y, 0), v.x + ', ' + v.y);
+  }
+  check('выборки без данных отвечают «не знаю»',
+    new Terrain(null).shore() === null && new Terrain(null).fetch() === null &&
+    new Terrain(null).wind() === null);
 }
 
 console.log('\n' + (failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');

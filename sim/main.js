@@ -1039,7 +1039,10 @@ function setDebug(on) {
 // авторулевой. Без этого лодка первым делом уваливается в фордевинд, где
 // парус работает одним сопротивлением, — и посмотреть на её поведение
 // не получается, пока не возьмёшь руль.
-const boat = new Boat(PACK);
+// Акватория необязательна: без пакета `Terrain` отвечает «не знаю» на всё, и
+// лодка ходит по бесконечной воде ровно как раньше.
+const terrain = new Terrain(TERRAIN_PACK);
+const boat = new Boat(PACK, terrain);
 const START_TWA = 90 * D;
 boat.o.sheet = 24 * D;
 boat.psi = boat.o.windDir - START_TWA;

@@ -19,6 +19,7 @@ import { WindField } from './wind.js';
 import { Lattice } from './vlm.js';
 import { membraneCamber, slackOf, luffFraction, luffFactor, sectionLift, capLift, liftCeiling } from './membrane.js';
 import { seaState, addedResistance } from './waves.js';
+import { Terrain } from './terrain.js';
 
 const DEG = Math.PI / 180;
 
@@ -362,8 +363,18 @@ function sailCoeffs(alphaRad, camber, fill) {
 }
 
 export class Boat {
-  constructor(pack, opts) {
+  // `terrain` — необязательная акватория (sim/terrain.js). Отдельным входом, а
+  // не полем пакета: пакеты собираются разными скриптами и меняются с разной
+  // частотой, склеивать их незачем. Без акватории лодка ходит по бесконечной
+  // воде ровно как раньше — это проверяется, а не подразумевается.
+  constructor(pack, terrain, opts) {
     this.p = pack;
+    this.terrain = terrain && terrain.ready ? terrain : null;
+    // Течение в мировых осях и оно же в связанных. Пересчитывается раз в шаг:
+    // зависит только от места. Без акватории — точный ноль, и сложение с ним
+    // не меняет ни бита.
+    this.cur = { x: 0, y: 0 };
+    this.curB = { x: 0, y: 0 };
     this.o = Object.assign({
       windSpeed: 6.0,          // истинный ветер, м/с
       windDir: 100 * DEG,      // откуда дует, рад, отсчёт от оси X мира
@@ -563,13 +574,18 @@ export class Boat {
   // Кажущийся ветер в точке рига (xb, yb — в горизонтной системе от миделя,
   // zb — высота над водой), которая сама движется со скоростью (vx, vy).
   // Раньше такой точкой была вся лодка; теперь их двенадцать, по числу полосок.
+  // Скорость сюда подаётся ЧЕРЕЗ ВОДУ — та же, по которой работают корпус и
+  // крылья. Течение добавляется здесь, потому что воздух движется вместе с
+  // берегом, а не с водой: кажущийся ветер считается от скорости над грунтом.
+  // В этом и весь смысл течения для парусной лодки, ради этого на реке лавируют
+  // не туда, куда на озере. Без акватории `curB` — точный ноль.
   apparentAt(xb, yb, zb, vx, vy) {
     const c = Math.cos(this.psi), s = Math.sin(this.psi);
     const w = this.wind.sample(this.x + xb * c - yb * s,
                               this.y + xb * s + yb * c,
                               Math.max(0.3, zb), this.t);
-    const ax = w.x * c + w.y * s - vx;
-    const ay = -w.x * s + w.y * c - vy;
+    const ax = w.x * c + w.y * s - (vx + this.curB.x);
+    const ay = -w.x * s + w.y * c - (vy + this.curB.y);
     return { x: ax, y: ay, speed: Math.hypot(ax, ay),
              angle: Math.atan2(ay, ax), ws: w.speed };
   }
@@ -1144,6 +1160,15 @@ export class Boat {
     this.wind.o.speed = this.o.windSpeed;
     this.wind.o.dir = this.o.windDir;
 
+    // Течение — раз в шаг: зависит только от места. Без акватории оба вектора
+    // остаются нулями и ничего не меняют.
+    if (this.terrain) {
+      this.terrain.current(this.cur);
+      const cc = Math.cos(this.psi), ss = Math.sin(this.psi);
+      this.curB.x = this.cur.x * cc + this.cur.y * ss;
+      this.curB.y = -this.cur.x * ss + this.cur.y * cc;
+    }
+
     // Перестраивать ли матрицу решётки на этом шаге — считается от времени,
     // чтобы не заводить скрытого состояния.
     this.latRebuild = LATTICE_EVERY <= 1 ||
@@ -1340,9 +1365,11 @@ export class Boat {
     this.psi = wrapPi(this.psi + this.r * dt);
     if (!isFinite(this.x) || !isFinite(this.y)) { this.x = 0; this.y = 0; }
 
+    // Положение — по скорости НАД ГРУНТОМ: лодку сносит вместе с водой.
+    // Гидродинамика этого не замечает вовсе и остаётся в скоростях через воду.
     const c = Math.cos(this.psi), s = Math.sin(this.psi);
-    this.x += (this.u * c - this.v * s) * dt;
-    this.y += (this.u * s + this.v * c) * dt;
+    this.x += (this.u * c - this.v * s + this.cur.x) * dt;
+    this.y += (this.u * s + this.v * c + this.cur.y) * dt;
     this.t += dt;
 
     this.telemetry = {

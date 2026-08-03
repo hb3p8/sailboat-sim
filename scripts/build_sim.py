@@ -25,8 +25,8 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 THREE_BUNDLE = "three.webgpu.js"
 
 # Всё, что вклеивается в страницу, в порядке объявления.
-MODULES = ["wind.js", "vlm.js", "membrane.js", "waves.js", "trace.js",
-           "physics.js", "main.js"]
+MODULES = ["terrain.js", "wind.js", "vlm.js", "membrane.js", "waves.js",
+           "trace.js", "physics.js", "main.js"]
 
 
 def three_bundle(strip):
@@ -91,6 +91,14 @@ def main():
                        json.dumps(pack, ensure_ascii=False, separators=(",", ":")))
     html = html.replace("/*__MESH__*/ null",
                         json.dumps(mesh, separators=(",", ":")))
+    # Пакет акватории необязателен: без него страница собирается и работает,
+    # лодка ходит по бесконечной воде. Это не запасной путь, а полноправный —
+    # см. docs/terrain-in-sim.md.
+    terr_path = os.path.join(exp, "terrain_pack.json")
+    if os.path.exists(terr_path):
+        html = html.replace(
+            "/*__TERRAIN_PACK__*/ null",
+            json.dumps(json.load(open(terr_path)), separators=(",", ":")))
     html = html.replace("/*__THREE__*/", three)
     # Порядок важен: physics.js берёт WindField из wind.js, а импорты при
     # вклейке снимаются — значит поле ветра должно быть объявлено раньше.

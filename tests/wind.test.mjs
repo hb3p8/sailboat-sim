@@ -311,11 +311,27 @@ check('хорда убывает к топу',
     stb.strips.every((s, i) => !live[i] ||
       Math.sign(s.camber) === -Math.sign(prt.strips[i].camber)),
     live.filter(Boolean).length + ' полосок из ' + live.length + ' с пузом');
-  // Тот самый знак, с которым расчёт строит среднюю линию панелей: если они
-  // разойдутся, нарисованный парус перестанет совпадать с посчитанным.
-  check('знак пуза совпадает со знаком, по которому строит панели расчёт',
-    stb.calc.every((g, i) => Math.sign(g.camber) === Math.sign(g.alpha || 1)) &&
-    prt.calc.every((g, i) => Math.sign(g.camber) === Math.sign(g.alpha || 1)));
+  // Знак у пуза один на весь парус, а не свой у каждой полоски, и сверять его
+  // надо так же. Раньше здесь стояло сравнение с углом атаки самой полоски, и
+  // проверка держалась на случайности: у топовой полоски угол к хорде уходит
+  // ровно в ноль, знака у неё нет вовсе, а `Math.sign(0 || 1)` отвечает плюсом
+  // независимо от галса. Расчёт же берёт знак у паруса целиком — по углам
+  // атаки, взвешенным по площади, — потому что циркуляция отдельной полоски
+  // проходит через ноль то и дело.
+  const sailSign = (calc, from, to) => {
+    let m = 0;
+    for (let i = from; i < to; i++) if (calc[i].live) m += calc[i].alpha * calc[i].area;
+    return Math.sign(m || 1);
+  };
+  const agrees = calc => [[0, 6], [6, 12]].every(([a, b]) => {
+    const s = sailSign(calc, a, b);
+    for (let i = a; i < b; i++) {
+      if (Math.abs(calc[i].camber) > 1e-4 && Math.sign(calc[i].camber) !== s) return false;
+    }
+    return true;
+  });
+  check('пузо выгнуто в ту сторону, в какую поставлен парус',
+    agrees(stb.calc) && agrees(prt.calc));
 }
 
 // --- запаздывание паруса --------------------------------------------------

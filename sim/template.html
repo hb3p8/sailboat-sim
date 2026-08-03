@@ -68,6 +68,8 @@
   }
   #panel .cap span:last-child { color: var(--dim); font-variant-numeric: tabular-nums; }
   #panel input[type=range], #panel select { width: 100%; }
+  #panel input[type=range]:disabled { opacity: .45; }
+  #panel .cap input[type=checkbox] { margin: 0 4px 0 0; vertical-align: -1px; }
   #panel select {
     background: rgba(0,0,0,.3); color: var(--fg); border: 1px solid var(--line);
     border-radius: 6px; padding: 4px;
@@ -146,7 +148,9 @@
   <label><span class="cap"><span>Пузо парусов</span><span id="v-draft"></span></span>
     <input id="draft" type="range" min="40" max="130" step="5" value="100"></label>
 
-  <label><span class="cap"><span>Разгон волны</span><span id="v-fetch"></span></span>
+  <label><span class="cap">
+      <span><input id="fetchover" type="checkbox"> Разгон волны</span>
+      <span id="v-fetch"></span></span>
     <input id="fetch" type="range" min="0" max="12" step="0.5" value="3"></label>
   <div class="cap"><span>Камера</span><span id="cammode">погоня</span></div>
   <button id="dump" type="button">Сдампать состояние</button>

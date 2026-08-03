@@ -23,6 +23,7 @@ file://, где `fetch()` запрещён политикой источника
 """
 
 import base64
+import hashlib
 import json
 import math
 import os
@@ -215,14 +216,22 @@ def main():
         "sky_b64": base64.b64encode(sky.tobytes()).decode(),
     }
 
+    # Отпечаток полей. Запись, сделанная на акватории, без неё не
+    # воспроизводится, и об этом надо сказать вслух, а не разойтись молча.
+    h = hashlib.sha1()
+    for k in ("height_dm_b64", "cover_b64", "sdf_b64", "fetch_b64", "sky_b64"):
+        h.update(pack[k].encode())
+    pack["hash"] = h.hexdigest()[:12]
+
     dst_dir = os.path.join(ROOT, "out", "export")
     os.makedirs(dst_dir, exist_ok=True)
     dst = os.path.join(dst_dir, "terrain_pack.json")
     with open(dst, "w") as f:
         json.dump(pack, f, ensure_ascii=False, separators=(",", ":"))
 
-    print("%s — %.1f МБ" % (os.path.relpath(dst, ROOT),
-                            os.path.getsize(dst) / 1024 / 1024))
+    print("%s — %.1f МБ, отпечаток %s" % (os.path.relpath(dst, ROOT),
+                                          os.path.getsize(dst) / 1024 / 1024,
+                                          pack["hash"]))
     print("сетка %d × %d по %.0f м, поля физики %d × %d по %.0f м на %d румбов"
           % (nx, ny, step, pack["cnx"], pack["cny"], COARSE, RHUMBS))
     print("расстояние до берега: %.0f…%.0f м (обрезано до ±127)"

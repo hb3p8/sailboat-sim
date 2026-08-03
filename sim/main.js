@@ -813,6 +813,9 @@ function dumpState() {
   const t = boat.telemetry || {};
   return {
     build: typeof BUILD !== 'undefined' ? BUILD : null,
+    // Отпечаток полей акватории. Запись, сделанная на ней, без неё не
+    // воспроизводится — и об этом надо сказать вслух, а не разойтись молча.
+    terrain: terrain.ready ? { hash: TERRAIN_PACK.hash } : null,
     saved: new Date().toISOString(),
     boat: {
       x: boat.x, y: boat.y, psi: boat.psi, u: boat.u, v: boat.v, r: boat.r,
@@ -1045,8 +1048,23 @@ const terrain = new Terrain(TERRAIN_PACK);
 const boat = new Boat(PACK, terrain);
 const START_TWA = 90 * D;
 boat.o.sheet = 24 * D;
-boat.psi = boat.o.windDir - START_TWA;
-boat.u = 4.0;
+
+// Где лодка стоит в начале и куда возвращается по сбросу.
+//
+// На бесконечной воде это начало координат — там всё равно, где стоять. На
+// акватории начало координат — центр квадрата, а он с равным успехом может
+// оказаться сушей, и у SV20 на этом участке так и есть. Вставать надо на
+// середину самого широкого плёса: она посчитана выгрузкой и лежит в пакете.
+function startAt() {
+  boat.reset();
+  if (terrain.ready) {
+    boat.x = TERRAIN_PACK.open_water[0];
+    boat.y = TERRAIN_PACK.open_water[1];
+  }
+  boat.psi = boat.o.windDir - START_TWA;
+  boat.u = 4.0;
+}
+startAt();
 let autopilot = true;
 let apHeading = boat.psi;
 
@@ -1057,9 +1075,7 @@ addEventListener('keydown', e => {
     e.preventDefault();
   // Сброс переехал на X: R с F теперь стаксель-шкот.
   if (e.code === 'KeyX') {
-    boat.reset();
-    boat.psi = boat.o.windDir - START_TWA;
-    boat.u = 4.0;
+    startAt();
     apHeading = boat.psi;
     wakePts.length = 0;
     trackN = 0;
@@ -1082,8 +1098,12 @@ addEventListener('keyup', e => { keys[e.code] = false; });
 
 const ui = {};
 for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draft',
-                  'fetch'])
+                  'fetch', 'fetchover'])
   ui[id] = document.getElementById(id);
+
+const capFetch = document.getElementById('v-fetch');
+// Галочка есть только когда есть акватория: без неё переопределять нечего.
+if (!terrain.ready && ui.fetchover) ui.fetchover.closest('label').querySelector('input[type=checkbox]').hidden = true;
 
 const CAMS = ['погоня', 'сбоку', 'с борта', 'сверху', 'свободная'];
 const FREE_CAM = 4;
@@ -1164,7 +1184,21 @@ function readControls(dt) {
   o.sailScale = parseFloat(ui.sailscale.value);
   o.twist = parseFloat(ui.twist.value) * D;
   o.draft = parseFloat(ui.draft.value) / 100;
+  // Разгон: с акваторией его задаёт место, а ползунок становится
+  // переопределением. Без акватории галочка не нужна и не показывается — там
+  // ползунок и есть единственный источник.
   o.fetch = parseFloat(ui.fetch.value) * 1000;
+  o.fetchOverride = !terrain.ready || ui.fetchover.checked;
+  ui.fetch.disabled = terrain.ready && !ui.fetchover.checked;
+  // Когда разгон задаёт место, подпись показывает его настоящую величину, а не
+  // положение отключённого ползунка. Это и есть смысл акватории на панели: на
+  // одном галсе полкилометра, на другом три с половиной.
+  if (terrain.ready && !ui.fetchover.checked && capFetch) {
+    const t = boat.telemetry;
+    capFetch.textContent = t && t.fetchField
+      ? (t.fetchM / 1000).toFixed(1) + ' км по месту'
+      : 'вне участка';
+  }
   // Порывистость одним ползунком: сильнее дует — сильнее и заходит. Порознь
   // эти две вещи на воде не встречаются, а два ползунка вместо одного только
   // мешают понять, что происходит.

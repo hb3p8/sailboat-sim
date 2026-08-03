@@ -389,6 +389,10 @@ export class Boat {
       crewMass: 0.0,
       sailScale: 1.0,          // 1 — грот со стакселем, больше — с генакером
       twist: 0.0,              // раскрытие задней шкаторины к топу, рад
+      // Разгон волны берётся из акватории, а ползунок становится
+      // ПЕРЕОПРЕДЕЛЕНИЕМ и по умолчанию выключен. Без акватории он единственный
+      // источник, и всё остаётся как было.
+      fetchOverride: false,
       // Пузо: сколько запаса ткани оставлено в парусе. Единица — как
       // сшито, меньше — фал, оттяжка Каннингема и оттяжка гика выбраны
       // и ткань натянута. Мембрана берёт отсюда запас длины.
@@ -1276,9 +1280,24 @@ export class Boat {
     // частоту встречи и загоняет лодку в резонанс, попутная понижает — и на
     // полном курсе добавочного сопротивления почти нет.
     const sk = P.seakeeping, hs = P.hydrostatics;
+    // Разгон — из акватории по месту и направлению ветра. Ползунок остаётся
+    // переопределением: без него нельзя ни прогнать батарею, ни разобрать «а
+    // что если бы тут был океан».
+    //
+    // За краем участка поле отвечает «не знаю», и разгон берётся из опции — то
+    // есть ровно так, как если бы акватории не было вовсе. Это не запасной путь,
+    // а тот же принцип, на котором стоит весь модуль: отсутствие данных ведёт
+    // себя как отсутствие акватории.
+    let fetchM = this.o.fetch;
+    this.fetchField = false;
+    if (this.terrain && !this.o.fetchOverride) {
+      const f = this.terrain.fetch(this.x, this.y, this.o.windDir);
+      if (f !== null) { fetchM = f; this.fetchField = true; }
+    }
+    this.fetchM = fetchM;
     let raw = 0;
-    if (sk && this.o.fetch > 0) {
-      const sea = seaState(this.o.windSpeed, this.o.fetch);
+    if (sk && fetchM > 0) {
+      const sea = seaState(this.o.windSpeed, fetchM);
       // курс лодки относительно направления бега волн
       const rel = wrapPi(this.psi - (this.o.windDir + Math.PI));
       raw = addedResistance(sea, 2 * Math.PI / sk.heave_period_s,
@@ -1384,6 +1403,7 @@ export class Boat {
       alphaDeg: sail.alpha / DEG, sailCl: sail.cl,
       driveN: sail.fx, sideN: sail.fy,
       resistN: rt, keelLiftN: keelSide, rudderLiftN: rudSide,
+      fetchM: this.fetchM, fetchField: this.fetchField,
       sternway: this.u < -0.15,
       gzM: gz, yawRate: this.r / DEG,
       vmg: speed * Math.cos(this.trueWindAngle()) * 1.94384,

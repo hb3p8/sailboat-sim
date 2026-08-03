@@ -13,6 +13,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Terrain } from '../sim/terrain.js';
+import { Boat } from '../sim/physics.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PATH = join(ROOT, 'out/export/terrain_pack.json');
@@ -177,6 +178,88 @@ check('пакет читается и считается готовым', t.read
     t.fetch(far, far, 0) === null && t.skyline(far, far, 0) === null);
   check('за краем не заворачивается на другую сторону',
     t.ground(-far, 0) === null && t.ground(0, -far) === null);
+}
+
+// --- разгон в лавировку -------------------------------------------------------
+//
+// То, ради чего акватория и заводилась. На бесконечной воде разгон — одно число
+// на всю лодку, и лавировка на ней симметрична. На реке он зависит от места, и
+// оба галса одного колена оказываются в разных состояниях моря.
+//
+// Числа ниже сняты с этого участка, а не назначены.
+{
+  const [ox, oy] = pack.open_water;
+  // Ветер вдоль реки: на середине плёса разгон в километрах, у берега его нет.
+  const mid = t.fetch(ox, oy, 0);
+  const bankN = t.fetch(ox, oy + 600, 0), bankS = t.fetch(ox, oy - 600, 0);
+  console.log('  ветер вдоль реки: середина %s м, у северного берега %s м, у южного %s м',
+    mid.toFixed(0), bankN.toFixed(0), bankS.toFixed(0));
+  check('у берега при ветре вдоль реки волне расти негде',
+    bankN < 100 && bankS < 100, bankN.toFixed(0) + ' и ' + bankS.toFixed(0) + ' м');
+
+  // Ветер под углом к реке — и вот тут разница между галсами. Поперёк сечения
+  // разгон меняется в разы: один галс уводит на затишную сторону, другой на
+  // разогнанную.
+  const across = [];
+  for (let d = -450; d <= 450; d += 150) across.push(t.fetch(ox, oy + d, 30 * D));
+  console.log('  ветер под 30° к реке, разгон поперёк сечения, м: ' +
+    across.map(v => v.toFixed(0)).join(' '));
+  const hi = Math.max(...across), lo = Math.min(...across);
+  check('при косом ветре разгон поперёк сечения меняется в разы',
+    hi / Math.max(1, lo) > 3, (hi / Math.max(1, lo)).toFixed(1) + ' раза');
+
+  // Вверх по реке навстречу ветру разгон убывает: воды впереди остаётся меньше.
+  const up = [];
+  for (let d = 0; d <= 3000; d += 750) up.push(t.fetch(ox + d, oy, 0));
+  console.log('  вверх по реке навстречу ветру, м: ' + up.map(v => v.toFixed(0)).join(' ') + '\n');
+  check('навстречу ветру разгон убывает монотонно',
+    up.every((v, i) => i === 0 || v < up[i - 1]), up[0].toFixed(0) + ' → ' + up[up.length - 1].toFixed(0));
+}
+
+// --- то же, но лодкой ----------------------------------------------------------
+//
+// Поле полем, а проверять надо, что оно доехало до физики и там что-то поменяло.
+{
+  const PACK_P = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
+  const [ox, oy] = pack.open_water;
+  const run = (x, y, over) => {
+    const b = new Boat(PACK_P, t);
+    Object.assign(b.o, { windSpeed: 8, windDir: 30 * D, sheet: 14 * D, twist: 8 * D,
+                         crewHike: 1, crewMass: 240, fetchOverride: over, fetch: 3000 });
+    b.x = x; b.y = y; b.psi = 30 * D - 45 * D; b.u = 3; b.phi = 12 * D;
+    for (let i = 0; i < 50 * 30; i++) b.step(1 / 30);
+    return b;
+  };
+  const rough = run(ox, oy - 450, false);      // разогнанная сторона
+  const calm = run(ox, oy + 450, false);       // затишная
+  console.log('  лодка в бейдевинд, ветер под 30° к реке:');
+  console.log('    на разогнанной стороне: разгон %s м, %s уз',
+    rough.telemetry.fetchM.toFixed(0), rough.telemetry.speedKn.toFixed(2));
+  console.log('    на затишной:            разгон %s м, %s уз',
+    calm.telemetry.fetchM.toFixed(0), calm.telemetry.speedKn.toFixed(2));
+  check('разгон доехал до физики и он разный',
+    rough.telemetry.fetchField && calm.telemetry.fetchField &&
+    rough.telemetry.fetchM > 2 * calm.telemetry.fetchM);
+  check('на затишной стороне лодка идёт быстрее',
+    calm.telemetry.speedKn > rough.telemetry.speedKn + 0.02,
+    (calm.telemetry.speedKn - rough.telemetry.speedKn).toFixed(2) + ' узла');
+
+  // Переопределение обязано отменять поле целиком.
+  {
+    const over = run(ox, oy - 450, true);
+    console.log('    с переопределением:     разгон %s м, %s уз\n',
+      over.telemetry.fetchM.toFixed(0), over.telemetry.speedKn.toFixed(2));
+    check('переопределение отменяет поле',
+      !over.telemetry.fetchField && over.telemetry.fetchM === 3000);
+  }
+
+  // За краем участка поле молчит, и разгон берётся из опции — то есть лодка
+  // ведёт себя ровно так, как если бы акватории не было вовсе.
+  {
+    const out = run(60000, 60000, false);
+    check('за краем участка разгон берётся из опции',
+      !out.telemetry.fetchField && out.telemetry.fetchM === 3000);
+  }
 }
 
 console.log('\n' + (failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');

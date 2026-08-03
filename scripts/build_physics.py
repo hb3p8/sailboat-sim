@@ -79,21 +79,18 @@ WAVE_PEAK = 12.0
 SPINNAKER_M2 = 27.0
 
 
-def resistance_curve(hull, lwl_mm, wetted_m2, mass_kg, v_max=9.0, n=45):
-    """Сопротивление корпуса по скорости: трение по ITTC плюс остаточное.
+# Углы крена, на которых пересчитываются обводы. Дальше тридцати смысла нет:
+# лавировочный крен у этой лодки упирается в двадцать с небольшим, а что
+# делается на пятидесяти, решает уже не сопротивление.
+HEELS = [0.0, 10.0, 20.0, 30.0]
 
-    Волновое — интеграл Мичелла по обводам, умноженный на WAVE_SCALE.
-    Добавочное на волнении здесь не считается: оно зависит от ветра и курса и
-    живёт в симуляторе (sim/waves.js).
-    """
-    lwl = lwl_mm / 1000.0
-    speeds = [v_max * i / float(n) for i in range(n + 1)]
-    wave = wavemaking.resistance(hull, speeds)
+
+def _curve_from(speeds, lwl, wetted_m2, wave):
     out = []
     for v, rw in zip(speeds, wave):
         if v <= 0:
             out.append({"v_ms": 0.0, "rt_n": 0.0, "rf_n": 0.0, "rr_n": 0.0,
-                        "rw_michell_n": 0.0, "froude": 0.0})
+                        "froude": 0.0})
             continue
         re = v * lwl / NU_WATER
         cf = 0.075 / (math.log10(re) - 2.0) ** 2
@@ -102,6 +99,66 @@ def resistance_curve(hull, lwl_mm, wetted_m2, mass_kg, v_max=9.0, n=45):
                     "rt_n": rf + WAVE_SCALE * rw,
                     "froude": v / math.sqrt(G * lwl)})
     return out
+
+
+def resistance_curve(hull, lwl_mm, wetted_m2, mass_kg, v_max=9.0, n=45):
+    """Сопротивление корпуса по скорости и КРЕНУ: трение по ITTC плюс волновое.
+
+    Волновое — интеграл Мичелла по обводам, умноженный на WAVE_SCALE.
+    Добавочное на волнении здесь не считается: оно зависит от ветра и курса и
+    живёт в симуляторе (sim/waves.js).
+
+    Крен меняет обводы, и у этой лодки сильно. Днище плоское и мелкое — осадка
+    корпусом полтора десятка сантиметров при ширине больше двух метров, — и
+    наветренная скула выходит из воды уже на десяти градусах:
+
+        крен    смоченная   длина по КВЛ
+          0°     6.80 м²      5.47 м
+         10°     6.19          5.85
+         20°     5.27          5.28
+         30°     4.76          5.02
+
+    Это чистая геометрия: корпус поворачивается, вода остаётся горизонтальной,
+    уровень подбирается под то же водоизмещение (righting.HeeledGeometry). Объём
+    по накренённой сетке сходится с водоизмещением на всех углах до сотых долей
+    процента, а на нуле смоченная сходится с независимым расчётом гидростатики
+    до третьего знака. Отсюда трение по крену и берётся — без единого допущения.
+
+    А вот волновое по крену НЕ считается, и это осознанный отказ. Интеграл
+    Мичелла на накренённых обводах даёт −44% на двадцати градусах, и верить
+    этому нельзя по двум причинам. Теория тонкого корабля предполагает малое
+    возмущение вертикальной ДП; накренённый широкий плоский корпус — не оно, и
+    замена его эквивалентным симметричным телом точна лишь в том же порядке,
+    который на ровном киле уже приходится править множителем 0.56. И главное:
+    ответ Мичелла идёт как квадрат ширины, а крен эту самую ширину по ватерлинии
+    и уполовинивает — хуже инструмента для такого сравнения не придумать.
+
+    Так что крен здесь входит только трением. Направление у волнового,
+    вероятно, тоже вниз — швертботы кренят в слабый ветер именно за этим, — но
+    величину нужно брать не отсюда.
+    """
+    lwl = lwl_mm / 1000.0
+    speeds = [v_max * i / float(n) for i in range(n + 1)]
+    wave = wavemaking.resistance(hull, speeds)
+
+    geom = righting.HeeledGeometry(hull)
+    vol_mm3 = mass_kg / RHO_WATER * 1.0e9                 # кг -> мм³
+    base, heeled = None, []
+    for deg in HEELS:
+        g = geom.at(deg, vol_mm3)
+        if g is None:
+            continue
+        if base is None:
+            base = g
+        kw = g["wetted_mm2"] / base["wetted_mm2"]
+        kl = g["lwl_mm"] / base["lwl_mm"]
+        heeled.append({
+            "heel_deg": deg,
+            "wetted_m2": round(wetted_m2 * kw, 5),
+            "lwl_m": round(lwl * kl, 5),
+            "curve": _curve_from(speeds, lwl * kl, wetted_m2 * kw, wave),
+        })
+    return heeled
 
 
 def sim_mesh(bodies):
@@ -140,6 +197,7 @@ def main():
 
     mass = calibrate.TARGET["displacement_kg"]
     h = hydro.hydrostatics(hull, 0.0, n=200)
+    heel_curves = resistance_curve(hull, h["lwl_mm"], h["wetted_area_m2"], mass)
 
     # тела и их свойства
     def prep(mesh, density=None):
@@ -234,7 +292,9 @@ def main():
                      "подгонка."),
         },
         "resistance": {
-            "curve": resistance_curve(hull, h["lwl_mm"], h["wetted_area_m2"], mass),
+            "curve": heel_curves[0]["curve"],
+            "heel": [{k: c[k] for k in ("heel_deg", "wetted_m2", "lwl_m", "curve")}
+                     for c in heel_curves],
             "form_factor": FORM_FACTOR,
             "wave_scale": WAVE_SCALE,
             "note": ("Трение — ITTC-57 с надбавкой на форму. Волновое — "
@@ -285,6 +345,11 @@ def main():
     for name, val, tol, ok in wavemaking.selftest(hull):
         print("  %-6s %-44s %.2e (допуск %.0e)"
               % ("ok" if ok else "ПЛОХО", name, val, tol))
+    print("  крен  смоченная      LWL   волновое на 3 м/с   всего на 3 м/с")
+    for c in heel_curves:
+        row = [r for r in c["curve"] if abs(r["v_ms"] - 3.0) < 0.11][0]
+        print("  %3.0f°  %7.3f м² %7.3f м %14.0f Н %14.0f Н"
+              % (c["heel_deg"], c["wetted_m2"], c["lwl_m"], row["rr_n"], row["rt_n"]))
     print("  скорость          Fn      Rf   волновое   всего     R/W")
     for v in (2.0, 3.0, 4.0, 6.0, 8.0):
         row = min(r, key=lambda q: abs(q["v_ms"] - v))

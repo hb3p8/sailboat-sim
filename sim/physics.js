@@ -1016,6 +1016,30 @@ export class Boat {
     return out;
   }
 
+  // Сопротивление корпуса по скорости И КРЕНУ.
+  //
+  // У этой лодки крен меняет обводы сильно: днище плоское и мелкое, и
+  // наветренная скула выходит из воды уже на десяти градусах. Смоченная
+  // поверхность падает с 6.8 до 5.3 кв.м на двадцати градусах — считано по
+  // геометрии, поворотом корпуса при постоянном водоизмещении
+  // (scripts/build_physics.py). Волновая часть по крену не меняется, и почему —
+  // объяснено там же: интеграл Мичелла на накренённом корпусе выходит за
+  // пределы своей применимости.
+  hullResistance(u, heelDeg) {
+    const R = this.p.resistance, H = R.heel;
+    if (!H || H.length < 2) return lerpTable(R.curve, 'v_ms', u, 'rt_n');
+    const a = Math.abs(heelDeg);
+    for (let i = 0; i < H.length - 1; i++) {
+      if (a <= H[i + 1].heel_deg) {
+        const lo = H[i].heel_deg, hi = H[i + 1].heel_deg;
+        const t = Math.max(0, Math.min(1, (a - lo) / (hi - lo)));
+        return lerpTable(H[i].curve, 'v_ms', u, 'rt_n') * (1 - t) +
+               lerpTable(H[i + 1].curve, 'v_ms', u, 'rt_n') * t;
+      }
+    }
+    return lerpTable(H[H.length - 1].curve, 'v_ms', u, 'rt_n');
+  }
+
   // Паразитное сопротивление в потоке: корпус, стоячий такелаж, экипаж.
   //
   // Раньше здесь стояло одно число на всё — 0.56 кв.м с одним cx и одной
@@ -1210,7 +1234,7 @@ export class Boat {
     const rudFx = rf.fx;
 
     // сопротивление корпуса по таблице плюс добавочное на волнении
-    const rt = lerpTable(P.resistance.curve, 'v_ms', Math.abs(this.u), 'rt_n');
+    const rt = this.hullResistance(Math.abs(this.u), Math.abs(this.phi) / DEG);
     // Волны бегут ПО ветру, то есть навстречу лодке в лавировку. Проекция
     // скорости на их направление и решает всё: встречная волна повышает
     // частоту встречи и загоняет лодку в резонанс, попутная понижает — и на

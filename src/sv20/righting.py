@@ -132,6 +132,99 @@ class HeeledHull(object):
                 "cb_z_mm": p["cb_z_mm"]}
 
 
+def _cut_y(poly, z):
+    """Где горизонталь z пересекает контур: от какого y до какого."""
+    lo, hi = None, None
+    n = len(poly)
+    for i in range(n):
+        (y0, z0), (y1, z1) = poly[i], poly[(i + 1) % n]
+        if (z0 <= z) == (z1 <= z):
+            continue
+        y = y0 + (y1 - y0) * (z - z0) / (z1 - z0)
+        lo = y if lo is None else min(lo, y)
+        hi = y if hi is None else max(hi, y)
+    return (lo, hi) if lo is not None else None
+
+
+def _perimeter_below(poly, z_w):
+    """Длина смоченной части контура: всё, кроме отрезков по самой воде."""
+    clipped = _clip_below(poly, z_w)
+    total = 0.0
+    n = len(clipped)
+    for i in range(n):
+        a, b = clipped[i], clipped[(i + 1) % n]
+        if abs(a[1] - z_w) < 1e-6 and abs(b[1] - z_w) < 1e-6:
+            continue                      # это свободная поверхность, не обшивка
+        total += math.hypot(b[0] - a[0], b[1] - a[1])
+    return total
+
+
+class HeeledGeometry(object):
+    """Обводы накренённого корпуса: то, что нужно сопротивлению, а не остойчивости.
+
+    Крен меняет не только плечо восстанавливающего момента. Смоченная
+    поверхность растёт, длина по ватерлинии тоже, а главное — меняются сами
+    обводы, по которым считается волновое сопротивление: у накренённого корпуса
+    подветренная скула сидит глубже, наветренная выходит, и распределение
+    ширины по длине становится другим.
+
+    Считается ровно так же, как GZ: корпус поворачивается, вода остаётся
+    горизонтальной, уровень подбирается под заданное водоизмещение. Отличие
+    только в том, что снимается с погружённого контура — не площадь и центр, а
+    периметр и ширина на глубинах.
+    """
+
+    def __init__(self, hull, n_station=96):
+        self.hull = hull
+        b = hull.b
+        self.xs = [b.x_deck_aft + (b.x_stem - b.x_deck_aft) * i / float(n_station)
+                   for i in range(n_station + 1)]
+        self.polys = [section_polygon(hull, x) for x in self.xs]
+        self._hh = HeeledHull(hull, n_station=40)
+
+    def at(self, heel_deg, volume_mm3, nz=48):
+        """Смоченная площадь, длина по ватерлинии и сетка полуширот.
+
+        Полуширота берётся у ЭКВИВАЛЕНТНОГО СИММЕТРИЧНОГО тела: половина полной
+        ширины на этой глубине. У тонкого корабля источники задаются полной
+        шириной, а не тем, как она разложена по бортам, — значит для
+        несимметричного погружённого объёма это не приближение, а точная замена
+        в пределах той же теории.
+        """
+        z_w = self._hh.float_at(heel_deg, volume_mm3)
+        if z_w is None:
+            return None
+        th = math.radians(heel_deg)
+        c, s = math.cos(th), math.sin(th)
+        rots = [[(y * c - z * s, y * s + z * c) for y, z in poly] for poly in self.polys]
+
+        girth, wet_x = [], []
+        for x, rot in zip(self.xs, rots):
+            g = _perimeter_below(rot, z_w)
+            girth.append(g)
+            if g > 1e-6:
+                wet_x.append(x)
+        if len(wet_x) < 2:
+            return None
+        wetted = _trapz(self.xs, girth)                       # мм²
+        xa, xf = min(wet_x), max(wet_x)
+
+        z_min = min(min(z for _, z in rot) for rot in rots)
+        zs = [z_w + (z_min - z_w) * (j / float(nz)) ** 2 for j in range(nz + 1)]
+        f = []
+        for rot in rots:
+            row = []
+            for z in zs:
+                cut = _cut_y(rot, z)
+                row.append(0.0 if cut is None else 0.5 * (cut[1] - cut[0]))
+            f.append(row)
+        return {"waterline_mm": z_w, "wetted_mm2": wetted,
+                "lwl_mm": xf - xa,
+                "xs_m": [x / 1000.0 for x in self.xs],
+                "zs_m": [(z - z_w) / 1000.0 for z in zs],
+                "f_m": [[v / 1000.0 for v in row] for row in f]}
+
+
 def _trapz(xs, ys):
     return sum(0.5 * (ys[i] + ys[i + 1]) * (xs[i + 1] - xs[i])
                for i in range(len(xs) - 1))

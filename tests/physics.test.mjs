@@ -502,5 +502,55 @@ console.log('\nКиль и руль: скос от киля и стык с ко�
     rf.toFixed(2) + ' против ' + rb.toFixed(2));
 }
 
+// --- сопротивление на крене -------------------------------------------------------
+//
+// У этой лодки крен меняет обводы сильно: днище плоское и мелкое, осадка
+// корпусом пятнадцать сантиметров при ширине больше двух метров, и наветренная
+// скула выходит из воды уже на десяти градусах. Смоченная поверхность от этого
+// падает — то самое, ради чего швертботы кренят в слабый ветер.
+//
+// Волновая часть по крену не меняется, и это записано в build_physics: интеграл
+// Мичелла на накренённом корпусе выходит за пределы применимости.
+console.log('\nСопротивление корпуса на крене\n');
+{
+  const H = PACK.resistance.heel;
+  const b = new Boat(PACK);
+  console.log('  крен  смоченная    LWL   сопротивление на 2.5 м/с');
+  for (const h of H) {
+    console.log('  ' + (h.heel_deg + '°').padStart(5) + ' ' +
+      h.wetted_m2.toFixed(2).padStart(8) + ' м² ' + h.lwl_m.toFixed(2).padStart(6) +
+      ' м ' + b.hullResistance(2.5, h.heel_deg).toFixed(0).padStart(12) + ' Н');
+  }
+  console.log('');
+  check('таблица по крену есть и начинается с ровного киля',
+    H && H.length >= 3 && H[0].heel_deg === 0);
+  // Ровный киль обязан совпасть с основной кривой ДО ЗНАКА: иначе вся привязка
+  // к наблюдениям, сделанная на ней, поедет от одного добавления крена.
+  {
+    let worst = 0;
+    for (const row of PACK.resistance.curve) {
+      worst = Math.max(worst, Math.abs(b.hullResistance(row.v_ms, 0) - row.rt_n));
+    }
+    check('на нуле крена кривая ровно прежняя', worst < 1e-9,
+      worst.toExponential(1) + ' Н');
+  }
+  check('смоченная поверхность падает с креном',
+    H.every((h, i) => i === 0 || h.wetted_m2 < H[i - 1].wetted_m2),
+    H.map(h => h.wetted_m2.toFixed(2)).join(' → ') + ' м²');
+  check('сопротивление на крене меньше, но не втрое',
+    b.hullResistance(2.5, 20) < b.hullResistance(2.5, 0) &&
+    b.hullResistance(2.5, 20) > 0.7 * b.hullResistance(2.5, 0),
+    (b.hullResistance(2.5, 20) / b.hullResistance(2.5, 0)).toFixed(3) + ' от ровного киля');
+  // Между узлами таблицы и за её краем модель обязана вести себя разумно.
+  check('между углами таблицы сопротивление меняется плавно',
+    [5, 15, 25].every(a => {
+      const v = b.hullResistance(2.5, a);
+      return v < b.hullResistance(2.5, a - 5) + 1e-9 &&
+             v > b.hullResistance(2.5, a + 5) - 1e-9;
+    }));
+  check('за краем таблицы не разваливается',
+    Math.abs(b.hullResistance(2.5, 60) - b.hullResistance(2.5, 30)) < 1e-9);
+}
+
 console.log('\n' + (failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');
 process.exit(failures ? 1 : 0);

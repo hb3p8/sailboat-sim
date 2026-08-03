@@ -141,9 +141,21 @@ export class Lattice {
   build(ux, uy, uz, self, ground) {
     const n = this.n, P = this.panels, v = this._v, t = this._t;
     const rc2 = this.core * this.core;
-    const mir = this._mir || (this._mir = {
-      a: [0, 0, 0], b: [0, 0, 0], ta: [0, 0, 0], tb: [0, 0, 0] });
-    const reflect = (src, dst) => { dst[0] = src[0]; dst[1] = src[1]; dst[2] = -src[2]; };
+    // Отражённая геометрия зависит только от панели, а не от контрольной точки,
+    // и считается один раз на сборку, а не n раз для каждой из n.
+    let M = this._mir;
+    if (!M || M.a.length !== n * 3) {
+      M = this._mir = { a: new Float64Array(n * 3), b: new Float64Array(n * 3),
+                        ta: new Float64Array(n * 3), tb: new Float64Array(n * 3) };
+    }
+    if (ground) {
+      for (let j = 0; j < n; j++) {
+        const p = P[j], o = j * 3;
+        for (const [src, dst] of [[p.a, M.a], [p.b, M.b], [p.ta, M.ta], [p.tb, M.tb]]) {
+          dst[o] = src[0]; dst[o + 1] = src[1]; dst[o + 2] = -src[2];
+        }
+      }
+    }
     // У решётки с панелями по хорде свободные вихри уходят прямо от
     // присоединённого: ta совпадает с a, tb с b. Отрезки вдоль хорды тогда
     // нулевой длины и наводят ровно ноль — Био — Савар отдаёт его точно, через
@@ -163,7 +175,7 @@ export class Lattice {
     for (let i = 0; i < n; i++) {
       const ci = P[i].c, ni = P[i].nrm;
       for (let j = 0; j < n; j++) {
-        const A = P[j].a, B = P[j].b, TA = P[j].ta, TB = P[j].tb;
+        const A = P[j].a, B = P[j].b, TA = P[j].ta, TB = P[j].tb, o = j * 3;
         // Замкнутый контур: из бесконечности в TA, вдоль хорды в A, связанный
         // отрезок A→B, обратно по хорде в TB, и оттуда пелена на бесконечность.
         //
@@ -198,25 +210,23 @@ export class Lattice {
         if (ground) {
           // Зеркальный контур: та же геометрия, отражённая в z = 0, и обратная
           // циркуляция — тогда на самой плоскости нормальная скорость нулевая.
-          reflect(A, mir.a); reflect(B, mir.b);
-          reflect(TA, mir.ta); reflect(TB, mir.tb);
           v[0] = v[1] = v[2] = 0;
-          segment(ci[0], ci[1], ci[2], mir.a[0], mir.a[1], mir.a[2],
-                  mir.b[0], mir.b[1], mir.b[2], t, rc2);
+          segment(ci[0], ci[1], ci[2], M.a[o], M.a[o + 1], M.a[o + 2],
+                  M.b[o], M.b[o + 1], M.b[o + 2], t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
           if (lead[j]) {
-            segment(ci[0], ci[1], ci[2], mir.ta[0], mir.ta[1], mir.ta[2],
-                    mir.a[0], mir.a[1], mir.a[2], t, rc2);
+            segment(ci[0], ci[1], ci[2], M.ta[o], M.ta[o + 1], M.ta[o + 2],
+                    M.a[o], M.a[o + 1], M.a[o + 2], t, rc2);
             v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
           }
           if (trail[j]) {
-            segment(ci[0], ci[1], ci[2], mir.b[0], mir.b[1], mir.b[2],
-                    mir.tb[0], mir.tb[1], mir.tb[2], t, rc2);
+            segment(ci[0], ci[1], ci[2], M.b[o], M.b[o + 1], M.b[o + 2],
+                    M.tb[o], M.tb[o + 1], M.tb[o + 2], t, rc2);
             v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
           }
-          tail(ci[0], ci[1], ci[2], mir.tb[0], mir.tb[1], mir.tb[2], ux, uy, uz, t, rc2);
+          tail(ci[0], ci[1], ci[2], M.tb[o], M.tb[o + 1], M.tb[o + 2], ux, uy, uz, t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          tail(ci[0], ci[1], ci[2], mir.ta[0], mir.ta[1], mir.ta[2], ux, uy, uz, t, rc2);
+          tail(ci[0], ci[1], ci[2], M.ta[o], M.ta[o + 1], M.ta[o + 2], ux, uy, uz, t, rc2);
           v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
           kij -= v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
         }
@@ -258,18 +268,18 @@ export class Lattice {
         if (ground) {
           v[0] = v[1] = v[2] = 0;
           if (lead[j]) {
-            segment(mx, my, mz, mir.ta[0], mir.ta[1], mir.ta[2],
-                    mir.a[0], mir.a[1], mir.a[2], t, rc2);
+            segment(mx, my, mz, M.ta[o], M.ta[o + 1], M.ta[o + 2],
+                    M.a[o], M.a[o + 1], M.a[o + 2], t, rc2);
             v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
           }
           if (trail[j]) {
-            segment(mx, my, mz, mir.b[0], mir.b[1], mir.b[2],
-                    mir.tb[0], mir.tb[1], mir.tb[2], t, rc2);
+            segment(mx, my, mz, M.b[o], M.b[o + 1], M.b[o + 2],
+                    M.tb[o], M.tb[o + 1], M.tb[o + 2], t, rc2);
             v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
           }
-          tail(mx, my, mz, mir.tb[0], mir.tb[1], mir.tb[2], ux, uy, uz, t, rc2);
+          tail(mx, my, mz, M.tb[o], M.tb[o + 1], M.tb[o + 2], ux, uy, uz, t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          tail(mx, my, mz, mir.ta[0], mir.ta[1], mir.ta[2], ux, uy, uz, t, rc2);
+          tail(mx, my, mz, M.ta[o], M.ta[o + 1], M.ta[o + 2], ux, uy, uz, t, rc2);
           v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
           kwij -= v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
         }

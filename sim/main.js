@@ -388,9 +388,10 @@ function shapeSails(side) {
   // Та же формула, что в physics.sailForces: парус держится шкотом до своего
   // предела, дальше сваливается по потоку.
   const setOf = sail => {
-    const trim = Math.max(sail.minSet || 0, boat.o.sheet);
+    const own = boat.o.sheet + (sail.mast ? 0 : boat.o.jibTrim);
+    const trim = Math.max(sail.minSet || 0, own);
     const held = Math.min(trim, awa);
-    const over = Math.min(1, Math.max(0, (boat.o.sheet - sail.maxSheet) / (25 * D)));
+    const over = Math.min(1, Math.max(0, (own - sail.maxSheet) / (25 * D)));
     return held + (awa - held) * over;
   };
   boomPivot.rotation.y = setOf(boat.sails[0]) * side;
@@ -949,7 +950,8 @@ addEventListener('keydown', e => {
   keys[e.code] = true;
   if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code))
     e.preventDefault();
-  if (e.code === 'KeyR') {
+  // Сброс переехал на X: R с F теперь стаксель-шкот.
+  if (e.code === 'KeyX') {
     boat.reset();
     boat.psi = boat.o.windDir - START_TWA;
     boat.u = 4.0;
@@ -1041,6 +1043,12 @@ function readControls(dt) {
   if (keys.ArrowDown || keys.KeyS) o.sheet += sr * dt;
   // Ближе семи градусов шкот не выбирается: мешают ванты и погон.
   o.sheet = Math.max(7 * D, Math.min(90 * D, o.sheet));
+  // Стаксель-шкот отдельно, поправкой к общему: R добрать, F потравить. Свой
+  // упор острее диаметральной у стакселя всё равно остаётся — его ставит
+  // каретка на погоне (physics.js), — так что дальше него не добрать.
+  if (keys.KeyR) o.jibTrim -= sr * dt;
+  if (keys.KeyF) o.jibTrim += sr * dt;
+  o.jibTrim = Math.max(-30 * D, Math.min(55 * D, o.jibTrim));
 
   o.windSpeed = parseFloat(ui.wind.value);
   const wd = parseFloat(ui.winddir.value) * D;
@@ -1253,7 +1261,10 @@ function updateHud(t) {
     '<div class="big">' + (t.speedKn || 0).toFixed(2) + ' <span>уз</span></div>' +
     '<table>' + rows + '</table>' +
     '<div class="ctl">руль ' + (boat.o.rudder / D).toFixed(0) +
-    '°&nbsp;&nbsp;шкот ' + (boat.o.sheet / D).toFixed(0) + '°' + luff +
+    '°&nbsp;&nbsp;шкот ' + (boat.o.sheet / D).toFixed(0) + '°' +
+    (Math.abs(boat.o.jibTrim) > 0.5 * D
+      ? '&nbsp;&nbsp;стаксель ' + (boat.o.jibTrim > 0 ? '+' : '') +
+        (boat.o.jibTrim / D).toFixed(0) + '°' : '') + luff +
     (autopilot ? '&nbsp;&nbsp;<b>авторулевой</b>' : '') + '</div>';
 }
 

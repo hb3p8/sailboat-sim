@@ -1,7 +1,7 @@
 PY ?= python3
 VENV := .venv/bin/python
 
-.PHONY: all extract hull viewer export physics sim terrain test slow all-tests fit clean
+.PHONY: all extract hull viewer export physics sim terrain terrain-pack test slow all-tests fit clean
 
 all: viewer export sim
 
@@ -24,7 +24,18 @@ $(HULL): scripts/build_hull.py $(SRC) $(FRAME) out/params.json
 $(PACK) $(MESH) &: scripts/build_physics.py $(SRC) $(FRAME) out/params.json
 	$(PY) scripts/build_physics.py
 
-sim/index.html: scripts/build_sim.py $(PACK) $(MESH) $(wildcard sim/*.js) sim/template.html
+# Пакет акватории собирается из выгрузки (`make terrain`) и в сборку страницы
+# входит необязательно: `wildcard` подставит его, только если он есть. Без него
+# страница собирается и работает — лодка ходит по бесконечной воде.
+TERRAIN_PACK := out/export/terrain_pack.json
+
+$(TERRAIN_PACK): scripts/build_terrain_pack.py out/terrain.json
+	$(VENV) scripts/build_terrain_pack.py
+
+terrain-pack: $(TERRAIN_PACK)
+
+sim/index.html: scripts/build_sim.py $(PACK) $(MESH) $(wildcard sim/*.js) \
+                sim/template.html $(wildcard $(TERRAIN_PACK))
 	$(PY) scripts/build_sim.py
 
 extract: $(FRAME)
@@ -67,7 +78,7 @@ terrain: viewer/terrain.html
 #
 # Правило простое: правил модель — гони `test`, собрался коммитить — `all-tests`.
 # Отдельную батарею можно позвать по имени: `make t-wind`, `make t-upwind`.
-FAST := membrane vlm waves wind replay physics
+FAST := membrane vlm waves wind terrain replay physics
 SLOW := upwind
 
 .PHONY: $(addprefix t-,$(FAST) $(SLOW)) slow all-tests

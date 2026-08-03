@@ -620,9 +620,12 @@ console.log('\nБесконечная вода: акватория выключ�
     check('без данных течение — точный ноль',
       Object.is(v.x, 0) && Object.is(v.y, 0), v.x + ', ' + v.y);
   }
-  check('выборки без данных отвечают «не знаю»',
-    new Terrain(null).shore() === null && new Terrain(null).fetch() === null &&
-    new Terrain(null).wind() === null);
+  {
+    const e = new Terrain(null);
+    check('выборки без данных отвечают «не знаю»',
+      [e.ground(0, 0), e.top(0, 0), e.shore(0, 0),
+       e.fetch(0, 0, 0), e.skyline(0, 0, 0)].every(v => v === null));
+  }
 }
 
 console.log('\n' + (failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');

@@ -1,7 +1,7 @@
 PY ?= python3
 VENV := .venv/bin/python
 
-.PHONY: all extract hull viewer export physics sim test slow all-tests fit clean
+.PHONY: all extract hull viewer export physics sim terrain test slow all-tests fit clean
 
 all: viewer export sim
 
@@ -43,6 +43,20 @@ physics: $(PACK)
 
 sim: sim/index.html
 
+# Реальная речная акватория: рельеф Copernicus DEM и берег OSM. В `all` не
+# входит нарочно — цель ходит в сеть, а сборка проекта обязана собираться и без
+# неё. Скачанное оседает в data/terrain/ и переиспользуется, так что повторная
+# сборка укладывается в полсекунды. Нужен numpy со scipy и pillow, то есть
+# .venv, а не системный python.
+out/terrain.json: scripts/build_terrain.py src/sv20/terrain.py
+	$(VENV) scripts/build_terrain.py
+
+viewer/terrain.html: scripts/build_terrain_viewer.py out/terrain.json \
+                     viewer/terrain.js viewer/terrain_template.html
+	$(VENV) scripts/build_terrain_viewer.py
+
+terrain: viewer/terrain.html
+
 # Физика проверяется без браузера: он мешает отличить расходимость модели
 # от проблем отрисовки и не запускается из Makefile.
 #
@@ -73,5 +87,7 @@ fit: extract
 	$(VENV) scripts/fit_hull.py
 	$(MAKE) all
 
+# data/terrain/ не трогается: это кэш скачанного, а не результат сборки.
 clean:
-	rm -rf out viewer/index.html sim/index.html src/sv20/__pycache__
+	rm -rf out viewer/index.html viewer/terrain.html sim/index.html \
+	       src/sv20/__pycache__

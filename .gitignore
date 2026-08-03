@@ -1,6 +1,8 @@
 out/
 viewer/index.html
+viewer/terrain.html
 __pycache__/
 *.pyc
 .venv/
 sim/index.html
+data/terrain/

@@ -1190,9 +1190,20 @@ export class Boat {
     // подковообразный вихрь; величина посчитана по Хёрнеру из снятых с чертежа
     // толщины и хорды (scripts/build_physics.py). Подъёмной силы не даёт —
     // только тормозит, и потому идёт прямо вдоль движения.
+    // Сюда же и бульб: у пера с рулём сопротивление идёт через профильный
+    // коэффициент крыла, отнесённый к площади в плане, а бульб — тело
+    // вращения, и в модели его не было вовсе. Трение по своей длине: у него
+    // своё число Рейнольдса, вчетверо меньше корпусного.
     const jc = keel.junction_cda_m2 || 0;
+    const bl = P.foils.bulb;
+    let bulbCda = 0;
+    if (bl && Math.abs(this.u) > 0.05) {
+      const re = Math.abs(this.u) * bl.length_m / env.nu_water;
+      const cf = 0.075 / Math.pow(Math.log10(re) - 2, 2);
+      bulbCda = cf * bl.form_factor * bl.wetted_m2;
+    }
     const keelFx = kf.fx - Math.sign(this.u || 1) *
-                   0.5 * env.rho_water * jc * this.u * this.u;
+                   0.5 * env.rho_water * (jc + bulbCda) * this.u * this.u;
 
     // Руль стоит в скосе от киля, и это не мелочь.
     //

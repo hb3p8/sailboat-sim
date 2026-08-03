@@ -255,17 +255,23 @@ def dem_window(bbox, cache, pad=0.01):
 
 
 # ---------------------------------------------------------------------------
-# OpenStreetMap: полигоны воды
+# OpenStreetMap: полигоны воды, леса и застройки
 # ---------------------------------------------------------------------------
+#
+# Слоёв три, и берутся они разными запросами, а не одним: кэш тогда бьётся по
+# слоям, и добавление нового не заставляет качать заново уже имеющиеся.
+#
+# Отдельные здания не берутся нарочно. Их в городе десятки тысяч, силуэт с воды
+# они не меняют — с километра квартал читается сплошным массивом, а не набором
+# коробок, — зато утраивают выгрузку. Застройка берётся кварталами по landuse.
 
-OVERPASS_Q = """[out:json][timeout:180];
-(
-  way["natural"="water"](%(s)f,%(w)f,%(n)f,%(e)f);
-  relation["natural"="water"](%(s)f,%(w)f,%(n)f,%(e)f);
-  way["waterway"="riverbank"](%(s)f,%(w)f,%(n)f,%(e)f);
-  relation["waterway"="riverbank"](%(s)f,%(w)f,%(n)f,%(e)f);
-);
-out geom;"""
+WATER_SEL = ('["natural"="water"]', '["waterway"="riverbank"]')
+
+FOREST_SEL = ('["landuse"="forest"]', '["natural"="wood"]',
+              '["landuse"="orchard"]', '["leisure"="park"]')
+
+URBAN_SEL = ('["landuse"~"^(residential|industrial|commercial|retail|'
+             'garages|construction|railway|port|quarry)$"]',)
 
 
 def _stitch(ways):
@@ -309,16 +315,19 @@ def _stitch(ways):
     return rings
 
 
-def water_polygons(bbox, cache, pad=0.02):
-    """Кольца воды: список (точки, дырка ли) в порядке отрисовки.
+def osm_rings(bbox, cache, name, selectors, pad=0.02):
+    """Кольца одного слоя OSM: список (точки, дырка ли) в порядке отрисовки.
 
-    Мультиполигоны OSM приходят отношениями с ролями outer/inner — острова это
-    именно inner. Порядок важен: сначала внешние кольца отношения, потом его
-    дырки, иначе остров зальётся водой обратно.
+    Мультиполигоны OSM приходят отношениями с ролями outer/inner — острова и
+    поляны это именно inner. Порядок важен: сначала внешние кольца отношения,
+    потом его дырки, иначе остров зальётся обратно.
     """
-    q = OVERPASS_Q % {"s": bbox["south"] - pad, "w": bbox["west"] - pad,
-                      "n": bbox["north"] + pad, "e": bbox["east"] + pad}
-    path = os.path.join(cache, "water.json")
+    box = "(%f,%f,%f,%f)" % (bbox["south"] - pad, bbox["west"] - pad,
+                             bbox["north"] + pad, bbox["east"] + pad)
+    body = "".join("  %s%s%s;\n" % (kind, sel, box)
+                   for sel in selectors for kind in ("way", "relation"))
+    q = "[out:json][timeout:300];\n(\n%s);\nout geom;" % body
+    path = os.path.join(cache, name + ".json")
 
     def fetch():
         last = None
@@ -372,6 +381,18 @@ DEPTH_MAX = 6.0       # м, глубина, дальше которой усло
 DEPTH_SLOPE = 0.06    # уклон условного дна от уреза
 FREEBOARD = 0.4       # м, на столько суша поднимается над урезом, если ниже
 
+# Высота крон и кварталов над землёй. Числа грубые и такими задуманы: от леса
+# нужен силуэт, а не таксация. Восемнадцать метров — обычный спелый сосняк и
+# ельник средней полосы; десять — застройка вперемешку, от частного сектора до
+# пятиэтажек. Городские высотки этими числами не занижаются: они уже сидят в
+# DSM, а подъём берётся по максимуму (см. `build`).
+FOREST_H = 18.0
+URBAN_H = 10.0
+
+# Окно, которым из DSM выбивается земля, м. Должно быть заметно шире кроны и
+# квартала и заметно уже склона: сто метров попадает в этот зазор.
+GROUND_WIN_M = 100.0
+
 
 def build(bbox, step, cache, level=None):
     """Собрать карту участка на метрической сетке с шагом `step` метров."""
@@ -397,24 +418,29 @@ def build(bbox, step, cache, level=None):
     fr_c = (glon - dlons[0]) / (dlons[1] - dlons[0])
     h = ndimage.map_coordinates(dem, [fr_r, fr_c], order=1, mode="nearest")
 
-    # --- берег: полигоны OSM растрируются мельче сетки и усредняются, чтобы
-    # у уреза получилось не «да/нет», а доля воды в ячейке
+    # --- слои OSM: полигоны растрируются мельче сетки и усредняются, чтобы у
+    # границы получилось не «да/нет», а доля ячейки
     ss = SUPERSAMPLE
-    img = Image.new("L", (nx * ss, ny * ss), 0)
-    dr = ImageDraw.Draw(img)
-    for pts, hole in water_polygons(bbox, cache):
-        if len(pts) < 3:
-            continue
-        px = []
-        for la, lo in pts:
-            x, y = fr.xy(la, lo)
-            px.append(((x - x0) / step * ss, (y - y0) / step * ss))
-        dr.polygon(px, fill=0 if hole else 255)
-    # Строка растра растёт вместе с Y, потому что в него так и рисовали: он
-    # здесь не картинка, а та же метрическая сетка, только мельче. Переворота
-    # быть не должно — с ним маска садится зеркально по широте, ложится на
-    # чужой рельеф, и урез уезжает на два десятка метров.
-    cov = np.asarray(img, np.float32).reshape(ny, ss, nx, ss).mean((1, 3)) / 255.0
+
+    def rasterize(rings):
+        img = Image.new("L", (nx * ss, ny * ss), 0)
+        dr = ImageDraw.Draw(img)
+        for pts, hole in rings:
+            if len(pts) < 3:
+                continue
+            px = []
+            for la, lo in pts:
+                x, y = fr.xy(la, lo)
+                px.append(((x - x0) / step * ss, (y - y0) / step * ss))
+            dr.polygon(px, fill=0 if hole else 255)
+        # Строка растра растёт вместе с Y, потому что в него так и рисовали: он
+        # здесь не картинка, а та же метрическая сетка, только мельче.
+        # Переворота быть не должно — с ним маска садится зеркально по широте,
+        # ложится на чужой рельеф, и урез уезжает на два десятка метров.
+        return np.asarray(img, np.float32).reshape(
+            ny, ss, nx, ss).mean((1, 3)) / 255.0
+
+    cov = rasterize(osm_rings(bbox, cache, "water", WATER_SEL))
 
     wet = cov > 0.5
     if not wet.any():
@@ -424,6 +450,41 @@ def build(bbox, step, cache, level=None):
     # мосты и суда, которые DEM видит как высокие точки над рекой.
     if level is None:
         level = float(np.median(h[wet]))
+
+    # --- лес и застройка.
+    #
+    # Нужны они здесь ради силуэта берега: с воды берег читается не рельефом, а
+    # стеной леса и гребёнкой кварталов над ним, и без них высокий правый берег
+    # выглядит голым косогором, каким он не бывает.
+    #
+    # Тонкость, из-за которой это не сводится к «прибавить высоту по маске».
+    # Copernicus DEM — это DSM, то есть поверхность отражения: кроны и крыши в
+    # нём УЖЕ есть. Слепая прибавка посчитала бы лес дважды. Поэтому сначала из
+    # DSM выбивается земля — размыканием (эрозия, затем наращивание) окном шире
+    # кроны и уже склона, — и высота слоя откладывается от неё.
+    #
+    # Берётся при этом максимум с исходным DSM, а не замена. Смысл двойной: где
+    # DSM уже показывает что-то выше — городские высотки, отдельные вышки — оно
+    # остаётся как измеренное; а где тридцатиметровая решётка размазала опушку
+    # в пологий скат, полигон OSM ставит на её место стену. Силуэт получается
+    # резким там, где он резкий на самом деле, и нигде не завышенным.
+    urban = rasterize(osm_rings(bbox, cache, "urban", URBAN_SEL)) > 0.5
+    forest = rasterize(osm_rings(bbox, cache, "forest", FOREST_SEL)) > 0.5
+
+    # Вода главнее любого слоя суши: полигоны кварталов в OSM нередко нарезаны
+    # по осям улиц и заходят на затоны и гребной канал.
+    urban &= ~wet
+    forest &= ~wet
+    urban &= ~forest
+
+    win = max(3, int(round(GROUND_WIN_M / step)) | 1)
+    ground = ndimage.grey_opening(h, size=win, mode="nearest")
+
+    cover = np.zeros((ny, nx), np.uint8)
+    cover[urban] = 2
+    cover[forest] = 1
+    cover_h = np.where(forest, FOREST_H, np.where(urban, URBAN_H, 0.0))
+    h = np.maximum(h, ground + cover_h)
 
     # --- условное дно: откос от берега до потолка глубины. Промера нет, и
     # выдавать это за глубины нельзя; нужно оно ровно затем, чтобы у воды был
@@ -462,10 +523,14 @@ def build(bbox, step, cache, level=None):
         "level": level,
         "hmin": float(h.min()), "hmax": float(h.max()),
         "water_fraction": float(wet.mean()),
+        "forest_fraction": float(forest.mean()),
+        "urban_fraction": float(urban.mean()),
+        "cover_h": {"forest": FOREST_H, "urban": URBAN_H},
         "open_water": open_water,
         "widest_m": float(2 * dist_in.max()),
         "high_point": high_point,
         "attribution": list(ATTRIBUTION),
         "height": h.astype(np.float32),
         "water": cov.astype(np.float32),
+        "cover": cover,
     }

@@ -42,13 +42,14 @@ def main():
     cache = os.path.join(ROOT, "data", "terrain")
     t = terrain.build(BBOX, args.step, cache, level=args.level)
 
-    h, cov = t.pop("height"), t.pop("water")
+    h, cov, cover = t.pop("height"), t.pop("water"), t.pop("cover")
     # Дециметры: диапазон высот здесь — сотни метров, а 0.1 м мельче, чем
     # что-либо в этих данных различимо.
     hi = np.round(h * 10.0).astype(np.int16)
     t["height_dm_b64"] = base64.b64encode(hi.tobytes()).decode()
     t["water_b64"] = base64.b64encode(
         np.round(cov * 255).astype(np.uint8).tobytes()).decode()
+    t["cover_b64"] = base64.b64encode(cover.tobytes()).decode()
 
     out = os.path.join(ROOT, "out")
     os.makedirs(out, exist_ok=True)
@@ -59,8 +60,11 @@ def main():
     print("%s — %.0f КБ" % (os.path.relpath(dst, ROOT), os.path.getsize(dst) / 1024))
     print("сетка %d × %d, шаг %.0f м, участок %.2f × %.2f км"
           % (t["nx"], t["ny"], t["step"], t["size"][0] / 1000, t["size"][1] / 1000))
-    print("урез %.1f м, высоты %.1f…%.1f м, воды %.0f%% площади"
-          % (t["level"], t["hmin"], t["hmax"], 100 * t["water_fraction"]))
+    print("урез %.1f м, высоты %.1f…%.1f м"
+          % (t["level"], t["hmin"], t["hmax"]))
+    print("вода %.0f%%, лес %.0f%%, застройка %.0f%% площади"
+          % (100 * t["water_fraction"], 100 * t["forest_fraction"],
+             100 * t["urban_fraction"]))
 
 
 if __name__ == "__main__":

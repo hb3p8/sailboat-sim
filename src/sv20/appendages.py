@@ -215,6 +215,24 @@ class Bulb(object):
     def mass_kg(self, density=LEAD_DENSITY):
         return density * self.volume_mm3 / MM3_PER_M3
 
+    def wetted_mm2(self, n=400):
+        """Смоченная поверхность торпеды: S = ∫ 2πr √(1 + r'²) dx.
+
+        Нужна затем, что своего сопротивления у бульба в модели не было вовсе.
+        У пера и руля оно идёт через профильный коэффициент крыла, отнесённый к
+        площади в плане; бульб — тело вращения, у него ни площади в плане, ни
+        коэффициента крыла нет, и он просто выпал.
+        """
+        total = 0.0
+        dx = self.length / n
+        r_prev = self.radius_at(0.0)
+        for i in range(1, n + 1):
+            r = self.radius_at(i / float(n))
+            dr = r - r_prev
+            total += math.pi * (r + r_prev) * math.sqrt(dx * dx + dr * dr)
+            r_prev = r
+        return total
+
     def mesh(self, x_nose, z_axis, n_len=40, n_rad=20):
         rings = []
         for i in range(n_len + 1):

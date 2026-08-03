@@ -482,6 +482,30 @@ console.log('\nКиль и руль: скос от киля и стык с ко�
   check('стык киля даёт заметную, но не главную долю сопротивления',
     jq > 0.5 && jq < 0.1 * t.resistN,
     jq.toFixed(1) + ' Н из ' + t.resistN.toFixed(0) + ' Н');
+
+  // Бульб. Своего сопротивления у него не было вовсе: у пера с рулём оно идёт
+  // через профильный коэффициент крыла, отнесённый к площади в плане, а бульб —
+  // тело вращения, и он просто выпал.
+  const bl = PACK.foils.bulb;
+  const re = t.speed * bl.length_m / PACK.environment.nu_water;
+  const cf = 0.075 / Math.pow(Math.log10(re) - 2, 2);
+  const bq = 0.5 * PACK.environment.rho_water * cf * bl.form_factor *
+             bl.wetted_m2 * t.speed * t.speed;
+  console.log('  бульб: ' + bl.length_m.toFixed(2) + '×' + bl.diameter_m.toFixed(2) +
+    ' м, смоченная ' + bl.wetted_m2.toFixed(3) + ' м², на этом ходу ' +
+    bq.toFixed(1) + ' Н\n');
+  // Смоченная у торпеды обязана лежать между цилиндром тех же габаритов и
+  // шаром того же объёма. Проверяется верхняя граница — она геометрическая и
+  // не зависит от объёма.
+  check('смоченная бульба меньше цилиндра тех же габаритов',
+    bl.wetted_m2 < Math.PI * bl.diameter_m * bl.length_m &&
+    bl.wetted_m2 > 0.6 * Math.PI * bl.diameter_m * bl.length_m,
+    (bl.wetted_m2 / (Math.PI * bl.diameter_m * bl.length_m)).toFixed(2) + ' от цилиндра');
+  check('надбавка на форму тела вращения в разумных пределах',
+    bl.form_factor > 1.05 && bl.form_factor < 1.3, bl.form_factor.toFixed(3));
+  check('бульб тормозит заметно, но меньше стыка с килем не выходит',
+    bq > jq && bq < 0.1 * t.resistN,
+    bq.toFixed(1) + ' Н против ' + jq.toFixed(1) + ' у стыка');
 }
 
 // Скос обязан исчезать на заднем ходу: там пелена киля уходит ВПЕРЁД, и перо

@@ -144,6 +144,22 @@ export class Lattice {
     const mir = this._mir || (this._mir = {
       a: [0, 0, 0], b: [0, 0, 0], ta: [0, 0, 0], tb: [0, 0, 0] });
     const reflect = (src, dst) => { dst[0] = src[0]; dst[1] = src[1]; dst[2] = -src[2]; };
+    // У решётки с панелями по хорде свободные вихри уходят прямо от
+    // присоединённого: ta совпадает с a, tb с b. Отрезки вдоль хорды тогда
+    // нулевой длины и наводят ровно ноль — Био — Савар отдаёт его точно, через
+    // нулевое векторное произведение. Считать их незачем, а стоят они восьми
+    // вызовов из восемнадцати на каждую пару панелей: сборка матрицы — это
+    // четыре пятых шага физики, и пропуск срезает с неё сорок процентов.
+    //
+    // Проверка поточечная, потому что решётка умеет и вторую постановку —
+    // Прандтля, с пеленой от задней шкаторины (tests/vlm.test.mjs), — и там
+    // отрезки настоящие.
+    const same = (p, q) => p[0] === q[0] && p[1] === q[1] && p[2] === q[2];
+    const lead = new Array(n), trail = new Array(n);
+    for (let j = 0; j < n; j++) {
+      lead[j] = !same(P[j].ta, P[j].a);
+      trail[j] = !same(P[j].b, P[j].tb);
+    }
     for (let i = 0; i < n; i++) {
       const ci = P[i].c, ni = P[i].nrm;
       for (let j = 0; j < n; j++) {
@@ -166,10 +182,14 @@ export class Lattice {
         if (self || i !== j) {
           segment(ci[0], ci[1], ci[2], A[0], A[1], A[2], B[0], B[1], B[2], v, rc2);
         }
-        segment(ci[0], ci[1], ci[2], TA[0], TA[1], TA[2], A[0], A[1], A[2], t, rc2);
-        v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        segment(ci[0], ci[1], ci[2], B[0], B[1], B[2], TB[0], TB[1], TB[2], t, rc2);
-        v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+        if (lead[j]) {
+          segment(ci[0], ci[1], ci[2], TA[0], TA[1], TA[2], A[0], A[1], A[2], t, rc2);
+          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+        }
+        if (trail[j]) {
+          segment(ci[0], ci[1], ci[2], B[0], B[1], B[2], TB[0], TB[1], TB[2], t, rc2);
+          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+        }
         tail(ci[0], ci[1], ci[2], TB[0], TB[1], TB[2], ux, uy, uz, t, rc2);
         v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
         tail(ci[0], ci[1], ci[2], TA[0], TA[1], TA[2], ux, uy, uz, t, rc2);
@@ -184,12 +204,16 @@ export class Lattice {
           segment(ci[0], ci[1], ci[2], mir.a[0], mir.a[1], mir.a[2],
                   mir.b[0], mir.b[1], mir.b[2], t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          segment(ci[0], ci[1], ci[2], mir.ta[0], mir.ta[1], mir.ta[2],
-                  mir.a[0], mir.a[1], mir.a[2], t, rc2);
-          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          segment(ci[0], ci[1], ci[2], mir.b[0], mir.b[1], mir.b[2],
-                  mir.tb[0], mir.tb[1], mir.tb[2], t, rc2);
-          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+          if (lead[j]) {
+            segment(ci[0], ci[1], ci[2], mir.ta[0], mir.ta[1], mir.ta[2],
+                    mir.a[0], mir.a[1], mir.a[2], t, rc2);
+            v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+          }
+          if (trail[j]) {
+            segment(ci[0], ci[1], ci[2], mir.b[0], mir.b[1], mir.b[2],
+                    mir.tb[0], mir.tb[1], mir.tb[2], t, rc2);
+            v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+          }
           tail(ci[0], ci[1], ci[2], mir.tb[0], mir.tb[1], mir.tb[2], ux, uy, uz, t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
           tail(ci[0], ci[1], ci[2], mir.ta[0], mir.ta[1], mir.ta[2], ux, uy, uz, t, rc2);
@@ -218,10 +242,14 @@ export class Lattice {
         const my = (P[i].a[1] + P[i].b[1]) / 2;
         const mz = (P[i].a[2] + P[i].b[2]) / 2;
         v[0] = v[1] = v[2] = 0;
-        segment(mx, my, mz, TA[0], TA[1], TA[2], A[0], A[1], A[2], t, rc2);
-        v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        segment(mx, my, mz, B[0], B[1], B[2], TB[0], TB[1], TB[2], t, rc2);
-        v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+        if (lead[j]) {
+          segment(mx, my, mz, TA[0], TA[1], TA[2], A[0], A[1], A[2], t, rc2);
+          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+        }
+        if (trail[j]) {
+          segment(mx, my, mz, B[0], B[1], B[2], TB[0], TB[1], TB[2], t, rc2);
+          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+        }
         tail(mx, my, mz, TB[0], TB[1], TB[2], ux, uy, uz, t, rc2);
         v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
         tail(mx, my, mz, TA[0], TA[1], TA[2], ux, uy, uz, t, rc2);
@@ -229,12 +257,16 @@ export class Lattice {
         let kwij = v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
         if (ground) {
           v[0] = v[1] = v[2] = 0;
-          segment(mx, my, mz, mir.ta[0], mir.ta[1], mir.ta[2],
-                  mir.a[0], mir.a[1], mir.a[2], t, rc2);
-          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          segment(mx, my, mz, mir.b[0], mir.b[1], mir.b[2],
-                  mir.tb[0], mir.tb[1], mir.tb[2], t, rc2);
-          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+          if (lead[j]) {
+            segment(mx, my, mz, mir.ta[0], mir.ta[1], mir.ta[2],
+                    mir.a[0], mir.a[1], mir.a[2], t, rc2);
+            v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+          }
+          if (trail[j]) {
+            segment(mx, my, mz, mir.b[0], mir.b[1], mir.b[2],
+                    mir.tb[0], mir.tb[1], mir.tb[2], t, rc2);
+            v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+          }
           tail(mx, my, mz, mir.tb[0], mir.tb[1], mir.tb[2], ux, uy, uz, t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
           tail(mx, my, mz, mir.ta[0], mir.ta[1], mir.ta[2], ux, uy, uz, t, rc2);

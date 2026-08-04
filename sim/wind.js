@@ -154,14 +154,20 @@ export class WindField {
 
   // Ветер в точке. Возвращает вектор, КУДА дует, в мировых осях — та же
   // условность, что у кажущегося ветра в physics.js.
-  sample(x, y, z, t) {
+  //
+  // `rough` — местная добавка к рваности, множитель к размаху порывов и заходов
+  // разом. Приходит снаружи: за обрывом поток не просто слабее, он рванее, и
+  // знает об этом акватория, а не поле. Отсутствует — единица, и тогда выборка
+  // совпадает с прежней побитово; на этом стоит вся бесконечная вода.
+  sample(x, y, z, t, rough) {
     const o = this.o;
     let speed = o.speed * this.profile(z);
     let dir = o.dir;
     if (o.gust || o.shift) {
+      const k = rough == null ? 1 : rough;
       const g = this.gust(x, y, t);
-      speed *= 1 + o.gust * g;
-      dir += o.shift * (0.65 * g + 0.35 * this.swing(t));
+      speed *= 1 + o.gust * k * g;
+      dir += o.shift * k * (0.65 * g + 0.35 * this.swing(t));
     }
     return { x: -speed * Math.cos(dir), y: -speed * Math.sin(dir),
              speed: speed, dir: dir };

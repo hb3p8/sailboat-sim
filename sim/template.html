@@ -58,6 +58,7 @@
            max-height: calc(100vh - 28px); min-height: 200px;
            overflow-y: auto; }
   body.hints #panel { max-height: calc(100vh - 360px); }
+  #panel h2:not(:first-child) { margin-top: 14px; }
   #panel h2 {
     font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
     color: var(--dim); margin: 0 0 8px; font-weight: 600;
@@ -153,6 +154,18 @@
       <span><input id="fetchover" type="checkbox"> Разгон волны</span>
       <span id="v-fetch"></span></span>
     <input id="fetch" type="range" min="0" max="12" step="0.5" value="3"></label>
+
+  <div id="shade">
+    <h2>Тень берега</h2>
+    <label><span class="cap"><span>Глубина дефицита D₀</span><span id="v-shd0"></span></span>
+      <input id="shd0" type="range" min="0" max="0.8" step="0.05" value="0.5"></label>
+    <label><span class="cap"><span>Длина тени, высот k</span><span id="v-shk"></span></span>
+      <input id="shk" type="range" min="2" max="24" step="1" value="10"></label>
+    <label><span class="cap"><span>Рваность в тени G</span><span id="v-shg"></span></span>
+      <input id="shg" type="range" min="0" max="3" step="0.1" value="1.5"></label>
+    <div class="cap"><span>У лодки</span><span id="v-shade"></span></div>
+  </div>
+
   <div class="cap"><span>Камера</span><span id="cammode">погоня</span></div>
   <button id="dump" type="button">Сдампать состояние</button>
 </div>
@@ -237,6 +250,9 @@ const BUILD = /*__BUILD__*/ null;
     twist: v => (+v).toFixed(0) + '°',
     draft: v => (+v).toFixed(0) + '%',
     fetch: v => (+v === 0 ? 'гладкая вода' : (+v).toFixed(1) + ' км'),
+    shd0: v => (+v === 0 ? 'тени нет' : '−' + (+v * 100).toFixed(0) + '%'),
+    shk: v => (+v).toFixed(0) + ' высот',
+    shg: v => (+v === 0 ? 'ровно' : '×' + (1 + +v).toFixed(1)),
   };
   for (const id of Object.keys(fmt)) {
     const el = document.getElementById(id), out = document.getElementById('v-' + id);

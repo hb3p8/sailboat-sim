@@ -167,6 +167,10 @@ seaGustMap.magFilter = LinearFilter;
 seaGustMap.needsUpdate = true;
 
 const seaGust = uniform(0);
+// Рваность в тени — тот же ползунок, что у сил. Единообразие тут не роскошь:
+// подбирается он по картинке, и если картинка живёт по своему числу, подбор
+// подбирает не то.
+const seaShadeGust = uniform(1.5);
 const seaWindDir = uniform(0);
 const seaWindSpeed = uniform(6);
 const seaTime = uniform(0);
@@ -181,8 +185,75 @@ const svGust = Fn(([p]) => {
   return texture(seaGustMap, uv).r.mul(2.0).sub(1.0);
 });
 
+// Карта ветра над акваторией: разгон после берега и тень берега, в одном байте
+// на ячейку в сто метров. Считает её terrain.js — той же формулой, по которой
+// идут силы на лодке, — а здесь она только читается.
+//
+// Без неё тень берега осталась бы числом в телеметрии. Проверить это число
+// нечем: подгоняется оно глазом, а глазу нужна картинка. С картой под
+// подветренным берегом ложится гладкая полоса, ровно та, по которой на реке и
+// читают ветер, — и подбирать D₀ с k становится занятием, а не гаданием.
+const windMapData = terrain.ready ? new Uint8Array(2 * terrain.cells) : new Uint8Array(2);
+const windMapTex = new DataTexture(windMapData,
+  terrain.ready ? TERRAIN_PACK.cnx : 1, terrain.ready ? TERRAIN_PACK.cny : 1, RGFormat);
+windMapTex.wrapS = ClampToEdgeWrapping;
+windMapTex.wrapT = ClampToEdgeWrapping;
+windMapTex.minFilter = LinearFilter;
+windMapTex.magFilter = LinearFilter;
+windMapTex.needsUpdate = true;
+// Пересчитывается только когда меняется то, от чего она зависит: направление
+// ветра и два ползунка тени. Восемнадцать тысяч ячеек — не то чтобы дорого, но
+// и каждый кадр незачем.
+const windMapAt = { dir: NaN, d0: NaN, k: NaN };
+function updateWindMap() {
+  if (!terrain.ready) return;
+  const d = boat.o.windDir, d0 = boat.o.shadeD0, k = boat.o.shadeK;
+  if (windMapAt.dir === d && windMapAt.d0 === d0 && windMapAt.k === k) return;
+  windMapAt.dir = d; windMapAt.d0 = d0; windMapAt.k = k;
+  terrain.windMap(d, { a: WIND_SHORE_A, l: WIND_SHORE_L, d0: d0, k: k }, windMapData);
+  windMapTex.needsUpdate = true;
+}
+// Та же выборка на процессоре: по ней гасится высота волны на сетке воды.
+// Ближайший узел, без интерполяции — сто метров на ячейку, а волна и так
+// сглажена по вершинам.
+const WM = terrain.ready
+  ? { x0: TERRAIN_PACK.x0, y0: TERRAIN_PACK.y0, c: TERRAIN_PACK.coarse,
+      nx: TERRAIN_PACK.cnx, ny: TERRAIN_PACK.cny }
+  : null;
+function windMapSample(x, z) {
+  if (!WM) return 1;
+  const i = Math.round((x - WM.x0) / WM.c), j = Math.round((z - WM.y0) / WM.c);
+  if (i < 0 || j < 0 || i >= WM.nx || j >= WM.ny) return 1;
+  return windMapData[2 * (j * WM.nx + i)] / 255;
+}
+
+// Тот же множитель в шейдере. Мировые метры → доли текстуры; за краем участка
+// выборка прижимается к кромке, но там уже нет ни воды, ни берега.
+//
+// Рябь гасится вдвое слабее, чем падает ветер: полоса под берегом обязана
+// читаться гладкой, но не мёртвой — вода там всё-таки не зеркало.
+//
+// Без акватории выражение цвета не трогается вовсе, ни на один узел: вода на
+// бесконечной воде обязана быть той же самой, а «умножить на единицу» — это уже
+// другой шейдер.
+const svWind = WM && Fn(([p]) => {
+  const u = p.x.sub(WM.x0).div(WM.c * (WM.nx - 1));
+  const v = p.y.sub(WM.y0).div(WM.c * (WM.ny - 1));
+  return texture(windMapTex, vec2(u, v)).rg;
+});
+const svWindV = svWind && svWind(positionWorld.xz);
+// Рябь гаснет со скоростью ветра, но в тени она же и резче — тем самым
+// множителем рваности, что в физике. Гашение вдвое слабее падения ветра:
+// полоса под берегом обязана читаться гладкой, но не мёртвой.
+const seaWindK = svWindV && svWindV.x.mul(0.5).add(0.5);
+const seaRough = svWindV && svWindV.y.oneMinus().mul(seaShadeGust).add(1.0);
+
+const seaRipple = svGust(positionWorld.xz).mul(seaGust);
 seaMat.colorNode = color(SEA_COLOUR).mul(
-  svGust(positionWorld.xz).mul(seaGust).mul(3.0).oneMinus().clamp(0.25, 1.8));
+  (seaWindK ? seaRipple.mul(seaWindK).mul(seaRough) : seaRipple).mul(3.0)
+    .oneMinus().clamp(0.25, 1.8));
+// Гладкая вода и блестит иначе: в тени она ближе к зеркалу.
+if (seaWindK) seaMat.roughnessNode = seaWindK.mul(0.20).add(0.08);
 
 // Имена TSL живут в одной области видимости с вклеенным three, и какое-нибудь
 // из них может оказаться перекрыто одноимённой обычной функцией — так уже
@@ -1340,8 +1411,15 @@ addEventListener('keyup', e => { keys[e.code] = false; });
 
 const ui = {};
 for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draft',
-                  'fetch', 'fetchover'])
+                  'fetch', 'fetchover', 'shd0', 'shk', 'shg'])
   ui[id] = document.getElementById(id);
+
+// Тень берега — единственная часть модели, у которой нет объективной проверки:
+// её числа подгоняются глазом того, кто там ходит. Поэтому они и вынесены
+// ползунками, и поэтому же группа целиком исчезает без акватории: тень берега
+// без берега — не «ноль», а бессмыслица.
+const capShade = document.getElementById('v-shade');
+if (!terrain.ready) document.getElementById('shade').hidden = true;
 
 const capFetch = document.getElementById('v-fetch');
 // Галочка есть только когда есть акватория: без неё переопределять нечего.
@@ -1462,6 +1540,19 @@ function readControls(dt) {
   const gust = parseFloat(ui.gust.value);
   boat.wind.o.gust = gust;
   boat.wind.o.shift = gust * 45 * D;
+
+  if (terrain.ready) {
+    o.shadeD0 = parseFloat(ui.shd0.value);
+    o.shadeK = parseFloat(ui.shk.value);
+    o.shadeGust = parseFloat(ui.shg.value);
+    // Подпись — рабочий прибор подбора, а не украшение: подбирать тень на глаз
+    // по картинке можно только зная, какое число этой картинке отвечает.
+    const t = boat.telemetry;
+    if (t && capShade) {
+      capShade.textContent = 'ветер ×' + t.windK.toFixed(2) +
+        (t.gustK > 1.01 ? ', рвано ×' + t.gustK.toFixed(1) : '');
+    }
+  }
 }
 
 // ---------------------------------------------------------------- цикл
@@ -1528,17 +1619,23 @@ function frame() {
   shapeSails(side);
 
   const amp = 0.10 + 0.035 * boat.o.windSpeed;
+  updateWindMap();
   sea.position.set(Math.round(ix / CELL) * CELL, 0, Math.round(iy / CELL) * CELL);
   const dirX = Math.cos(boat.o.windDir), dirZ = Math.sin(boat.o.windDir);
   const pos = seaGeo.attributes.position.array;
   for (let i = 0, v = 0; i < pos.length; i += 3, v++) {
-    pos[i + 1] = seaAmp[v] === 0 ? 0
-      : waveHeight(seaBase[i] + sea.position.x, seaBase[i + 2] + sea.position.z,
-                   now, dirX, dirZ, amp * seaAmp[v]);
+    if (seaAmp[v] === 0) { pos[i + 1] = 0; continue; }
+    const x = seaBase[i] + sea.position.x, z = seaBase[i + 2] + sea.position.z;
+    // Волна гаснет там, где нет ветра: под подветренным берегом вода обязана
+    // быть не только гладкой на вид, но и плоской на ощупь. Множитель тот же,
+    // что у сил, — карта одна на физику и картинку.
+    const wk = windMapSample(x, z);
+    pos[i + 1] = waveHeight(x, z, now, dirX, dirZ, amp * seaAmp[v] * wk * wk);
   }
   seaGeo.attributes.position.needsUpdate = true;
   if ((tick & 1) === 0) seaGeo.computeVertexNormals();
   seaGust.value = boat.wind.o.gust;
+  seaShadeGust.value = boat.o.shadeGust;
   seaWindDir.value = boat.wind.o.dir;
   seaWindSpeed.value = boat.wind.o.speed;
   seaTime.value = boat.t;

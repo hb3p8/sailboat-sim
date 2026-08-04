@@ -12,7 +12,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { Terrain } from '../sim/terrain.js';
+import { Terrain, fetchFactor, shelterFactor,
+         WIND_SHORE_A, WIND_SHORE_L } from '../sim/terrain.js';
 import { Boat } from '../sim/physics.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -384,31 +385,46 @@ check('пакет читается и считается готовым', t.read
 {
   const [ox, oy] = pack.open_water;
   const PACK_P = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
-  const at = y => {
+  // Проба ставит лодку в точку и делает один шаг: множители считаются раз в шаг
+  // и наружу выходят телеметрией, поэтому мерить их надо лодкой, а не формулой.
+  const at = (y, dir, opt) => {
     const b = new Boat(PACK_P, t);
-    b.o.windSpeed = 6; b.o.windDir = 90 * D;   // с севера, поперёк реки
+    b.o.windSpeed = 6; b.o.windDir = dir;
+    Object.assign(b.o, opt || {});
     b.x = ox; b.y = y; b.u = 0.1;
     b.step(1 / 30);
-    return b.windK;
+    return b.telemetry;
   };
-  // От северного берега (наветренного) к середине.
-  let yn = oy;
-  while (t.shore(ox, yn) > 3 && yn < oy + 3000) yn += 10;
+  // Урезы обоих берегов на поперечнике через середину плёса.
+  let yn = oy; while (t.shore(ox, yn) > 3 && yn < oy + 3000) yn += 10;
+  let ysh = oy; while (t.shore(ox, ysh) > 3 && ysh > oy - 3000) ysh -= 10;
+
+  // Разгон после берега проверяется отдельно от тени, и вот почему: он обязан
+  // расти МОНОТОННО — яма означала бы ошибку в трассировке поля, — а тень не
+  // обязана вовсе. Тень считается по наибольшему отношению высоты к дальности, и
+  // у настоящего берега оно не монотонно: у самого уреза видна низкая кромка, а
+  // с полусотни метров из-за неё выходит бровка. Требовать монотонности от
+  // произведения значило бы требовать её от формы берега.
   const prof = [];
-  for (let d = 0; d <= 500; d += 50) prof.push(at(yn - d));
+  for (let d = 0; d <= 500; d += 50) {
+    const q = at(yn - d, 90 * D);
+    prof.push({ k: q.windK, sh: q.shelter, f: q.windK / q.shelter });
+  }
   console.log('  ветер с севера, от наветренного берега к середине:');
-  console.log('    ' + prof.map(v => v.toFixed(3)).join(' '));
-  console.log('    у берега %s, в 500 м %s\n', prof[0].toFixed(3), prof[prof.length - 1].toFixed(3));
-  check('от берега ветер восстанавливается монотонно',
-    prof.every((v, i) => i === 0 || v >= prof[i - 1] - 1e-9));
+  console.log('    разгон  ' + prof.map(v => v.f.toFixed(3)).join(' '));
+  console.log('    тень    ' + prof.map(v => v.sh.toFixed(3)).join(' '));
+  console.log('    вместе  ' + prof.map(v => v.k.toFixed(3)).join(' '));
+  check('разгон после берега восстанавливается монотонно',
+    prof.every((v, i) => i === 0 || v.f >= prof[i - 1].f - 1e-9));
   check('у самого берега ветер заметно слабее',
-    prof[0] < prof[prof.length - 1] - 0.05,
-    ((1 - prof[0]) * 100).toFixed(0) + '% против ' + ((1 - prof[prof.length - 1]) * 100).toFixed(0) + '%');
+    prof[0].k < prof[prof.length - 1].k - 0.05,
+    ((1 - prof[0].k) * 100).toFixed(0) + '% против ' +
+    ((1 - prof[prof.length - 1].k) * 100).toFixed(0) + '%');
   // А вот полного восстановления ПОПЕРЁК реки не наступает вовсе, и это не
   // изъян, а следствие: разгон поперёк ограничен шириной плёса, и множитель на
   // середине упирается в свой километр. Ветер над рекой в поперечном
   // направлении слабее берегового везде — в том числе на фарватере.
-  const cross = prof[prof.length - 1];
+  const cross = prof[prof.length - 1].f;
   console.log('    поперёк реки даже на середине остаётся %s%% нехватки\n',
     ((1 - cross) * 100).toFixed(0));
   check('поперёк реки ветер до конца не восстанавливается',
@@ -416,16 +432,73 @@ check('пакет читается и считается готовым', t.read
 
   // Восстанавливается он ВДОЛЬ реки, где разгона километры. Это и есть проверка
   // того, что множитель стремится к единице, а не застревает.
-  const along = (() => {
-    const b = new Boat(PACK_P, t);
-    b.o.windSpeed = 6; b.o.windDir = 0;        // вдоль реки, разгон в километры
-    b.x = ox; b.y = oy; b.u = 0.1;
-    b.step(1 / 30);
-    return b.windK;
-  })();
+  const along = at(oy, 0).windK / at(oy, 0).shelter;
   console.log('    вдоль реки на середине плёса: %s (разгон %s км)\n',
     along.toFixed(3), (t.fetch(ox, oy, 0) / 1000).toFixed(1));
-  check('вдоль реки ветер восстанавливается полностью', along > 0.98, along.toFixed(3));
+  check('вдоль реки разгон восстанавливается полностью', along > 0.98, along.toFixed(3));
+
+  // --- тень берега -----------------------------------------------------------
+  //
+  // То, ради чего этап и делался. Правый берег здесь высокий, левый низкий, и
+  // это не симметрия, а главное свойство места: под высоким берегом дует хуже и
+  // хуже он дует ДАЛЬШЕ. Отсюда и берётся речная привычка ходить одним бортом.
+  //
+  // Числа D₀ и k подгоняются глазом на воде, поэтому проверяется не их
+  // величина, а то, что модель отвечает на форму берега, а не на что попало.
+  {
+    const bank = (y0, step, dir) => {
+      const out = [];
+      for (const d of [0, 200, 400, 800, 1200]) out.push(at(y0 - step * d, dir).shelter);
+      return out;
+    };
+    const low = bank(yn, 1, 90 * D);         // ветер с севера, берег низкий
+    const high = bank(ysh, -1, -90 * D);     // ветер с юга, берег высокий
+    console.log('  укрытие от берега вглубь плёса (0 200 400 800 1200 м):');
+    console.log('    низкий левый  ' + low.map(v => v.toFixed(3)).join(' '));
+    console.log('    высокий правый ' + high.map(v => v.toFixed(3)).join(' '));
+    check('под высоким берегом укрытие сильнее', high[0] < low[0] - 0.05,
+      high[0].toFixed(3) + ' против ' + low[0].toFixed(3));
+    check('и тянется дальше', high[3] < low[3] - 0.1,
+      'на 800 м ' + high[3].toFixed(3) + ' против ' + low[3].toFixed(3));
+    check('вглубь плёса тень слабеет', high[4] > high[0] + 0.1);
+
+    // За обрывом поток не просто слабее, он рванее — тем же множителем.
+    const q = at(ysh, -90 * D);
+    const open = at(oy, 0);
+    console.log('  рваность: под высоким берегом ×%s, на середине вдоль реки ×%s\n',
+      q.gustK.toFixed(2), open.gustK.toFixed(2));
+    check('в тени поток рванее', q.gustK > open.gustK + 0.2);
+
+    // Выключенные ползунки обязаны выключать эффект целиком: без этого ни
+    // сравнить с прежним, ни понять, чего стоит сама тень.
+    const off = at(ysh, -90 * D, { shadeD0: 0 });
+    check('D₀ = 0 отменяет тень полностью',
+      off.shelter === 1 && off.gustK === 1, off.shelter.toFixed(3));
+
+    // Карта для отрисовки обязана говорить то же, что силы на лодке. Расходятся
+    // такие пары молча: физика считает одно, картинка показывает другое, и
+    // подгонка по картинке подгоняет не то. Здесь они сверяются числом.
+    const o = { a: WIND_SHORE_A, l: WIND_SHORE_L, d0: 0.5, k: 10 };
+    const map = t.windMap(-90 * D, o, new Uint8Array(2 * t.cells));
+    // Сверять надо в УЗЛАХ крупной сетки: карта считается по узлам, а выборка
+    // интерполирует между ними, и между узлами они законно расходятся.
+    let worst = 0, worstSh = 0;
+    for (const y of [ysh + 40, ysh + 200, ysh + 500, oy, yn - 200, yn - 40]) {
+      const i = Math.round((ox - pack.x0) / pack.coarse);
+      const j = Math.round((y - pack.y0) / pack.coarse);
+      const c = 2 * (j * pack.cnx + i);
+      const nx = pack.x0 + i * pack.coarse, ny = pack.y0 + j * pack.coarse;
+      const wantSh = shelterFactor(t.skyline(nx, ny, -90 * D), o.d0, o.k);
+      const want = fetchFactor(t.fetch(nx, ny, -90 * D), o.a, o.l) * wantSh;
+      worst = Math.max(worst, Math.abs(map[c] / 255 - want));
+      worstSh = Math.max(worstSh, Math.abs(map[c + 1] / 255 - wantSh));
+    }
+    console.log('  карта для отрисовки против выборки: ветер до %s, укрытие до %s\n',
+      worst.toFixed(4), worstSh.toFixed(4));
+    // Расхождение только от округления до байта — половина деления, 1/510.
+    check('карта ветра совпадает с выборкой', worst < 1 / 400 && worstSh < 1 / 400,
+      Math.max(worst, worstSh).toFixed(4));
+  }
 }
 
 console.log('\n' + (failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');

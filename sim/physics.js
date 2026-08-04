@@ -19,7 +19,7 @@ import { WindField } from './wind.js';
 import { Lattice } from './vlm.js';
 import { membraneCamber, slackOf, luffFraction, luffFactor, sectionLift, capLift, liftCeiling } from './membrane.js';
 import { seaState, addedResistance } from './waves.js';
-import { Terrain } from './terrain.js';
+import { fetchFactor, shelterFactor, WIND_SHORE_A, WIND_SHORE_L } from './terrain.js';
 
 const DEG = Math.PI / 180;
 
@@ -86,10 +86,21 @@ const SHOAL_DRAG = 1.5;
 // считается для разгона волны. Одно поле, два применения.
 //
 // Форма отсюда, множитель подобран: масштаб L даёт формула внутреннего слоя, а
-// глубину провала `A` брать неоткуда. Так и записано, чтобы через месяц это
-// число не выглядело измеренным.
-const WIND_SHORE_A = 0.3;
-const WIND_SHORE_L = 600.0;
+// глубину провала `A` брать неоткуда. Сама формула и оба числа живут в
+// terrain.js: их спрашивает и лодка в своей точке, и отрисовка на всю
+// акваторию, и разъехаться им нельзя.
+
+// Тень берега — три числа, и все три вынесены в опции, а не сюда. Причина не в
+// удобстве: подгоняются они глазом на воде, и единственная их проверка —
+// человек, который там ходит. Число, которое подбирают ползунком, обязано быть
+// ползунком, иначе подбор превращается в пересборку страницы.
+//   shadeD0 — глубина дефицита у самого берега, доля
+//   shadeK  — сколько высот берега тянется тень
+//   shadeGust — во сколько раз рванее поток в полной тени
+//
+// Порывистость здесь не отдельный эффект, а тот же самый: оторвавшийся от
+// бровки слой даёт и провал средней скорости, и размах порывов с заходами.
+// Поэтому множитель один и считается из того же укрытия.
 
 // За срывом потенциальное течение неприменимо, и поправка на скос гасится.
 const IND_FADE0 = 20 * DEG;
@@ -416,11 +427,17 @@ export class Boat {
     // HUD и есть половина умения читать реку, второе нужно телеметрии.
     this.shoreM = null;
     this.windK = 1;
+    this.shelter = 1;
+    this.gustK = 1;
     this.shoalK = 0;
     this.aground = false;
     this.o = Object.assign({
       windSpeed: 6.0,          // истинный ветер, м/с
       windDir: 100 * DEG,      // откуда дует, рад, отсчёт от оси X мира
+      // Тень берега; действуют только при акватории. Подробности у WIND_SHORE_A.
+      shadeD0: 0.5,
+      shadeK: 10.0,
+      shadeGust: 1.5,
       sheet: 25 * DEG,         // угол выноса паруса от ДП
       // Стаксель-шкот отдельно: не свой угол, а поправка к общему. Так шкоты
       // остаются связанными — потравил общий, поехали оба, — но стакселю можно
@@ -630,7 +647,7 @@ export class Boat {
     const c = Math.cos(this.psi), s = Math.sin(this.psi);
     const w = this.wind.sample(this.x + xb * c - yb * s,
                               this.y + xb * s + yb * c,
-                              Math.max(0.3, zb), this.t);
+                              Math.max(0.3, zb), this.t, this.gustK);
     // Множитель за берег: ветер над водой разгоняется не сразу. Один на всю
     // лодку — он меняется на сотнях метров, а лодка шесть метров длиной.
     const k = this.windK;
@@ -1215,14 +1232,20 @@ export class Boat {
     // Без акватории ничего не считается и всё остаётся как было.
     this.shoreM = null;
     this.windK = 1;
+    this.shelter = 1;
+    this.gustK = 1;
     if (this.terrain) {
       this.terrain.current(this.cur);
       const cc = Math.cos(this.psi), ss = Math.sin(this.psi);
       this.curB.x = this.cur.x * cc + this.cur.y * ss;
       this.curB.y = -this.cur.x * ss + this.cur.y * cc;
       this.shoreM = this.terrain.shore(this.x, this.y);
-      const f = this.terrain.fetch(this.x, this.y, this.o.windDir);
-      if (f !== null) this.windK = 1 - WIND_SHORE_A * Math.exp(-f / WIND_SHORE_L);
+      const dir = this.o.windDir;
+      this.shelter = shelterFactor(this.terrain.skyline(this.x, this.y, dir),
+                                   this.o.shadeD0, this.o.shadeK);
+      this.windK = fetchFactor(this.terrain.fetch(this.x, this.y, dir),
+                               WIND_SHORE_A, WIND_SHORE_L) * this.shelter;
+      this.gustK = 1 + this.o.shadeGust * (1 - this.shelter);
     }
 
     // Перестраивать ли матрицу решётки на этом шаге — считается от времени,
@@ -1504,7 +1527,7 @@ export class Boat {
       resistN: rt, keelLiftN: keelSide, rudderLiftN: rudSide,
       fetchM: this.fetchM, fetchField: this.fetchField,
       shoreM: this.shoreM, shoalK: this.shoalK || 0, windK: this.windK,
-      aground: this.aground,
+      shelter: this.shelter, gustK: this.gustK, aground: this.aground,
       sternway: this.u < -0.15,
       gzM: gz, yawRate: this.r / DEG,
       vmg: speed * Math.cos(this.trueWindAngle()) * 1.94384,

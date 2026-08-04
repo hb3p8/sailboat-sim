@@ -2071,6 +2071,27 @@ function updateRig(t) {
 
 document.getElementById('cammode').textContent = CAMS[camMode];
 document.getElementById('dump').addEventListener('click', saveDump);
+
+// Один старт, два старта, пять стартов. Мелочь, но «1 стартов» в углу экрана
+// портит доверие ко всему остальному, что там написано.
+function plural(n, one, few, many) {
+  const a = Math.abs(n) % 100, b = a % 10;
+  const w = (a > 10 && a < 20) || b === 0 || b > 4 ? many : b === 1 ? one : few;
+  return n + ' ' + w;
+}
+
+// Когда собрана эта страница и что в неё вклеено. Не украшение: файл на шесть
+// мегабайт браузер кэширует охотно, и вопрос «а пересобрано ли?» иначе
+// проверяется только по косвенным признакам.
+if (typeof BUILD !== 'undefined' && BUILD) {
+  const t = BUILD.built.replace('T', ' ').slice(0, 16);
+  document.getElementById('stamp').innerHTML =
+    'сборка ' + t + (BUILD.dirty ? ' <em>с правками</em>' : '') + '<br>' +
+    (terrain.ready ? 'акватория ' + TERRAIN_PACK.hash + ', ' : 'бесконечная вода, ') +
+    (STARTS.length ? 'разметка: ' + plural(STARTS.length, 'старт', 'старта', 'стартов') +
+      ', ' + plural((MARKS && MARKS.buoys) ? MARKS.buoys.length : 0, 'буй', 'буя', 'буёв')
+                 : 'без разметки');
+}
 // Тот же дамп доступен из консоли — удобно, когда файл забирать некуда:
 // copy(JSON.stringify(sv20dump()))
 window.sv20dump = dumpState;

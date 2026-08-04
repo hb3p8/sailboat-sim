@@ -72,6 +72,13 @@
   #panel input[type=range], #panel select { width: 100%; }
   #panel input[type=range]:disabled { opacity: .45; }
   #panel .cap input[type=checkbox] { margin: 0 4px 0 0; vertical-align: -1px; }
+  /* Отметка сборки. Страница весит шесть мегабайт и лежит на диске, а такие
+     браузер кэширует охотно: пересобрал, открыл — и смотришь на вчерашнее, не
+     понимая, почему правка не подействовала. Час на это уже потрачен. */
+  #stamp {
+    margin-top: 8px; color: var(--dim); font-size: 10.5px; line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+  }
   #panel select {
     background: rgba(0,0,0,.3); color: var(--fg); border: 1px solid var(--line);
     border-radius: 6px; padding: 4px;
@@ -174,6 +181,7 @@
     <select id="startpt"></select></label>
   <div class="cap"><span>Камера</span><span id="cammode">погоня</span></div>
   <button id="dump" type="button">Сдампать состояние</button>
+  <div id="stamp"></div>
 </div>
 <div id="rigcard" class="card" hidden>
   <svg id="rig" viewBox="0 0 384 132"></svg>

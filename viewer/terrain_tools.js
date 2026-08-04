@@ -353,6 +353,29 @@ function pickWater(ev) {
   return { x, y, wet: d !== null && d > 0, shore: d };
 }
 
+// Наводка курса протяжкой.
+//
+// Курс стартовой точки — единственное в разметке, что не является местом, и
+// цифрой он задаётся плохо: отсчёт тут от оси X против часовой, как `psi` в
+// физике, а не компасный, и держать этот перевод в голове ради каждой точки
+// незачем. Протянуть мышью от точки туда, куда должен смотреть нос, — то же
+// самое действие, только без перевода.
+//
+// Порог в тридцать метров нарочно: без него любое дрожание при клике сбивало бы
+// курс, подобранный по течению, на случайный.
+const AIM_MIN = 30;
+let aiming = null;      // {i, x, y} — наводимая точка и её место
+
+function aimTo(p) {
+  const dx = p.x - aiming.x, dy = p.y - aiming.y;
+  if (Math.hypot(dx, dy) < AIM_MIN) return false;
+  MARKS.starts[aiming.i].heading_deg = Math.round(Math.atan2(dy, dx) / RAD);
+  syncHeading(aiming.i);
+  touch();
+  rebuildMarks();
+  return true;
+}
+
 // Что под курсором. Ставится это не для отладки, хотя и для неё тоже: поле,
 // раскрашенное шкалой, отвечает на «где», а на «сколько именно» отвечать
 // нечему. Здесь и отвечается — теми же функциями, что считают силы.
@@ -360,6 +383,14 @@ function status(p) {
   const box = document.getElementById('status');
   if (!p || !TER) { box.style.display = 'none'; return; }
   box.style.display = 'block';
+  if (aiming) {
+    const h = MARKS.starts[aiming.i].heading_deg;
+    const d = Math.hypot(p.x - aiming.x, p.y - aiming.y);
+    box.textContent = 'курс ' + Math.round(h) + '° от оси X (' +
+      ((90 - h + 360) % 360).toFixed(0) + '° по компасу)' +
+      (d < AIM_MIN ? '  ·  тяните дальше' : '');
+    return;
+  }
   const bits = ['x ' + (p.x / 1000).toFixed(2) + ' км, y ' + (p.y / 1000).toFixed(2) + ' км'];
   if (!p.wet) {
     bits.push('суша');
@@ -396,9 +427,11 @@ function setTool(t) {
     b.classList.toggle('on', b.dataset.tool === t);
   renderer.domElement.style.cursor = t === 'look' ? '' : 'crosshair';
   document.getElementById('toolhint').textContent =
-    t === 'look' ? 'Клик по объекту — выбрать, Del — удалить.'
+    t === 'look' ? 'Клик — выбрать, Del — удалить. Протяжка от старта наводит курс.'
     : t === 'fairway' ? 'Клики по воде — точки хода. Закончить: Enter, двойной клик '
                      + 'или «Ход» ещё раз. Esc — отменить.'
+    : t === 'start' ? 'Нажать на воде — поставить, протянуть — навести курс. '
+                   + 'Без протяжки курс берётся вниз по течению.'
     : 'Клик по воде — поставить.';
 }
 
@@ -495,8 +528,30 @@ function listMarks() {
       MARKS[kind][i].heading_deg = +ev.target.value || 0;
       touch(); rebuildMarks();
     });
-    el.addEventListener('click', () => { picked = { kind, i }; rebuildMarks(); listMarks(); });
+    // Клик по самой строке выбирает, клик по полю внутри — нет. Раньше
+    // выбиралось и то и другое, и список пересобирался целиком: поле, в которое
+    // только что ткнули, исчезало вместе со всем списком, и ввести в него
+    // хоть что-нибудь было нельзя. Теперь выделение меняет класс на месте.
+    el.addEventListener('pointerdown', ev => {
+      if (ev.target.closest('input, button, select')) return;
+      picked = { kind, i };
+      rebuildMarks();
+      syncSelection();
+    });
   });
+}
+
+// Подсветка выбранного — без пересборки списка: она сдувает и фокус, и ввод.
+function syncSelection() {
+  for (const el of document.querySelectorAll('#marks .mk'))
+    el.classList.toggle('on', sel(el.dataset.kind, +el.dataset.i));
+}
+
+// Показать курс в поле, не трогая остального: во время протяжки цифра обязана
+// бежать за стрелкой, а список — стоять на месте.
+function syncHeading(i) {
+  const el = document.querySelector('#marks .mk[data-kind="starts"][data-i="' + i + '"] .hd');
+  if (el && document.activeElement !== el) el.value = Math.round(MARKS.starts[i].heading_deg);
 }
 
 function flash(text, bad) {
@@ -558,21 +613,57 @@ function bindTools() {
   // каждом повороте камеры было бы наказанием.
   const el = renderer.domElement;
   let down = null;
-  el.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY }; });
   el.addEventListener('wheel', () => setTimeout(checkScale, 0), { passive: true });
+
+  // Старт ставится НА НАЖАТИИ, а не на отпускании: только так протяжка от него
+  // успевает стать наводкой курса. Буи и точки хода — по-прежнему на клике,
+  // наводить там нечего.
+  el.addEventListener('pointerdown', e => {
+    down = { x: e.clientX, y: e.clientY };
+    aiming = null;
+    if (mode !== 'orbit' || !TER) return;
+    const p = pickWater(e);
+    if (!p) return;
+    if (tool === 'start') {
+      if (!p.wet) { flash('здесь суша'); return; }
+      placeMark(p);
+      aiming = { i: MARKS.starts.length - 1, x: p.x, y: p.y };
+    } else if (tool === 'look') {
+      const n = nearest(p);
+      if (n && n.kind === 'starts') {
+        picked = n;
+        aiming = { i: n.i, x: MARKS.starts[n.i].x, y: MARKS.starts[n.i].y };
+        rebuildMarks();
+        syncSelection();
+      }
+    }
+    // Протяжка теперь наша, и камера на ней стоять обязана: одно движение мыши
+    // не должно делать два дела разом.
+    if (aiming) releaseDrag();
+  });
+
   el.addEventListener('pointerup', e => {
+    const wasAiming = aiming;
+    aiming = null;
     if (!down) return;
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
     down = null;
+    if (wasAiming) return;                    // поставили и навели на нажатии
     if (moved > 4 || mode !== 'orbit' || !TER) return;
     const p = pickWater(e);
     if (!p) return;
-    if (tool === 'look') { picked = nearest(p); rebuildMarks(); listMarks(); }
+    if (tool === 'look') { picked = nearest(p); rebuildMarks(); syncSelection(); }
     else placeMark(p);
   });
+
   el.addEventListener('dblclick', () => { if (drawing) finishLine(); });
-  el.addEventListener('pointermove', e => status(pickWater(e)));
-  el.addEventListener('pointerleave', () => status(null));
+  el.addEventListener('pointermove', e => {
+    if (mode !== 'orbit' || !TER) return;
+    const p = pickWater(e);
+    if (aiming && p) { aimTo(p); releaseDrag(); }
+    status(p);
+  });
+  el.addEventListener('pointerleave', () => { aiming = null; status(null); });
   addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT') return;
     if (e.key === 'Delete' || e.key === 'Backspace') { removePicked(); e.preventDefault(); }

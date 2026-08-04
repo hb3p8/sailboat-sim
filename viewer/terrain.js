@@ -375,6 +375,10 @@ el.addEventListener('pointermove', e => {
   needsDraw = true;
 });
 const stopDrag = () => { drag = null; };
+// Инструменты разметки могут забрать протяжку себе — например, чтобы навести
+// стартовую стрелку по курсу. Тогда камера обязана стоять: иначе одно движение
+// мыши делает два разных дела разом.
+function releaseDrag() { drag = null; }
 el.addEventListener('pointerup', stopDrag);
 el.addEventListener('pointercancel', stopDrag);
 el.addEventListener('wheel', e => {

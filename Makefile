@@ -1,7 +1,7 @@
 PY ?= python3
 VENV := .venv/bin/python
 
-.PHONY: all extract hull viewer export physics sim terrain terrain-pack test slow all-tests fit clean
+.PHONY: all extract hull viewer export physics sim terrain terrain-pack serve test slow all-tests fit clean
 
 all: viewer export sim
 
@@ -63,10 +63,17 @@ out/terrain.json: scripts/build_terrain.py src/sv20/terrain.py
 	$(VENV) scripts/build_terrain.py
 
 viewer/terrain.html: scripts/build_terrain_viewer.py out/terrain.json \
-                     viewer/terrain.js viewer/terrain_template.html
+                     viewer/terrain.js viewer/terrain_tools.js sim/terrain.js \
+                     viewer/terrain_template.html
 	$(VENV) scripts/build_terrain_viewer.py
 
 terrain: viewer/terrain.html
+
+# Локальный сервер. Нужен просмотрщику акватории: поля физики он читает по
+# частям, а разметку пишет обратно на диск, и ни того, ни другого `file://` не
+# позволяет. Симулятор как открывался двойным кликом, так и открывается.
+serve: viewer/terrain.html $(TERRAIN_PACK)
+	$(PY) scripts/serve.py
 
 # Физика проверяется без браузера: он мешает отличить расходимость модели
 # от проблем отрисовки и не запускается из Makefile.

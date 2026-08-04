@@ -322,6 +322,10 @@ const eye = { x: T.open_water[0], z: -T.open_water[1], h: 1.6,
               el: -1 * RAD };
 let mode = 'orbit';
 let needsDraw = true;
+// Кадр рисуется по требованию, а не по таймеру: сцена статична, и крутить
+// два миллиона треугольников шестьдесят раз в секунду незачем. Инструменты
+// живут отдельным модулем и просят перерисовку отсюда.
+function redraw() { needsDraw = true; }
 
 function place() {
   if (mode === 'orbit') {

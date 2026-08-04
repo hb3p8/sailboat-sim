@@ -3,9 +3,13 @@
 
     python3 scripts/build_terrain_viewer.py
 
-Берёт out/terrain.json и вклеивает его вместе с three и viewer/terrain.js в
-самодостаточный viewer/terrain.html — файл открывается двойным кликом, без
-сервера.
+Берёт out/terrain.json и вклеивает его вместе с three, viewer/terrain.js,
+sim/terrain.js и viewer/terrain_tools.js в viewer/terrain.html.
+
+Рельеф вклеен, и страница открывается двойным кликом, как открывалась. А вот
+поля физики и разметка акватории требуют сервера (`make serve`): пакет физики
+читается по частям, разметка пишется обратно на диск, и ни того, ни другого
+`file://` не позволяет. Без сервера страница про это скажет, а не промолчит.
 
 Страница нарочно отдельная: симулятор про бесконечную воду, и пока не видно,
 что выгрузка годная, ей в sim/index.html делать нечего.
@@ -56,8 +60,16 @@ def main():
     # внутри, разбирать и собирать его заново незачем.
     html = tpl.replace("/*__TERRAIN__*/ null", open(src).read())
     html = html.replace("/*__THREE__*/", three_bundle(strip_modules))
+    # Пакет физики читает та же реализация, что и симулятор: sim/terrain.js
+    # вклеивается сюда целиком. Написать для картинки «примерно то же самое»
+    # было бы худшим решением из возможных — расхождение такой пары не ловится
+    # ничем, а смотрят на неё именно затем, чтобы поверить числам.
+    html = html.replace("/*__SIMTERRAIN__*/", strip_modules(
+        open(os.path.join(ROOT, "sim", "terrain.js")).read()))
     html = html.replace("/*__VIEWER__*/", strip_modules(
         open(os.path.join(ROOT, "viewer", "terrain.js")).read()))
+    html = html.replace("/*__TOOLS__*/", strip_modules(
+        open(os.path.join(ROOT, "viewer", "terrain_tools.js")).read()))
 
     left = re.findall(r"/\*__[A-Z]+__\*/", html)
     if left:

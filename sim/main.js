@@ -802,8 +802,23 @@ function buoy(x, z, colour) {
   scene.add(g);
   return g;
 }
-[[0, -90, 0xe8683c], [0, 90, 0xe8b83c], [70, 0, 0x4a9ad4], [-70, 0, 0x4a9ad4]]
-  .forEach(m => buoy(m[0], m[1], m[2]));
+// Знаки берутся из разметки акватории, если она есть: их расставили руками по
+// настоящей реке, глядя на настоящий берег. Свои четыре остаются на бесконечной
+// воде — там их роль другая, они там единственная привязка взгляда, и без них
+// не понять даже, движешься ты или стоишь.
+//
+// Цвет по виду знака — судоходный, не выдуманный: красный левый, зелёный
+// правый, жёлтый на опасность, белый осевой.
+const BUOY_COLOUR = {
+  left: 0xd8483c, right: 0x3fa85e, danger: 0xf0c020, fairway: 0xe8e8e8,
+};
+if (terrain.ready && MARKS && MARKS.buoys && MARKS.buoys.length) {
+  for (const b of MARKS.buoys)
+    buoy(b.x, b.y, BUOY_COLOUR[b.kind] || BUOY_COLOUR.fairway);
+} else {
+  [[0, -90, 0xe8683c], [0, 90, 0xe8b83c], [70, 0, 0x4a9ad4], [-70, 0, 0x4a9ad4]]
+    .forEach(m => buoy(m[0], m[1], m[2]));
+}
 
 // --- отметка лодки на карте ---------------------------------------------------
 //
@@ -1428,20 +1443,40 @@ boat.o.sheet = 24 * D;
 
 // Где лодка стоит в начале и куда возвращается по сбросу.
 //
-// На бесконечной воде это начало координат — там всё равно, где стоять. На
-// акватории начало координат — центр квадрата, а он с равным успехом может
-// оказаться сушей, и у SV20 на этом участке так и есть. Вставать надо на
-// середину самого широкого плёса: она посчитана выгрузкой и лежит в пакете.
+// Три случая, и они разной природы.
+//
+// На бесконечной воде это начало координат: там всё равно, где стоять, и курс
+// берётся от ветра — галфвинд, чтобы лодка сразу шла, а не разбиралась.
+//
+// На акватории без разметки — середина самого широкого плёса: начало координат
+// там центр квадрата, а он с равным успехом может оказаться сушей, и на этом
+// участке так и есть. Середина плёса посчитана выгрузкой и лежит в пакете.
+//
+// С разметкой — выбранная стартовая точка, и вот она отличается по существу.
+// Точка задаёт не только место, но и КУРС, и ВЕТЕР: одно и то же место при
+// другом ветре — другая задача, и ставили её ради задачи, а не ради координат.
+// Поэтому ветер тут не читается из органов управления, а записывается в них.
+let startPt = null;
+
 function startAt() {
   boat.reset();
-  if (terrain.ready) {
-    boat.x = TERRAIN_PACK.open_water[0];
-    boat.y = TERRAIN_PACK.open_water[1];
+  if (startPt) {
+    boat.x = startPt.x; boat.y = startPt.y;
+    boat.psi = startPt.heading_deg * D;
+    if (startPt.wind_deg != null) {
+      boat.o.windDir = startPt.wind_deg * D;
+      ui.winddir.value = ((startPt.wind_deg % 360) + 360) % 360;
+      ui.winddir.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  } else {
+    if (terrain.ready) {
+      boat.x = TERRAIN_PACK.open_water[0];
+      boat.y = TERRAIN_PACK.open_water[1];
+    }
+    boat.psi = boat.o.windDir - START_TWA;
   }
-  boat.psi = boat.o.windDir - START_TWA;
   boat.u = 4.0;
 }
-startAt();
 let autopilot = true;
 let apHeading = boat.psi;
 
@@ -1488,6 +1523,34 @@ if (!terrain.ready) {
   // Течение без реки — не «ноль», а бессмыслица, ровно как и тень берега.
   document.getElementById('curbox').hidden = true;
 }
+
+// Стартовые точки из разметки. Список строится один раз: разметка вклеена в
+// страницу при сборке и на ходу не меняется.
+//
+// Первая же точка выбирается сразу, ещё до первого кадра, и вместе с ней в
+// органы управления уезжает её ветер: иначе лодка успела бы встать на прежний
+// и разбираться, почему паруса не так стоят.
+const startSel = document.getElementById('startpt');
+const STARTS = (terrain.ready && MARKS && MARKS.starts) ? MARKS.starts : [];
+if (!STARTS.length) {
+  document.getElementById('startbox').hidden = true;
+} else {
+  startSel.innerHTML =
+    STARTS.map((p, i) => '<option value="' + i + '">' +
+      (p.name || 'Точка ' + (i + 1)) + '</option>').join('') +
+    '<option value="-1">середина плёса</option>';
+  startSel.addEventListener('change', () => {
+    const i = +startSel.value;
+    startPt = i < 0 ? null : STARTS[i];
+    startAt();
+    apHeading = boat.psi;
+    wakePts.length = 0;
+    trackN = 0;
+  });
+  startPt = STARTS[0];
+}
+startAt();
+apHeading = boat.psi;
 
 const capFetch = document.getElementById('v-fetch');
 // Галочка есть только когда есть акватория: без неё переопределять нечего.

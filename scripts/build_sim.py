@@ -99,6 +99,17 @@ def main():
         html = html.replace(
             "/*__TERRAIN_PACK__*/ null",
             json.dumps(json.load(open(terr_path)), separators=(",", ":")))
+    # Разметка акватории — стартовые точки, буи, судовой ход. Ставится она
+    # руками в просмотрщике (`make serve`) и лежит в репозитории, а не в пакете:
+    # пакет пересобирается из открытых источников, разметка нет, и мешать их
+    # значило бы терять её при каждой сборке. Файла может не быть — тогда
+    # страница работает как раньше, со своими знаками на воде.
+    marks_path = os.path.join(ROOT, "data", "marks.json")
+    if os.path.exists(marks_path):
+        html = html.replace(
+            "/*__MARKS__*/ null",
+            json.dumps(json.load(open(marks_path, encoding="utf-8")),
+                       ensure_ascii=False, separators=(",", ":")))
     html = html.replace("/*__THREE__*/", three)
     # Порядок важен: physics.js берёт WindField из wind.js, а импорты при
     # вклейке снимаются — значит поле ветра должно быть объявлено раньше.

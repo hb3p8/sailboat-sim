@@ -170,6 +170,8 @@
     <div class="cap"><span>У лодки</span><span id="v-shade"></span></div>
   </div>
 
+  <label id="startbox"><span class="cap"><span>Стартовая точка</span></span>
+    <select id="startpt"></select></label>
   <div class="cap"><span>Камера</span><span id="cammode">погоня</span></div>
   <button id="dump" type="button">Сдампать состояние</button>
 </div>
@@ -231,6 +233,7 @@ addEventListener('error', e => {
 {
 const PACK = /*__PACK__*/ null;
 const TERRAIN_PACK = /*__TERRAIN_PACK__*/ null;
+const MARKS = /*__MARKS__*/ null;
 const MESH = /*__MESH__*/ null;
 const BUILD = /*__BUILD__*/ null;
 /*__TERRAIN__*/

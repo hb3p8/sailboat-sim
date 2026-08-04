@@ -266,6 +266,17 @@ function rebuildMarks() {
              190 * markS, 26 * markS, 74 * markS, 90 * markS, LEVEL + 9);
     g.setAttribute('position', new BufferAttribute(p, 3));
     marksGroup.add(mk(g, sel('starts', i) ? 0xffffff : 0xffcf5a));
+    // Ветер — второй стрелкой, короче и другого цвета, и рисуется она ИЗ той
+    // стороны, откуда дует, В точку. Курс и ветер на старте — две разные вещи,
+    // и путать их на картинке нельзя.
+    const w = (s.wind_deg || 0) * RAD;
+    const gw = new BufferGeometry();
+    const q = new Float32Array(ARR_V * 3);
+    const L = WIND_ARM * markS;
+    putArrow(q, 0, sx(s.x) + Math.cos(w) * L, sz(s.y) - Math.sin(w) * L,
+             -Math.cos(w), Math.sin(w), L, 18 * markS, 52 * markS, 62 * markS, LEVEL + 11);
+    gw.setAttribute('position', new BufferAttribute(q, 3));
+    marksGroup.add(mk(gw, sel('starts', i) ? 0xffffff : 0x3fbf9f));
   });
   // Буй — треугольная шапка на воде. Круглый был бы честнее, но с километра
   // разницы нет, а треугольник читается на любом фоне.
@@ -364,16 +375,39 @@ function pickWater(ev) {
 // Порог в тридцать метров нарочно: без него любое дрожание при клике сбивало бы
 // курс, подобранный по течению, на случайный.
 const AIM_MIN = 30;
-let aiming = null;      // {i, x, y} — наводимая точка и её место
+// Насколько далеко от точки сидит хвост ветровой стрелки. Он же — место, за
+// которое её берут: наводится то, за что потянули, а не то, что задано скрытым
+// модификатором. Стрелок на старте две, и обе видно.
+const WIND_ARM = 150;
+let aiming = null;      // {i, x, y, wind} — наводимая точка, её место и что наводим
 
-function aimTo(p) {
+function aimTo(p, wind) {
   const dx = p.x - aiming.x, dy = p.y - aiming.y;
   if (Math.hypot(dx, dy) < AIM_MIN) return false;
-  MARKS.starts[aiming.i].heading_deg = Math.round(Math.atan2(dy, dx) / RAD);
-  syncHeading(aiming.i);
+  const a = Math.round(Math.atan2(dy, dx) / RAD);
+  const st = MARKS.starts[aiming.i];
+  aiming.wind = wind;
+  // Ветер наводится ОТКУДА: тянут в ту сторону, откуда он дует, потому что
+  // именно так на воде и показывают — рукой на наветренную сторону.
+  if (wind) { st.wind_deg = a; opts.dir = a * RAD; syncWindSlider(); }
+  else st.heading_deg = a;
+  syncStart(aiming.i);
   touch();
   rebuildMarks();
+  if (wind) { paintField(); paintArrows(); }
   return true;
+}
+
+// Ползунок ветра в полях и ветер выбранной точки — одно и то же число: поля
+// обязаны показывать ту обстановку, которая у точки записана, иначе смотришь на
+// одно, а ставишь другое.
+function syncWindSlider() {
+  const e = document.getElementById('wdir');
+  const v = Math.round(((opts.dir / RAD) % 360 + 360) % 360);
+  if (+e.value !== v) {
+    e.value = v;
+    document.getElementById('v-wdir').textContent = v.toFixed(0) + '°';
+  }
 }
 
 // Что под курсором. Ставится это не для отладки, хотя и для неё тоже: поле,
@@ -384,11 +418,12 @@ function status(p) {
   if (!p || !TER) { box.style.display = 'none'; return; }
   box.style.display = 'block';
   if (aiming) {
-    const h = MARKS.starts[aiming.i].heading_deg;
+    const st = MARKS.starts[aiming.i];
+    const a = aiming.wind ? (st.wind_deg || 0) : st.heading_deg;
     const d = Math.hypot(p.x - aiming.x, p.y - aiming.y);
-    box.textContent = 'курс ' + Math.round(h) + '° от оси X (' +
-      ((90 - h + 360) % 360).toFixed(0) + '° по компасу)' +
-      (d < AIM_MIN ? '  ·  тяните дальше' : '');
+    box.textContent = (aiming.wind ? 'ветер откуда ' : 'курс ') +
+      Math.round(a) + '° от оси X (' + ((90 - a + 360) % 360).toFixed(0) + '° по компасу)' +
+      (d < AIM_MIN ? '  ·  тяните дальше' : '  ·  Shift — наводить ветер');
     return;
   }
   const bits = ['x ' + (p.x / 1000).toFixed(2) + ' км, y ' + (p.y / 1000).toFixed(2) + ' км'];
@@ -427,11 +462,12 @@ function setTool(t) {
     b.classList.toggle('on', b.dataset.tool === t);
   renderer.domElement.style.cursor = t === 'look' ? '' : 'crosshair';
   document.getElementById('toolhint').textContent =
-    t === 'look' ? 'Клик — выбрать, Del — удалить. Протяжка от старта наводит курс.'
+    t === 'look' ? 'Клик — выбрать, Del — удалить. Протяжка за жёлтую стрелку '
+                 + 'наводит курс, за зелёную — ветер.'
     : t === 'fairway' ? 'Клики по воде — точки хода. Закончить: Enter, двойной клик '
                      + 'или «Ход» ещё раз. Esc — отменить.'
     : t === 'start' ? 'Нажать на воде — поставить, протянуть — навести курс. '
-                   + 'Без протяжки курс берётся вниз по течению.'
+                   + 'Без протяжки: курс вниз по течению, ветер с ползунка полей.'
     : 'Клик по воде — поставить.';
 }
 
@@ -446,6 +482,20 @@ function finishLine() {
 }
 
 function touch() { dirty = true; document.getElementById('save').classList.add('on'); }
+
+// Что схвачено у стартовых точек: сама точка (курс) или хвост ветровой стрелки
+// (ветер). Радиус тот же, что у обычного выбора.
+function startGrab(p) {
+  let best = null, bd = 400 * Math.max(1, cam.dist / 9000);
+  MARKS.starts.forEach((s, i) => {
+    const d = Math.hypot(s.x - p.x, s.y - p.y);
+    if (d < bd) { bd = d; best = { i, wind: false }; }
+    const w = (s.wind_deg || 0) * RAD, L = WIND_ARM * markS;
+    const dw = Math.hypot(s.x + Math.cos(w) * L - p.x, s.y + Math.sin(w) * L - p.y);
+    if (dw < bd) { bd = dw; best = { i, wind: true }; }
+  });
+  return best;
+}
 
 function nearest(p) {
   // Выбор по близости в метрах, а не по попаданию в фигуру: фигуры мелкие, а
@@ -469,8 +519,12 @@ function placeMark(p) {
     TER.current(p.x, p.y, 1, tmpV);
     const h = Math.hypot(tmpV.x, tmpV.y) > 1e-3
       ? Math.atan2(tmpV.y, tmpV.x) / RAD : 0;
+    // Ветер берётся с ползунка полей: им же и рассматривали обстановку, ради
+    // которой точка ставится. Стартовая точка — это не место, а задача: то же
+    // место при другом ветре — другая задача.
     MARKS.starts.push({ name: 'Старт ' + (MARKS.starts.length + 1),
-                        x: p.x, y: p.y, heading_deg: Math.round(h) });
+                        x: p.x, y: p.y, heading_deg: Math.round(h),
+                        wind_deg: Math.round(opts.dir / RAD) });
     picked = { kind: 'starts', i: MARKS.starts.length - 1 };
   } else if (tool === 'buoy') {
     const kind = document.getElementById('buoykind').value;
@@ -504,7 +558,10 @@ function listMarks() {
     '<input class="nm" value="' + (title.name || '').replace(/"/g, '&quot;') + '">' +
     (extra || '') + '<button class="x">✕</button></div>';
   MARKS.starts.forEach((s, i) => rows.push(row('starts', i, { colour: '#ffcf5a', name: s.name },
-    '<input class="hd" type="number" step="5" value="' + Math.round(s.heading_deg) + '">')));
+    '<input class="hd" type="number" step="5" title="курс, ° от оси X" value="' +
+    Math.round(s.heading_deg) + '">' +
+    '<input class="wd" type="number" step="5" title="ветер, ° откуда дует" value="' +
+    Math.round(s.wind_deg || 0) + '">')));
   MARKS.buoys.forEach((b, i) => rows.push(row('buoys', i,
     { colour: '#' + KINDS[b.kind].colour.toString(16).padStart(6, '0'), name: b.name })));
   MARKS.fairway.forEach((f, i) => rows.push(row('fairway', i,
@@ -523,11 +580,16 @@ function listMarks() {
     el.querySelector('.nm').addEventListener('input', ev => {
       MARKS[kind][i].name = ev.target.value; touch();
     });
-    const hd = el.querySelector('.hd');
-    if (hd) hd.addEventListener('input', ev => {
-      MARKS[kind][i].heading_deg = +ev.target.value || 0;
-      touch(); rebuildMarks();
-    });
+    for (const [cls, key] of [['.hd', 'heading_deg'], ['.wd', 'wind_deg']]) {
+      const f = el.querySelector(cls);
+      if (!f) continue;
+      f.addEventListener('input', ev => {
+        MARKS[kind][i][key] = +ev.target.value || 0;
+        touch(); rebuildMarks();
+        if (key === 'wind_deg') { opts.dir = MARKS[kind][i][key] * RAD; syncWindSlider();
+                                  paintField(); paintArrows(); redraw(); }
+      });
+    }
     // Клик по самой строке выбирает, клик по полю внутри — нет. Раньше
     // выбиралось и то и другое, и список пересобирался целиком: поле, в которое
     // только что ткнули, исчезало вместе со всем списком, и ввести в него
@@ -537,6 +599,7 @@ function listMarks() {
       picked = { kind, i };
       rebuildMarks();
       syncSelection();
+      showStartWind();
     });
   });
 }
@@ -547,11 +610,28 @@ function syncSelection() {
     el.classList.toggle('on', sel(el.dataset.kind, +el.dataset.i));
 }
 
-// Показать курс в поле, не трогая остального: во время протяжки цифра обязана
-// бежать за стрелкой, а список — стоять на месте.
-function syncHeading(i) {
-  const el = document.querySelector('#marks .mk[data-kind="starts"][data-i="' + i + '"] .hd');
-  if (el && document.activeElement !== el) el.value = Math.round(MARKS.starts[i].heading_deg);
+// Показать курс и ветер в полях, не трогая остального: во время протяжки цифры
+// обязаны бежать за стрелками, а список — стоять на месте.
+function syncStart(i) {
+  const row = document.querySelector('#marks .mk[data-kind="starts"][data-i="' + i + '"]');
+  if (!row) return;
+  for (const [cls, key] of [['.hd', 'heading_deg'], ['.wd', 'wind_deg']]) {
+    const el = row.querySelector(cls);
+    if (el && document.activeElement !== el) el.value = Math.round(MARKS.starts[i][key] || 0);
+  }
+}
+
+// Выбрали стартовую точку — поля показывают её ветер. Иначе смотришь на одну
+// обстановку, а правишь другую, и заметить это нечем.
+function showStartWind() {
+  if (!picked || picked.kind !== 'starts') return;
+  const w = MARKS.starts[picked.i].wind_deg;
+  if (w == null) return;
+  opts.dir = w * RAD;
+  syncWindSlider();
+  paintField();
+  paintArrows();
+  redraw();
 }
 
 function flash(text, bad) {
@@ -627,14 +707,15 @@ function bindTools() {
     if (tool === 'start') {
       if (!p.wet) { flash('здесь суша'); return; }
       placeMark(p);
-      aiming = { i: MARKS.starts.length - 1, x: p.x, y: p.y };
+      aiming = { i: MARKS.starts.length - 1, x: p.x, y: p.y, wind: false };
     } else if (tool === 'look') {
-      const n = nearest(p);
-      if (n && n.kind === 'starts') {
-        picked = n;
-        aiming = { i: n.i, x: MARKS.starts[n.i].x, y: MARKS.starts[n.i].y };
+      const g = startGrab(p);
+      if (g) {
+        picked = { kind: 'starts', i: g.i };
+        aiming = { i: g.i, x: MARKS.starts[g.i].x, y: MARKS.starts[g.i].y, wind: g.wind };
         rebuildMarks();
         syncSelection();
+        showStartWind();
       }
     }
     // Протяжка теперь наша, и камера на ней стоять обязана: одно движение мыши
@@ -660,7 +741,10 @@ function bindTools() {
   el.addEventListener('pointermove', e => {
     if (mode !== 'orbit' || !TER) return;
     const p = pickWater(e);
-    if (aiming && p) { aimTo(p); releaseDrag(); }
+    // Наводится то, за что взялись: за точку — курс, за хвост ветровой стрелки —
+    // ветер. Shift оставлен вторым способом, на случай когда стрелки налезли
+    // друг на друга и целиться в хвост неудобно.
+    if (aiming && p) { aimTo(p, aiming.wind || e.shiftKey); releaseDrag(); }
     status(p);
   });
   el.addEventListener('pointerleave', () => { aiming = null; status(null); });
@@ -683,6 +767,11 @@ async function boot() {
     PACK = p;
     TER = new Terrain(PACK);
     MARKS = m;
+    // Точки, поставленные до того, как у старта появился ветер, приходят без
+    // него. Дописать его при чтении, а не подставлять при показе: за стрелку
+    // ветра тянут мышью, а тянуть за то, чего в модели нет, невозможно.
+    for (const st of MARKS.starts)
+      if (st.wind_deg == null) st.wind_deg = Math.round(opts.dir / RAD);
   } catch (e) {
     // Не молчать и не прятать карточку целиком: страница обязана сказать, чего
     // ей не хватает, и что с этим делать. Пропадают только органы — смотреть

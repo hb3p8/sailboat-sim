@@ -103,6 +103,10 @@ def _point(key, it):
            "x": _num(it.get("x")), "y": _num(it.get("y"))}
     if key == "starts":
         out["heading_deg"] = _num(it.get("heading_deg", 0))
+        # Ветер — часть стартовой обстановки, а не свойство места: одна и та же
+        # точка при разном ветре — разные задачи. Отсчёт тот же, что у курса и у
+        # `windDir` в физике: от оси X против часовой, и «откуда дует».
+        out["wind_deg"] = _num(it.get("wind_deg", 0))
     else:
         kind = str(it.get("kind", "fairway"))
         if kind not in ("left", "right", "danger", "fairway"):

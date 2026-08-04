@@ -30,7 +30,8 @@ import os
 import sys
 
 import numpy as np
-from scipy import ndimage
+from scipy import ndimage, sparse
+from scipy.sparse import linalg as spla
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -54,6 +55,18 @@ SKY_MIN, SKY_MAX, SKY_STEP = 20.0, 3000.0, 20.0
 # Масштаб хранения высоты горизонта: тангенс угла, сотые доли. Потолок 2.55 —
 # это стометровый обрыв в сорока метрах, ближе к берегу лодке делать нечего.
 SKY_SCALE = 100.0
+
+# Условное дно: те же два числа, что у мели в симуляторе. Одно выдуманное дно на
+# оба применения — если разойдутся, лодка будет цепляться там, где не течёт.
+SHOAL_SLOPE, SHOAL_MAX = 0.06, 6.0
+
+# Створы, разделённые косой уже этого, считаются одним: остров посреди устья не
+# делает из одной реки две.
+PORT_GAP = 10
+
+# Потолок хранения уклона: три медианных уклона фарватера. Выше — только
+# затоны и протоки в пару ячеек шириной, где течение всё равно не про лодку.
+CUR_MAX = 3.0
 
 
 def decode(b64, dtype, shape):
@@ -165,6 +178,147 @@ def skyline_field(top, ground, step, xs, ys, cxs, cys):
     return out
 
 
+def current_field(wet, step, xs, ys, cxs, cys):
+    """Течение: уклон водной поверхности по акватории, безразмерный.
+
+    Данных нет и взять их неоткуда (docs/terrain-in-sim.md §2), поэтому течение
+    здесь — выдумка. Но выдумка с правильной структурой, и структура эта не
+    придумана, а решена: течение считается из СОХРАНЕНИЯ РАСХОДА, а не из
+    правил вида «на узком месте быстрее».
+
+    Русло — плоский канал с условным дном. Для осреднённого по глубине потока
+    удельный расход по Маннингу q = h^(5/3)·∇φ, где φ — отметка поверхности, а
+    неразрывность даёт ∇·q = 0. Это уравнение Лапласа с проводимостью h^(5/3),
+    и решается оно один раз на всю акваторию. Берег входит сам собой: на урезе
+    h → 0, проводимость обращается в ноль, и поперёк берега не течёт ничего.
+
+    Что из этого выходит даром, без единого дополнительного правила:
+
+      * на узком месте быстрее, на плёсе медленнее;
+      * у берега медленнее, на фарватере быстрее;
+      * ниже устья притока расход больше на расход притока;
+      * поток идёт вдоль русла, потому что поперёк ему течь некуда.
+
+    Створы — там, где вода касается края квадрата. Самый широкий считается
+    низовьем, остальные верховьями: расход вниз по течению растёт, а ширина
+    русла растёт вместе с ним. Расход по створам делится по проводимости, то
+    есть при одинаковом уклоне на всех створах — предположение более слабое,
+    чем любое назначенное число.
+
+    В пакет идёт НЕ скорость, а уклон ∇φ. Причина в разрешении: уклон почти
+    постоянен по сечению (это и есть классическое гидравлическое допущение, и
+    здесь оно вышло само — поперёк плёса 0.8…1.4), а вся поперечная структура
+    сидит в множителе h^(2/3). Значит гладкую часть можно хранить на стометровой
+    сетке, а резкую считать на ходу по двадцатиметровому расстоянию до берега —
+    там, где разрешение и есть. Обратный порядок стоил бы мегабайта страницы.
+
+    Нормируется на медианный уклон фарватера, так что ползунок в симуляторе
+    задаёт прямо скорость на стрежне в метрах в секунду.
+    """
+    ny, nx = wet.shape
+    lab, n = ndimage.label(wet)
+    sizes = ndimage.sum(wet, lab, range(1, n + 1))
+    # Только главный водоём: пруды и старицы не проточны, и решать на них
+    # нечего — система там вырождена, а течения нет.
+    main = lab == (int(np.argmax(sizes)) + 1)
+    sdf_in = ndimage.distance_transform_edt(main) * step
+    depth = np.minimum(SHOAL_MAX, sdf_in * SHOAL_SLOPE)
+    K = np.where(main, np.maximum(1e-3, depth) ** (5.0 / 3.0), 0.0)
+
+    # Обход границы квадрата по кругу, а не по сторонам: река, уходящая через
+    # угол, — это один створ, а не два.
+    ring_i = np.concatenate([np.zeros(nx, int), np.arange(ny),
+                             np.full(nx, ny - 1), np.arange(ny)[::-1]])
+    ring_j = np.concatenate([np.arange(nx), np.full(ny, nx - 1),
+                             np.arange(nx)[::-1], np.zeros(ny, int)])
+    ring = main[ring_i, ring_j]
+    idx = np.flatnonzero(ring)
+    if idx.size == 0:
+        return np.zeros((2, cys.size, cxs.size), np.int8), 0.0, []
+    segs = np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
+    if len(segs) > 1 and idx[0] == 0 and idx[-1] == ring.size - 1:
+        segs = [np.concatenate([segs[-1], segs[0]])] + segs[1:-1]
+    merged = []
+    for q in segs:
+        if merged and (q[0] - merged[-1][-1]) % ring.size <= PORT_GAP:
+            merged[-1] = np.concatenate([merged[-1], q])
+        else:
+            merged.append(q)
+    segs = sorted(merged, key=len, reverse=True)
+
+    ids = -np.ones((ny, nx), int)
+    cells = np.argwhere(main)
+    ids[main] = np.arange(len(cells))
+    N = len(cells)
+    i, j = cells[:, 0], cells[:, 1]
+    rows, cols, vals = [], [], []
+    for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        ii, jj = i + di, j + dj
+        ok = (ii >= 0) & (ii < ny) & (jj >= 0) & (jj < nx)
+        ok[ok] &= main[ii[ok], jj[ok]]
+        a = np.flatnonzero(ok)
+        k = 0.5 * (K[i[a], j[a]] + K[ii[a], jj[a]])
+        rows += [a, a]
+        cols += [ids[ii[a], jj[a]], a]
+        vals += [k, -k]
+    A = sparse.coo_matrix((np.concatenate(vals),
+                           (np.concatenate(rows), np.concatenate(cols))),
+                          shape=(N, N)).tocsr()
+
+    src = np.zeros(N)
+    port = lambda q: np.unique(ids[ring_i[q], ring_j[q]])
+    low, up = port(segs[0]), np.concatenate([port(q) for q in segs[1:]])
+    up = np.unique(up)
+    src[up] += K[i[up], j[up]]
+    src[low] -= K[i[low], j[low]] * (K[i[up], j[up]].sum() / K[i[low], j[low]].sum())
+
+    # Множитель Лагранжа, а не закрепление ячейки: система вырождена на
+    # постоянную, правая часть согласована, и портить ей строку нельзя — это
+    # ломает ровно тот расход, ради которого всё считается.
+    one = np.ones((N, 1))
+    M = sparse.bmat([[A, sparse.csr_matrix(one)],
+                     [sparse.csr_matrix(one.T), None]]).tocsc()
+    phi = spla.spsolve(M, np.concatenate([src, [0.0]]))[:N]
+    F = np.zeros((ny, nx))
+    F[main] = phi
+
+    def grad(di, dj):
+        def val(ii, jj):
+            ok = (ii >= 0) & (ii < ny) & (jj >= 0) & (jj < nx)
+            ok2 = ok.copy()
+            ok2[ok] &= main[ii[ok], jj[ok]]
+            return np.where(ok2, F[np.clip(ii, 0, ny - 1), np.clip(jj, 0, nx - 1)], np.nan)
+        p, m = val(i + di, j + dj), val(i - di, j - dj)
+        c = F[i, j]
+        return np.where(np.isnan(p) & np.isnan(m), 0.0,
+               np.where(np.isnan(p), c - m, np.where(np.isnan(m), p - c, (p - m) / 2)))
+
+    G = np.zeros((2, ny, nx))
+    G[0][i, j], G[1][i, j] = grad(0, 1), grad(1, 0)
+    ref = float(np.median(np.hypot(G[0], G[1])[main & (sdf_in > 150)]))
+    G /= max(ref, 1e-12)
+
+    # Распространить поле на сушу ближайшим значением: иначе двулинейная выборка
+    # у берега затянет нули с земли и течение у уреза оборвётся ступенькой.
+    _, near = ndimage.distance_transform_edt(~main, return_indices=True)
+    G = G[:, near[0], near[1]]
+
+    # На стометровую сетку — осреднением по окну, а не выборкой узла: узел может
+    # попасть в затон, а окно — нет.
+    out = np.zeros((2, cys.size, cxs.size), np.int8)
+    r = int(round(COARSE / step / 2))
+    for cj, x in enumerate(cxs):
+        j0 = int(round((x - xs[0]) / step))
+        for ci, y in enumerate(cys):
+            i0 = int(round((y - ys[0]) / step))
+            sl = (slice(max(0, i0 - r), i0 + r + 1), slice(max(0, j0 - r), j0 + r + 1))
+            for c in (0, 1):
+                v = G[c][sl].mean() / CUR_MAX * 127.0
+                out[c, ci, cj] = int(np.clip(round(v), -127, 127))
+    widths = [len(q) * step for q in segs]
+    return out, ref, widths
+
+
 def main():
     src = os.path.join(ROOT, "out", "terrain.json")
     if not os.path.exists(src):
@@ -187,6 +341,7 @@ def main():
     sdf = shore_sdf(wet, step)
     fetch = fetch_field(wet, step, xs, ys, cxs, cys)
     sky = skyline_field(top, height, step, xs, ys, cxs, cys)
+    cur, cur_ref, ports = current_field(wet, step, xs, ys, cxs, cys)
 
     pack = {
         "origin": t["origin"],
@@ -204,6 +359,10 @@ def main():
         "open_water": t["open_water"], "widest_m": t["widest_m"],
         "high_point": t["high_point"],
         "sky_scale": SKY_SCALE,
+        "cur_max": CUR_MAX,
+        # Дно течения и дно мели — одно и то же условное дно. Числа в пакете,
+        # чтобы симулятор брал их отсюда, а не заводил свою копию.
+        "shoal_slope": SHOAL_SLOPE, "shoal_max": SHOAL_MAX,
         "fetch_max_m": FETCH_MAX,
         "attribution": t["attribution"],
         "height_dm_b64": t["height_dm_b64"],
@@ -214,12 +373,16 @@ def main():
             np.clip(np.round(sdf) + 128, 0, 255).astype(np.uint8).tobytes()).decode(),
         "fetch_b64": base64.b64encode(fetch.tobytes()).decode(),
         "sky_b64": base64.b64encode(sky.tobytes()).decode(),
+        # Уклон водной поверхности, две знаковые компоненты на ячейку.
+        # Скорость из него получается на ходу: v = ползунок · уклон · (h/hmax)^(2/3).
+        "cur_b64": base64.b64encode(cur.tobytes()).decode(),
     }
 
     # Отпечаток полей. Запись, сделанная на акватории, без неё не
     # воспроизводится, и об этом надо сказать вслух, а не разойтись молча.
     h = hashlib.sha1()
-    for k in ("height_dm_b64", "cover_b64", "sdf_b64", "fetch_b64", "sky_b64"):
+    for k in ("height_dm_b64", "cover_b64", "sdf_b64", "fetch_b64", "sky_b64",
+              "cur_b64"):
         h.update(pack[k].encode())
     pack["hash"] = h.hexdigest()[:12]
 
@@ -242,6 +405,12 @@ def main():
           + " ".join("%.1f" % (fetch[k, ci[0], ci[1]] * COARSE / 1000) for k in range(RHUMBS)))
     print("высота горизонта там же, тангенс: "
           + " ".join("%.2f" % (sky[k, ci[0], ci[1]] / SKY_SCALE) for k in range(RHUMBS)))
+    print("течение: створы %s м (первый — низовье), уклон на фарватере %.3g"
+          % (" ".join("%.0f" % w for w in ports), cur_ref))
+    cx = cur[0, ci[0], ci[1]] / 127.0 * CUR_MAX
+    cy = cur[1, ci[0], ci[1]] / 127.0 * CUR_MAX
+    print("на середине плёса уклон ×%.2f, направление %.0f° от оси X"
+          % (math.hypot(cx, cy), math.degrees(math.atan2(cy, cx))))
 
 
 if __name__ == "__main__":

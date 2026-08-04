@@ -154,6 +154,8 @@
       <span><input id="fetchover" type="checkbox"> Разгон волны</span>
       <span id="v-fetch"></span></span>
     <input id="fetch" type="range" min="0" max="12" step="0.5" value="3"></label>
+  <label id="curbox"><span class="cap"><span>Течение на стрежне</span><span id="v-cur"></span></span>
+    <input id="cur" type="range" min="0" max="1.5" step="0.05" value="0.55"></label>
 
   <div id="shade">
     <h2>Тень берега</h2>
@@ -250,6 +252,8 @@ const BUILD = /*__BUILD__*/ null;
     twist: v => (+v).toFixed(0) + '°',
     draft: v => (+v).toFixed(0) + '%',
     fetch: v => (+v === 0 ? 'гладкая вода' : (+v).toFixed(1) + ' км'),
+    cur: v => (+v === 0 ? 'стоячая вода' : (+v).toFixed(2) + ' м/с (' +
+              (+v * 1.94384).toFixed(1) + ' уз)'),
     shd0: v => (+v === 0 ? 'тени нет' : '−' + (+v * 100).toFixed(0) + '%'),
     shk: v => (+v).toFixed(0) + ' высот',
     shg: v => (+v === 0 ? 'ровно' : '×' + (1 + +v).toFixed(1)),

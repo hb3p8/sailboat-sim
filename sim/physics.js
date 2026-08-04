@@ -431,6 +431,7 @@ export class Boat {
     this.gustK = 1;
     this.shoalK = 0;
     this.aground = false;
+    this.sog = 0;
     this.o = Object.assign({
       windSpeed: 6.0,          // истинный ветер, м/с
       windDir: 100 * DEG,      // откуда дует, рад, отсчёт от оси X мира
@@ -438,6 +439,11 @@ export class Boat {
       shadeD0: 0.5,
       shadeK: 10.0,
       shadeGust: 1.5,
+      // Течение: скорость на стрежне, м/с. Тоже только при акватории, и ноль
+      // отменяет его целиком. Полметра с небольшим — это Волга здесь летом;
+      // числа этого в открытых источниках нет, и подобрано оно по порядку
+      // величины, а не измерено (docs/terrain-in-sim.md §2, §6.7).
+      current: 0.55,
       sheet: 25 * DEG,         // угол выноса паруса от ДП
       // Стаксель-шкот отдельно: не свой угол, а поправка к общему. Так шкоты
       // остаются связанными — потравил общий, поехали оба, — но стакселю можно
@@ -1235,7 +1241,7 @@ export class Boat {
     this.shelter = 1;
     this.gustK = 1;
     if (this.terrain) {
-      this.terrain.current(this.cur);
+      this.terrain.current(this.x, this.y, this.o.current, this.cur);
       const cc = Math.cos(this.psi), ss = Math.sin(this.psi);
       this.curB.x = this.cur.x * cc + this.cur.y * ss;
       this.curB.y = -this.cur.x * ss + this.cur.y * cc;
@@ -1255,6 +1261,14 @@ export class Boat {
 
     const speed = Math.hypot(this.u, this.v);
     const leeway = speed > 0.05 ? Math.atan2(this.v, Math.max(0.05, this.u)) : 0;
+    // Скорость над грунтом — рядом со скоростью через воду и из тех же величин,
+    // а не в конце шага из уже обновлённых: иначе две цифры в HUD относились бы
+    // к разным мгновениям и без течения расходились бы на целое ускорение.
+    {
+      const c = Math.cos(this.psi), s = Math.sin(this.psi);
+      this.sog = Math.hypot(this.u * c - this.v * s + this.cur.x,
+                            this.u * s + this.v * c + this.cur.y);
+    }
 
     const aw = this.apparentWind();
     // На каком борту стоит парус — состояние лодки, а не мгновенный отсчёт по
@@ -1528,6 +1542,13 @@ export class Boat {
       fetchM: this.fetchM, fetchField: this.fetchField,
       shoreM: this.shoreM, shoalK: this.shoalK || 0, windK: this.windK,
       shelter: this.shelter, gustK: this.gustK, aground: this.aground,
+      // Течение и скорость НАД ГРУНТОМ. Большая цифра в HUD — по-прежнему
+      // скорость через воду: её чувствуют корпус, киль и руль, ею меряется
+      // лодка. Над грунтом — то, с какой скоростью на самом деле едешь, и на
+      // реке эти две расходятся на узел с лишним.
+      curX: this.cur.x, curY: this.cur.y,
+      curKn: Math.hypot(this.cur.x, this.cur.y) * 1.94384,
+      sogKn: this.sog * 1.94384,
       sternway: this.u < -0.15,
       gzM: gz, yawRate: this.r / DEG,
       vmg: speed * Math.cos(this.trueWindAngle()) * 1.94384,

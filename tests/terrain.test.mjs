@@ -501,5 +501,93 @@ check('пакет читается и считается готовым', t.read
   }
 }
 
+// --- течение -------------------------------------------------------------------
+//
+// Данных нет и взять их неоткуда: течение здесь выдумано целиком. Но выдумано
+// не правилами, а решением: расход сохраняется, и всё остальное выходит из
+// этого само. Поэтому и проверяется здесь не величина — её задаёт ползунок, —
+// а те свойства, которые обязаны следовать из сохранения расхода.
+{
+  const [ox, oy] = pack.open_water;
+  const PACK_P = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
+  const U = 0.55, v = { x: 0, y: 0 };
+  const at = (x, y) => { t.current(x, y, U, v); return Math.hypot(v.x, v.y); };
+
+  // Поперёк плёса: на фарватере полная, у берега заметно тише. Это не
+  // затухание, приписанное сверху, а множитель h^(2/3) от того же условного
+  // дна, что и у мели, — Маннинг, а не выдумка поверх выдумки.
+  const cross = [];
+  for (let d = -500; d <= 500; d += 100) cross.push({ d, s: at(ox, oy + d), m: t.shore(ox, oy + d) });
+  console.log('  течение поперёк плёса при стрежне %s м/с:', U);
+  console.log('    ' + cross.map(q => q.s.toFixed(2)).join(' '));
+  const mid = cross.find(q => q.d === 0), edge = cross[cross.length - 1];
+  console.log('    на фарватере %s уз, в %s м от берега %s уз\n',
+    (mid.s * 1.94384).toFixed(2), edge.m.toFixed(0), (edge.s * 1.94384).toFixed(2));
+  check('на фарватере течение около заданного на стрежне',
+    Math.abs(mid.s - U) < 0.25 * U, mid.s.toFixed(2) + ' против ' + U);
+  check('у берега течение заметно тише', edge.s < 0.6 * mid.s,
+    (edge.s / mid.s).toFixed(2) + ' от фарватера');
+  check('на суше течения нет вовсе', at(ox, oy - 1200) === 0);
+  check('ползунок в ноль отменяет течение точно',
+    Object.is(t.current(ox, oy, 0, v).x, 0) && Object.is(v.y, 0));
+
+  // Сохранение расхода — то единственное, на чём всё держится. Считается оно по
+  // сечениям поперёк реки: сумма v·h·dy обязана быть одной и той же, а ниже
+  // устья притока — больше на его расход.
+  const flux = x => {
+    let q = 0;
+    for (let y = -5000; y <= 5000; y += 20) {
+      const d = t.shore(x, y);
+      if (d === null || d <= 0) continue;
+      t.current(x, y, U, v);
+      q += Math.abs(v.x) * Math.min(6, d * 0.06) * 20;
+    }
+    return q;
+  };
+  const below = [-2000, 0, 2000, 4000].map(flux);
+  const above = flux(-6000);
+  console.log('  расход через сечения, м³/с: выше устья %s, ниже %s',
+    above.toFixed(0), below.map(q => q.toFixed(0)).join(' '));
+  const lo = Math.min(...below), hi = Math.max(...below);
+  console.log('    ниже устья разброс %s%%\n', ((hi / lo - 1) * 100).toFixed(0));
+  check('ниже устья расход постоянен по длине', hi / lo < 1.15,
+    ((hi / lo - 1) * 100).toFixed(0) + '%');
+  check('приток добавляет расход', above < 0.85 * lo,
+    (above / lo).toFixed(2) + ' от нижнего');
+
+  // И то, ради чего течение вообще заводилось: над грунтом и через воду — не
+  // одно и то же. Гидродинамика этого не замечает, аэродинамика и положение —
+  // замечают, и на реке между двумя скоростями узел с лишним.
+  const run = cur => {
+    const b = new Boat(PACK_P, t);
+    Object.assign(b.o, { windSpeed: 8, windDir: 90 * D, sheet: 24 * D,
+                         current: cur, crewHike: 1, crewMass: 240 });
+    b.x = ox; b.y = oy; b.psi = 0; b.u = 4;
+    for (let i = 0; i < 90 * 30; i++) {
+      b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * (0 - b.psi) - 0.9 * b.r)));
+      b.step(1 / 30);
+    }
+    return b.telemetry;
+  };
+  const with_ = run(U), without = run(0);
+  console.log('  90 с курсом на восток, ветер с севера:');
+  console.log('    без течения:  через воду %s уз, над грунтом %s уз',
+    without.speedKn.toFixed(2), without.sogKn.toFixed(2));
+  console.log('    с течением:   через воду %s уз, над грунтом %s уз, снос %s уз под %s°\n',
+    with_.speedKn.toFixed(2), with_.sogKn.toFixed(2), with_.curKn.toFixed(2),
+    (Math.atan2(with_.curY, with_.curX) / D).toFixed(0));
+  check('без течения над грунтом и через воду — одно и то же',
+    Math.abs(without.sogKn - without.speedKn) < 1e-9);
+  check('с течением они расходятся',
+    Math.abs(with_.sogKn - with_.speedKn) > 0.5,
+    (with_.sogKn - with_.speedKn).toFixed(2) + ' узла');
+  // Течение попутное — значит над грунтом быстрее, а через воду при этом
+  // МЕДЛЕННЕЕ: убегая от ветра вместе с водой, лодка теряет кажущийся ветер.
+  // Это и есть тот самый эффект, ради которого на реке лавируют не как на озере.
+  check('попутное течение сбавляет ход через воду',
+    with_.sogKn > without.sogKn && with_.speedKn < without.speedKn,
+    (with_.speedKn - without.speedKn).toFixed(2) + ' узла через воду');
+}
+
 console.log('\n' + (failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');
 process.exit(failures ? 1 : 0);

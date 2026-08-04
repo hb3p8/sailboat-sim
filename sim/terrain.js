@@ -85,6 +85,8 @@ export class Terrain {
     this.sdf = bytes(p.sdf_b64);
     this.fetchRaw = bytes(p.fetch_b64);
     this.skyRaw = bytes(p.sky_b64);
+    const cr = bytes(p.cur_b64);
+    this.curRaw = new Int8Array(cr.buffer, cr.byteOffset, cr.length);
     this.cells = p.cnx * p.cny;
   }
 
@@ -129,6 +131,19 @@ export class Terrain {
       return (q0 * (1 - u) + q1 * u) * (1 - v) + (q2 * (1 - u) + q3 * u) * v;
     };
     return at(k0) * (1 - w) + at(k1) * w;
+  }
+
+  // Двулинейная по крупной сетке, без румбов: для полей, у которых направления
+  // нет. `plane` — номер слоя в массиве.
+  _plane(arr, plane, x, y) {
+    const p = this.p;
+    const fx = (x - p.x0) / p.coarse, fy = (y - p.y0) / p.coarse;
+    const i = Math.floor(fx), j = Math.floor(fy);
+    if (i < 0 || j < 0 || i >= p.cnx - 1 || j >= p.cny - 1) return NaN;
+    const u = fx - i, v = fy - j, o = plane * this.cells;
+    const a = arr[o + j * p.cnx + i], b = arr[o + j * p.cnx + i + 1];
+    const c = arr[o + (j + 1) * p.cnx + i], d = arr[o + (j + 1) * p.cnx + i + 1];
+    return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
   }
 
   // --- поля ------------------------------------------------------------------
@@ -240,8 +255,31 @@ export class Terrain {
   // Течение, м/с, в мировых осях. Всегда вектор, а не null: складывать с ним
   // приходится каждый шаг, и проверять на пустоту в горячем месте незачем.
   // Без данных — точный ноль, и сложение с ним ничего не меняет побитово.
-  current(out) {
+  //
+  // `speed` — скорость на стрежне, м/с. Она же выключатель: ноль отменяет
+  // течение целиком и возвращает точный ноль, а не «почти».
+  //
+  // Собирается из двух полей разного разрешения, и это не экономия, а
+  // существо дела. Уклон поверхности почти постоянен по сечению — классическое
+  // гидравлическое допущение, которое здесь вышло само из решения, — и живёт на
+  // стометровой сетке. Вся поперечная структура сидит во множителе h^(2/3) от
+  // условной глубины, а глубина считается из двадцатиметрового расстояния до
+  // берега. Резкое взято там, где разрешение, гладкое — где его хватает.
+  //
+  // Дно тут ровно то же, что у мели: одна выдумка на два применения. Иначе
+  // лодка цеплялась бы там, где по течению ещё глубоко.
+  current(x, y, speed, out) {
     out.x = 0; out.y = 0;
+    if (!this.p || !speed) return out;
+    const p = this.p;
+    const d = this._fine(this.sdf, x, y, 1, -128);
+    if (!(d > 0)) return out;                       // на суше и за краем не течёт
+    const gx = this._plane(this.curRaw, 0, x, y);
+    if (gx !== gx) return out;
+    const gy = this._plane(this.curRaw, 1, x, y);
+    const h = Math.min(p.shoal_max, d * p.shoal_slope);
+    const k = speed * p.cur_max / 127 * Math.pow(h / p.shoal_max, 2 / 3);
+    out.x = gx * k; out.y = gy * k;
     return out;
   }
 }

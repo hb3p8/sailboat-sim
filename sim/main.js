@@ -220,11 +220,29 @@ const WM = terrain.ready
   ? { x0: TERRAIN_PACK.x0, y0: TERRAIN_PACK.y0, c: TERRAIN_PACK.coarse,
       nx: TERRAIN_PACK.cnx, ny: TERRAIN_PACK.cny }
   : null;
-function windMapSample(x, z) {
-  if (!WM) return 1;
+function windMapCell(x, z) {
+  if (!WM) return -1;
   const i = Math.round((x - WM.x0) / WM.c), j = Math.round((z - WM.y0) / WM.c);
-  if (i < 0 || j < 0 || i >= WM.nx || j >= WM.ny) return 1;
-  return windMapData[2 * (j * WM.nx + i)] / 255;
+  if (i < 0 || j < 0 || i >= WM.nx || j >= WM.ny) return -1;
+  return 2 * (j * WM.nx + i);
+}
+function windMapSample(x, z) {
+  const c = windMapCell(x, z);
+  return c < 0 ? 1 : windMapData[c] / 255;
+}
+
+// Ветер в точке сцены С УЧЁТОМ АКВАТОРИИ — ровно тот же, что чувствует лодка.
+// Через него идут все стрелки поля: если бы они показывали чистое поле порывов,
+// они врали бы именно там, где на них и смотрят, — под берегом.
+const windSceneOut = { x: 0, y: 0, speed: 0, dir: 0 };
+function windScene(x, z, h, t) {
+  const c = windMapCell(x, z);
+  const wk = c < 0 ? 1 : windMapData[c] / 255;
+  const sh = c < 0 ? 1 : windMapData[c + 1] / 255;
+  const w = boat.wind.sample(x, z, h, t, 1 + boat.o.shadeGust * (1 - sh));
+  windSceneOut.x = w.x * wk; windSceneOut.y = w.y * wk;
+  windSceneOut.speed = w.speed * wk; windSceneOut.dir = w.dir;
+  return windSceneOut;
 }
 
 // Тот же множитель в шейдере. Мировые метры → доли текстуры; за краем участка
@@ -855,6 +873,34 @@ field.frustumCulled = false;
 field.renderOrder = 3;
 scene.add(field);
 
+// Второй слой тех же стрелок — течение. Отдельный, а не общий с ветром: это
+// разные вещи, и складывать их глазом должен рулевой, а не отрисовка. Лежат они
+// ниже ветровых и синие, так что перепутать нечем; на реке ровно из-за угла
+// между этими двумя семействами и получается всё интересное.
+const curGeo = new BufferGeometry();
+curGeo.setAttribute('position',
+  new Float32BufferAttribute(new Float32Array(arrowPts.length * ARR_V * 3), 3));
+const curField = new Mesh(curGeo, new MeshBasicMaterial({
+  color: 0x2f6fd8, transparent: true, opacity: 0.85,
+  depthTest: false, side: DoubleSide }));
+curField.frustumCulled = false;
+curField.renderOrder = 2;
+scene.add(curField);
+
+// Одна стрелка в буфер: девять вершин, три треугольника. Вынесено, потому что
+// семейств теперь два и расходиться формой им незачем.
+function putArrow(p, k, x, z, dx, dz, len, hw, hh, head, y) {
+  const px = -dz, pz = dx;
+  const bx = x + dx * (len - head), bz = z + dz * (len - head);
+  const put = (ax, az) => { p[k] = ax; p[k + 1] = y; p[k + 2] = az; k += 3; };
+  put(x + px * hw, z + pz * hw); put(x - px * hw, z - pz * hw);
+  put(bx + px * hw, bz + pz * hw);
+  put(x - px * hw, z - pz * hw); put(bx - px * hw, bz - pz * hw);
+  put(bx + px * hw, bz + pz * hw);
+  put(bx + px * hh, bz + pz * hh); put(bx - px * hh, bz - pz * hh);
+  put(x + dx * len, z + dz * len);
+}
+
 function updateField(cx, cz, t) {
   const p = fieldGeo.attributes.position.array;
   const c = fieldGeo.attributes.color.array;
@@ -863,36 +909,46 @@ function updateField(cx, cz, t) {
   const ref = boat.o.windSpeed || 1;
   for (let i = 0; i < arrowPts.length; i++) {
     const x = ox + arrowPts[i][0], z = oz + arrowPts[i][1];
-    const w = boat.wind.sample(x, z, 3.0, t);
+    // Ветер здесь — тот же, что чувствует лодка: с тенью берега и с добавочной
+    // рваностью в ней. Под берегом стрелки обязаны сесть, иначе по ним не
+    // прочесть того самого, ради чего тень и заводилась.
+    const w = windScene(x, z, 3.0, t);
     // рисуем туда, КУДА дует: так видно, куда поедет порыв
     const dx = w.x / (w.speed || 1), dz = w.y / (w.speed || 1);
-    const px = -dz, pz = dx;                       // поперёк стрелки
-    const len = 2.2 + 3.4 * (w.speed / ref);
-    const hw = 0.22, head = 1.3, hh = 0.62;        // полширины древка и головки
-    const bx = x + dx * (len - head), bz2 = z + dz * (len - head);
-    const tx = x + dx * len, tz = z + dz * len;
-    let k = i * ARR_V * 3;
-    const put = (ax, az) => {
-      p[k] = ax; p[k + 1] = 0.36; p[k + 2] = az; k += 3;
-    };
-    put(x + px * hw, z + pz * hw); put(x - px * hw, z - pz * hw);
-    put(bx + px * hw, bz2 + pz * hw);
-    put(x - px * hw, z - pz * hw); put(bx - px * hw, bz2 - pz * hw);
-    put(bx + px * hw, bz2 + pz * hw);
-    put(bx + px * hh, bz2 + pz * hh); put(bx - px * hh, bz2 - pz * hh);
-    put(tx, tz);
-    // цвет по силе: слабее среднего синеет, сильнее — желтеет
+    putArrow(p, i * ARR_V * 3, x, z, dx, dz,
+             2.2 + 3.4 * (w.speed / ref), 0.22, 0.62, 1.3, 0.36);
+    // Цвет по силе: слабее среднего зеленеет, сильнее — желтеет. Холодный конец
+    // был синим, пока синий не занял течение; двум семействам стрелок делить
+    // один цвет нельзя — на воде их и так накладывается друг на друга.
     const s = Math.max(0, Math.min(1, (w.speed / ref - 0.7) / 0.7));
     for (let v = 0; v < ARR_V; v++) {
       const b = (i * ARR_V + v) * 3;
-      c[b] = 0.35 + 0.65 * s;
-      c[b + 1] = 0.65 + 0.25 * s;
-      c[b + 2] = 1.0 - 0.45 * s;
+      c[b] = 0.30 + 0.70 * s;
+      c[b + 1] = 0.80 - 0.02 * s;
+      c[b + 2] = 0.66 - 0.36 * s;
     }
   }
   fieldGeo.attributes.position.needsUpdate = true;
   fieldGeo.attributes.color.needsUpdate = true;
+
+  // Течение. Длина — от той же скорости на стрежне, что стоит на ползунке, так
+  // что стрелка в полный рост означает фарватер, а короткая — что здесь уже
+  // тише. Именно этот перепад и есть вся речная тактика.
+  const q = curGeo.attributes.position.array;
+  const cref = boat.o.current || 1;
+  for (let i = 0; i < arrowPts.length; i++) {
+    const x = ox + arrowPts[i][0], z = oz + arrowPts[i][1];
+    terrain.current(x, z, boat.o.current, curProbe);
+    const sp = Math.hypot(curProbe.x, curProbe.y);
+    // Стоячая вода — не стрелка нулевой длины, а её отсутствие: вырожденный
+    // треугольник рисует пиксель мусора там, где показывать нечего.
+    if (sp < 1e-4) { q.fill(0, i * ARR_V * 3, (i + 1) * ARR_V * 3); continue; }
+    putArrow(q, i * ARR_V * 3, x, z, curProbe.x / sp, curProbe.y / sp,
+             1.2 + 2.4 * (sp / cref), 0.13, 0.40, 0.85, 0.16);
+  }
+  curGeo.attributes.position.needsUpdate = true;
 }
+const curProbe = { x: 0, y: 0 };
 
 const NSTRIP = 12, BAT_V = 6, BAT_HALF = 0.055;
 const battenGeo = new BufferGeometry();
@@ -1411,7 +1467,7 @@ addEventListener('keyup', e => { keys[e.code] = false; });
 
 const ui = {};
 for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draft',
-                  'fetch', 'fetchover', 'shd0', 'shk', 'shg'])
+                  'fetch', 'fetchover', 'cur', 'shd0', 'shk', 'shg'])
   ui[id] = document.getElementById(id);
 
 // Тень берега — единственная часть модели, у которой нет объективной проверки:
@@ -1419,7 +1475,11 @@ for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draf
 // ползунками, и поэтому же группа целиком исчезает без акватории: тень берега
 // без берега — не «ноль», а бессмыслица.
 const capShade = document.getElementById('v-shade');
-if (!terrain.ready) document.getElementById('shade').hidden = true;
+if (!terrain.ready) {
+  document.getElementById('shade').hidden = true;
+  // Течение без реки — не «ноль», а бессмыслица, ровно как и тень берега.
+  document.getElementById('curbox').hidden = true;
+}
 
 const capFetch = document.getElementById('v-fetch');
 // Галочка есть только когда есть акватория: без неё переопределять нечего.
@@ -1542,6 +1602,7 @@ function readControls(dt) {
   boat.wind.o.shift = gust * 45 * D;
 
   if (terrain.ready) {
+    o.current = parseFloat(ui.cur.value);
     o.shadeD0 = parseFloat(ui.shd0.value);
     o.shadeK = parseFloat(ui.shk.value);
     o.shadeGust = parseFloat(ui.shg.value);
@@ -1640,6 +1701,7 @@ function frame() {
   seaWindSpeed.value = boat.wind.o.speed;
   seaTime.value = boat.t;
   updateGrid(ix, iy, now, dirX, dirZ, amp);
+  curField.visible = debugOn && terrain.ready && boat.o.current > 0;
   if (debugOn) {
     updateField(ix, iy, now);
     updateBattens(side);
@@ -1757,6 +1819,14 @@ const HUD_ROWS = [
   ['resistN', 'Сопротивление', 'Н', 0],
 ];
 
+// Угол течения от курса, в градусах от 0 (в нос) до 180 (в корму), без знака:
+// борт видно и по стрелкам, а цифра нужна для другого — понять, помогает оно
+// или мешает.
+function relBearing(t) {
+  const a = Math.atan2(t.curY, t.curX) - boat.psi;
+  return Math.round(Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) / D);
+}
+
 function updateHud(t) {
   if (!t) return;
   const rows = HUD_ROWS.map(([k, label, unit, prec]) =>
@@ -1770,7 +1840,16 @@ function updateHud(t) {
       '<tr><td>До берега' +
       (t.aground ? ' <em>на мели</em>' : t.shoalK > 0.02 ? ' <em>мель</em>' : '') +
       '</td><td class="v">' + (t.shoreM >= 127 ? '&gt;127' : t.shoreM.toFixed(0)) +
-      '</td><td class="u">м</td></tr>');
+      '</td><td class="u">м</td></tr>') +
+    // Течение и скорость над грунтом. Большая цифра наверху — скорость ЧЕРЕЗ
+    // ВОДУ: ею меряется лодка, её чувствуют корпус, киль и руль. А доедешь ты
+    // с той, что здесь, и на реке между ними узел с лишним. Угол — от курса:
+    // ноль в нос, сто восемьдесят в корму.
+    (!t.curKn ? '' :
+      '<tr><td>Течение <em>' + relBearing(t) + '°</em></td><td class="v">' +
+      t.curKn.toFixed(2) + '</td><td class="u">уз</td></tr>' +
+      '<tr><td>Над грунтом</td><td class="v">' + t.sogKn.toFixed(2) +
+      '</td><td class="u">уз</td></tr>');
   // «Перебрано» имеет смысл только на острых курсах: на полных парус работает
   // сорванным, и это норма, а не ошибка настройки.
   const al = t.alphaDeg || 0;

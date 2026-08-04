@@ -235,13 +235,21 @@ function windMapSample(x, z) {
 // Через него идут все стрелки поля: если бы они показывали чистое поле порывов,
 // они врали бы именно там, где на них и смотрят, — под берегом.
 const windSceneOut = { x: 0, y: 0, speed: 0, dir: 0 };
+const windSceneAxis = { x: 0, y: 0 };
 function windScene(x, z, h, t) {
   const c = windMapCell(x, z);
   const wk = c < 0 ? 1 : windMapData[c] / 255;
   const sh = c < 0 ? 1 : windMapData[c + 1] / 255;
   const w = boat.wind.sample(x, z, h, t, 1 + boat.o.shadeGust * (1 - sh));
-  windSceneOut.x = w.x * wk; windSceneOut.y = w.y * wk;
-  windSceneOut.speed = w.speed * wk; windSceneOut.dir = w.dir;
+  // Ось долины у каждой стрелки своя, и поворот считается на месте, а не берётся
+  // от лодки: над стрелкой ветра эта разница и есть всё содержание канализации.
+  // На стрелках у берега видно, как поток ложится вдоль реки, а на середине нет.
+  terrain.channel(x, z, windSceneAxis);
+  const r = channelTurn(windSceneAxis.x, windSceneAxis.y, boat.o.windDir, boat.o.chan);
+  const cr = Math.cos(r), sr = Math.sin(r);
+  windSceneOut.x = (w.x * cr - w.y * sr) * wk;
+  windSceneOut.y = (w.x * sr + w.y * cr) * wk;
+  windSceneOut.speed = w.speed * wk; windSceneOut.dir = w.dir + r;
   return windSceneOut;
 }
 
@@ -1467,7 +1475,7 @@ addEventListener('keyup', e => { keys[e.code] = false; });
 
 const ui = {};
 for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draft',
-                  'fetch', 'fetchover', 'cur', 'shd0', 'shk', 'shg'])
+                  'fetch', 'fetchover', 'cur', 'shd0', 'shk', 'shg', 'chan'])
   ui[id] = document.getElementById(id);
 
 // Тень берега — единственная часть модели, у которой нет объективной проверки:
@@ -1606,12 +1614,15 @@ function readControls(dt) {
     o.shadeD0 = parseFloat(ui.shd0.value);
     o.shadeK = parseFloat(ui.shk.value);
     o.shadeGust = parseFloat(ui.shg.value);
+    o.chan = parseFloat(ui.chan.value);
     // Подпись — рабочий прибор подбора, а не украшение: подбирать тень на глаз
     // по картинке можно только зная, какое число этой картинке отвечает.
     const t = boat.telemetry;
     if (t && capShade) {
       capShade.textContent = 'ветер ×' + t.windK.toFixed(2) +
-        (t.gustK > 1.01 ? ', рвано ×' + t.gustK.toFixed(1) : '');
+        (t.gustK > 1.01 ? ', рвано ×' + t.gustK.toFixed(1) : '') +
+        (Math.abs(t.chanDeg) > 0.5 ?
+          ', вдоль долины ' + (t.chanDeg > 0 ? '+' : '') + t.chanDeg.toFixed(0) + '°' : '');
     }
   }
 }
@@ -1697,7 +1708,12 @@ function frame() {
   if ((tick & 1) === 0) seaGeo.computeVertexNormals();
   seaGust.value = boat.wind.o.gust;
   seaShadeGust.value = boat.o.shadeGust;
-  seaWindDir.value = boat.wind.o.dir;
+  // Языки ряби кладутся по направлению ветра У ЛОДКИ, вместе с поворотом к оси
+  // долины: там, где на них и смотрят, они обязаны совпадать со стрелками. На
+  // дальней воде поворот будет уже другой, и этого рябь не показывает — поле
+  // одно на всю поверхность, и разрешать его по месту стоило бы дороже, чем
+  // стоит сама разница.
+  seaWindDir.value = boat.wind.o.dir + (boat.chanRot || 0);
   seaWindSpeed.value = boat.wind.o.speed;
   seaTime.value = boat.t;
   updateGrid(ix, iy, now, dirX, dirZ, amp);

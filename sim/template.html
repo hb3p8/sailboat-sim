@@ -158,13 +158,15 @@
     <input id="cur" type="range" min="0" max="1.5" step="0.05" value="0.55"></label>
 
   <div id="shade">
-    <h2>Тень берега</h2>
+    <h2>Ветер над рекой</h2>
     <label><span class="cap"><span>Глубина дефицита D₀</span><span id="v-shd0"></span></span>
       <input id="shd0" type="range" min="0" max="0.8" step="0.05" value="0.5"></label>
     <label><span class="cap"><span>Длина тени, высот k</span><span id="v-shk"></span></span>
       <input id="shk" type="range" min="2" max="24" step="1" value="10"></label>
     <label><span class="cap"><span>Рваность в тени G</span><span id="v-shg"></span></span>
       <input id="shg" type="range" min="0" max="3" step="0.1" value="1.5"></label>
+    <label><span class="cap"><span>Канализация потока</span><span id="v-chan"></span></span>
+      <input id="chan" type="range" min="0" max="1" step="0.05" value="0.5"></label>
     <div class="cap"><span>У лодки</span><span id="v-shade"></span></div>
   </div>
 
@@ -257,6 +259,7 @@ const BUILD = /*__BUILD__*/ null;
     shd0: v => (+v === 0 ? 'тени нет' : '−' + (+v * 100).toFixed(0) + '%'),
     shk: v => (+v).toFixed(0) + ' высот',
     shg: v => (+v === 0 ? 'ровно' : '×' + (1 + +v).toFixed(1)),
+    chan: v => (+v === 0 ? 'нет' : 'до ' + (+v * 90).toFixed(0) + '°'),
   };
   for (const id of Object.keys(fmt)) {
     const el = document.getElementById(id), out = document.getElementById('v-' + id);

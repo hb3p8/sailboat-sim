@@ -65,6 +65,38 @@ export function shelterFactor(skyS, d0, k) {
   return 1 - d0 * Math.exp(-1 / (k * skyS));
 }
 
+// Канализация потока: насколько ветер разворачивается вдоль долины.
+//
+// Стенки долины непроницаемы, и приземный поток идёт вдоль неё. Свободный ветер
+// под углом θ к оси разворачивается к ней — тем сильнее, чем лучше долина
+// выражена, — и выбирает то из двух её направлений, на которое у него
+// положительная проекция.
+//
+// Ось приходит из пакета в двойном угле, помноженная на силу: складывать и
+// интерполировать направление без знака иначе нельзя. Возвращается угол
+// поворота, который остаётся просто прибавить к направлению ветра.
+//
+// Про ослабление у поперечного ветра. Когда свободный ветер проходит через
+// перпендикуляр к оси, ближний конец оси меняется на противоположный, и
+// приземный ветер переворачивается на 180°. Это не изъян модели, а
+// наблюдаемое явление — но у нас оно вышло бы разрывом на целые 180°·k, а
+// вблизи перпендикуляра механизм и в природе работает хуже всего: долинный
+// ветер там слаб и неустойчив. Поэтому доля поворота у перпендикуляра
+// уменьшается, и скачок остаётся ограниченным. Это сглаживание, а не физика,
+// и записано оно тут именно так.
+const CHAN_FLAT = 0.5;
+
+export function channelTurn(c2, s2, windDir, k) {
+  const a = Math.hypot(c2, s2);
+  if (!(a > 1e-4) || !k) return 0;
+  const ax = 0.5 * Math.atan2(s2, c2);
+  // Знаковый угол до БЛИЖНЕГО конца оси, в пределах ±90°. Двойной угол делает
+  // это одной строкой и заодно сам выбирает нужный конец.
+  const d2 = 2 * (ax - windDir);
+  const d = 0.5 * Math.atan2(Math.sin(d2), Math.cos(d2));
+  return k * a * (CHAN_FLAT + (1 - CHAN_FLAT) * Math.abs(Math.cos(d))) * d;
+}
+
 function bytes(b64) {
   const s = atob(b64);
   const out = new Uint8Array(s.length);
@@ -87,6 +119,8 @@ export class Terrain {
     this.skyRaw = bytes(p.sky_b64);
     const cr = bytes(p.cur_b64);
     this.curRaw = new Int8Array(cr.buffer, cr.byteOffset, cr.length);
+    const ch = bytes(p.chan_b64);
+    this.chanRaw = new Int8Array(ch.buffer, ch.byteOffset, ch.length);
     this.cells = p.cnx * p.cny;
   }
 
@@ -249,6 +283,17 @@ export class Terrain {
       out[2 * i] = Math.max(0, Math.min(255, Math.round(v * 255)));
       out[2 * i + 1] = Math.max(0, Math.min(255, Math.round(sh * 255)));
     }
+    return out;
+  }
+
+  // Ось долины в двойном угле, помноженная на силу. Пара чисел, а не угол:
+  // читателю она нужна именно такой — и физике, и стрелкам на воде.
+  channel(x, y, out) {
+    out.x = 0; out.y = 0;
+    if (!this.p) return out;
+    const c2 = this._plane(this.chanRaw, 0, x, y);
+    if (c2 !== c2) return out;
+    out.x = c2 / 127; out.y = this._plane(this.chanRaw, 1, x, y) / 127;
     return out;
   }
 

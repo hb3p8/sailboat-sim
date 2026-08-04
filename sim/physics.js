@@ -19,7 +19,8 @@ import { WindField } from './wind.js';
 import { Lattice } from './vlm.js';
 import { membraneCamber, slackOf, luffFraction, luffFactor, sectionLift, capLift, liftCeiling } from './membrane.js';
 import { seaState, addedResistance } from './waves.js';
-import { fetchFactor, shelterFactor, WIND_SHORE_A, WIND_SHORE_L } from './terrain.js';
+import { fetchFactor, shelterFactor, channelTurn,
+         WIND_SHORE_A, WIND_SHORE_L } from './terrain.js';
 
 const DEG = Math.PI / 180;
 
@@ -429,6 +430,8 @@ export class Boat {
     this.windK = 1;
     this.shelter = 1;
     this.gustK = 1;
+    this.chanRot = 0;
+    this.chanAxis = { x: 0, y: 0 };
     this.shoalK = 0;
     this.aground = false;
     this.sog = 0;
@@ -444,6 +447,9 @@ export class Boat {
       // числа этого в открытых источниках нет, и подобрано оно по порядку
       // величины, а не измерено (docs/terrain-in-sim.md §2, §6.7).
       current: 0.55,
+      // Канализация: доля поворота ветра к оси долины. Самое спекулятивное во
+      // всей акватории, и потому отдельным числом с нулём наготове.
+      chan: 0.5,
       sheet: 25 * DEG,         // угол выноса паруса от ДП
       // Стаксель-шкот отдельно: не свой угол, а поправка к общему. Так шкоты
       // остаются связанными — потравил общий, поехали оба, — но стакселю можно
@@ -657,8 +663,16 @@ export class Boat {
     // Множитель за берег: ветер над водой разгоняется не сразу. Один на всю
     // лодку — он меняется на сотнях метров, а лодка шесть метров длиной.
     const k = this.windK;
-    const ax = w.x * k * c + w.y * k * s - (vx + this.curB.x);
-    const ay = -w.x * k * s + w.y * k * c - (vy + this.curB.y);
+    // Поворот к оси долины — до перевода в связанные оси: он мировой, как и
+    // сам ветер. Без акватории он точный ноль, и поворот на ноль не трогает
+    // ни одного разряда.
+    let wx = w.x, wy = w.y;
+    if (this.chanRot) {
+      const cr = Math.cos(this.chanRot), sr = Math.sin(this.chanRot);
+      wx = w.x * cr - w.y * sr; wy = w.x * sr + w.y * cr;
+    }
+    const ax = wx * k * c + wy * k * s - (vx + this.curB.x);
+    const ay = -wx * k * s + wy * k * c - (vy + this.curB.y);
     return { x: ax, y: ay, speed: Math.hypot(ax, ay),
              angle: Math.atan2(ay, ax), ws: w.speed * k };
   }
@@ -1240,6 +1254,7 @@ export class Boat {
     this.windK = 1;
     this.shelter = 1;
     this.gustK = 1;
+    this.chanRot = 0;
     if (this.terrain) {
       this.terrain.current(this.x, this.y, this.o.current, this.cur);
       const cc = Math.cos(this.psi), ss = Math.sin(this.psi);
@@ -1252,6 +1267,8 @@ export class Boat {
       this.windK = fetchFactor(this.terrain.fetch(this.x, this.y, dir),
                                WIND_SHORE_A, WIND_SHORE_L) * this.shelter;
       this.gustK = 1 + this.o.shadeGust * (1 - this.shelter);
+      this.terrain.channel(this.x, this.y, this.chanAxis);
+      this.chanRot = channelTurn(this.chanAxis.x, this.chanAxis.y, dir, this.o.chan);
     }
 
     // Перестраивать ли матрицу решётки на этом шаге — считается от времени,
@@ -1542,6 +1559,8 @@ export class Boat {
       fetchM: this.fetchM, fetchField: this.fetchField,
       shoreM: this.shoreM, shoalK: this.shoalK || 0, windK: this.windK,
       shelter: this.shelter, gustK: this.gustK, aground: this.aground,
+      chanDeg: this.chanRot / DEG,
+      chanA: Math.hypot(this.chanAxis.x, this.chanAxis.y),
       // Течение и скорость НАД ГРУНТОМ. Большая цифра в HUD — по-прежнему
       // скорость через воду: её чувствуют корпус, киль и руль, ею меряется
       // лодка. Над грунтом — то, с какой скоростью на самом деле едешь, и на

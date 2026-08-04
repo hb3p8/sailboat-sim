@@ -12,7 +12,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { Terrain, fetchFactor, shelterFactor,
+import { Terrain, fetchFactor, shelterFactor, channelTurn,
          WIND_SHORE_A, WIND_SHORE_L } from '../sim/terrain.js';
 import { Boat } from '../sim/physics.js';
 
@@ -587,6 +587,107 @@ check('пакет читается и считается готовым', t.read
   check('попутное течение сбавляет ход через воду',
     with_.sogKn > without.sogKn && with_.speedKn < without.speedKn,
     (with_.speedKn - without.speedKn).toFixed(2) + ' узла через воду');
+}
+
+// --- канализация потока --------------------------------------------------------
+//
+// Ось берётся из РЕЛЬЕФА, а не из реки: канализацию делает долина, а река в
+// широкой пойме может гулять поперёк неё. Поэтому первое, что проверяется, —
+// что ось всё-таки сошлась с осью реки там, где стена есть, и разошлась там,
+// где её нет. Иначе структурный тензор ловил бы не долину, а что попало.
+//
+// На этой карте рек две, и сходятся они под большим углом. Это не осложнение, а
+// проверка: две долины обязаны иметь две разные оси, и ни одна не должна
+// размазаться по другой.
+{
+  const [ox, oy] = pack.open_water;
+  const PACK_P = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
+  const ax = { x: 0, y: 0 }, cv = { x: 0, y: 0 };
+  const axis = (x, y) => {
+    t.channel(x, y, ax);
+    const a = Math.hypot(ax.x, ax.y);
+    return { a, deg: ((0.5 * Math.atan2(ax.y, ax.x) / D) % 180 + 180) % 180 };
+  };
+  const river = (x, y) => {
+    t.current(x, y, 1, cv);
+    if (Math.hypot(cv.x, cv.y) < 0.05) return null;
+    return ((Math.atan2(cv.y, cv.x) / D) % 180 + 180) % 180;
+  };
+  const gap = (a, b) => { const d = Math.abs(a - b) % 180; return Math.min(d, 180 - d); };
+
+  const spots = [[ox, oy, 'Волга, середина плёса'], [-2000, 1200, 'Волга выше'],
+                 [4000, -1500, 'Волга ниже'], [-4340, -5000, 'Ока, юг'],
+                 [-4500, -3000, 'Ока выше устья'], [-4600, -1000, 'Ока у устья']];
+  console.log('  ось долины против оси реки:');
+  let worst = 0;
+  for (const [x, y, name] of spots) {
+    const v = axis(x, y), r = river(x, y);
+    if (r === null) continue;
+    const d = gap(v.deg, r);
+    if (v.a > 0.5) worst = Math.max(worst, d);
+    console.log('    ' + name.padEnd(22) + ' долина ' + v.deg.toFixed(0).padStart(3) +
+      '°, река ' + r.toFixed(0).padStart(3) + '°, расхождение ' + d.toFixed(0).padStart(2) +
+      '°, сила ' + v.a.toFixed(2));
+  }
+  check('там, где долина выражена, её ось совпадает с осью реки', worst < 20,
+    'наибольшее расхождение ' + worst.toFixed(0) + '°');
+
+  // Две реки — две оси. Ока здесь течёт почти на север, Волга почти на восток.
+  const volga = axis(ox, oy), oka = axis(-4500, -3000);
+  console.log('  Волга %s° (сила %s), Ока %s° (сила %s), между ними %s°\n',
+    volga.deg.toFixed(0), volga.a.toFixed(2), oka.deg.toFixed(0), oka.a.toFixed(2),
+    gap(volga.deg, oka.deg).toFixed(0));
+  check('у двух рек две разные оси', gap(volga.deg, oka.deg) > 45,
+    gap(volga.deg, oka.deg).toFixed(0) + '°');
+  check('обе долины выражены', volga.a > 0.5 && oka.a > 0.5,
+    volga.a.toFixed(2) + ' и ' + oka.a.toFixed(2));
+
+  // Поворот ветра. Проверяется форма: вдоль оси не крутит, поперёк крутит
+  // сильнее всего, ноль на ползунке отменяет всё.
+  const turn = (dirDeg, k) => {
+    t.channel(ox, oy, ax);
+    return channelTurn(ax.x, ax.y, dirDeg * D, k) / D;
+  };
+  const along = volga.deg;
+  console.log('  поворот ветра на середине плёса при k = 0.5:');
+  const rows = [0, 30, 60, 89, 91, 120, 150].map(o => [o, turn(along + o, 0.5)]);
+  console.log('    от оси, °: ' + rows.map(q => q[0]).join(' '));
+  console.log('    поворот, °: ' + rows.map(q => q[1].toFixed(0)).join(' ') + '\n');
+  check('вдоль оси канализация ничего не меняет', Math.abs(turn(along, 0.5)) < 0.5);
+  check('поперёк оси поворот наибольший',
+    Math.abs(rows[2][1]) > Math.abs(rows[1][1]) && Math.abs(rows[1][1]) > Math.abs(rows[0][1]));
+  check('поворот всегда к оси, а не от неё',
+    rows.every(q => Math.abs(gap(along + q[0] + q[1], along)) <= Math.abs(gap(along + q[0], along)) + 1e-9));
+  check('за перпендикуляром ветер ложится на другой конец оси',
+    rows[3][1] > 0 !== rows[4][1] > 0,
+    rows[3][1].toFixed(0) + '° против ' + rows[4][1].toFixed(0) + '°');
+  check('скачок на перпендикуляре ограничен', Math.abs(rows[3][1] - rows[4][1]) < 60,
+    Math.abs(rows[3][1] - rows[4][1]).toFixed(0) + '°');
+  check('ползунок в ноль отменяет канализацию', turn(along + 60, 0) === 0);
+
+  // И то же самое лодкой: канализация обязана менять курс, на котором лодка
+  // идёт, а не только число в телеметрии.
+  const run = k => {
+    const b = new Boat(PACK_P, t);
+    Object.assign(b.o, { windSpeed: 8, windDir: (along + 60) * D, sheet: 24 * D,
+                         chan: k, current: 0, crewHike: 1, crewMass: 240 });
+    b.x = ox; b.y = oy; b.psi = 0; b.u = 4;
+    for (let i = 0; i < 40 * 30; i++) b.step(1 / 30);
+    return b.telemetry;
+  };
+  const on = run(0.5), off = run(0);
+  console.log('  ветер под 60° к долине, 40 с без руля:');
+  console.log('    без канализации: кажущийся %s°, %s уз', off.awaDeg.toFixed(0),
+    off.speedKn.toFixed(2));
+  console.log('    с канализацией:  кажущийся %s°, %s уз, ветер завернуло на %s°\n',
+    on.awaDeg.toFixed(0), on.speedKn.toFixed(2), on.chanDeg.toFixed(0));
+  check('канализация разворачивает ветер у лодки',
+    Math.abs(on.chanDeg) > 10, on.chanDeg.toFixed(0) + '°');
+  check('и это меняет угол кажущегося ветра',
+    Math.abs(on.awaDeg - off.awaDeg) > 5,
+    (on.awaDeg - off.awaDeg).toFixed(0) + '°');
+  check('без акватории канализации нет вовсе',
+    new Boat(PACK_P).chanRot === 0);
 }
 
 console.log('\n' + (failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');

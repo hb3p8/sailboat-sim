@@ -4,21 +4,10 @@
 // отрисовка интерполирует между шагами. Так поведение лодки одинаково и на
 // шестидесяти герцах, и на просевших тридцати.
 //
-// Мировая система здесь — трёхмерная система three (Y вверх). Физика живёт в
-// судостроительной: X в нос, Y на правый борт, Z вверх. Перевод только на
-// границе, и он такой: three = (x, z, y).
-//
-// Тройка (нос, правый борт, вверх) левая, а у three правая, поэтому перевод
-// обязан менять ориентацию — отсюда Z берётся с плюсом, а все углы поворота
-// с минусом. Прежний перевод (x, z, −y) ориентацию сохранял, и вся сцена
-// выходила зеркальной: правый борт рисовался слева. Само по себе это
-// незаметно, зеркальная яхта ходит точно так же, и крен с парусом были
-// зеркальны согласованно. Но роза ветров рисуется в обычной условности и
-// потому спорила с трёхмерной картинкой, а порывы на воде спорили бы с обеими.
-//
-// Проверяется это за минуту: поставить в boatGroup столбик на (0, 3, +6) —
-// это правый борт — и посмотреть, с какой стороны экрана он окажется в
-// камере погони. Должен быть справа.
+// Физический мир: X на восток, Y на север, Z вверх. Связанные оси лодки:
+// X в нос, Y на ЛЕВЫЙ борт, Z вверх. Сцена three тоже правая, но вертикаль у
+// неё Y, поэтому перевод на границе имеет вид (x, y, z) -> (x, z, -y).
+// Все его знаки собраны в axes.js и замкнуты tests/axes.test.mjs.
 //
 // Отдельная забота сцены — сделать поведение читаемым. По голым числам крен,
 // дрейф и потерю хода на повороте не оценить, поэтому здесь есть бурун за
@@ -68,7 +57,7 @@ stage.appendChild(renderer.domElement);
 
 scene.add(new HemisphereLight(0xe8f4ff, 0x2b4a63, 2.4));
 const sun = new DirectionalLight(0xfff2dc, 2.6);
-sun.position.set(-70, 80, 50);
+sun.position.set(toSceneX(-70), 80, toSceneZ(50));
 scene.add(sun);
 
 // ------------------------------------------------------------------- вода
@@ -222,7 +211,8 @@ const WM = terrain.ready
   : null;
 function windMapCell(x, z) {
   if (!WM) return -1;
-  const i = Math.round((x - WM.x0) / WM.c), j = Math.round((z - WM.y0) / WM.c);
+  const i = Math.round((toWorldX(x) - WM.x0) / WM.c),
+        j = Math.round((toWorldY(z) - WM.y0) / WM.c);
   if (i < 0 || j < 0 || i >= WM.nx || j >= WM.ny) return -1;
   return 2 * (j * WM.nx + i);
 }
@@ -240,15 +230,16 @@ function windScene(x, z, h, t) {
   const c = windMapCell(x, z);
   const wk = c < 0 ? 1 : windMapData[c] / 255;
   const sh = c < 0 ? 1 : windMapData[c + 1] / 255;
-  const w = boat.wind.sample(x, z, h, t, 1 + boat.o.shadeGust * (1 - sh));
+  const w = boat.wind.sample(toWorldX(x), toWorldY(z), h, t,
+                             1 + boat.o.shadeGust * (1 - sh));
   // Ось долины у каждой стрелки своя, и поворот считается на месте, а не берётся
   // от лодки: над стрелкой ветра эта разница и есть всё содержание канализации.
   // На стрелках у берега видно, как поток ложится вдоль реки, а на середине нет.
-  terrain.channel(x, z, windSceneAxis);
+  terrain.channel(toWorldX(x), toWorldY(z), windSceneAxis);
   const r = channelTurn(windSceneAxis.x, windSceneAxis.y, boat.o.windDir, boat.o.chan);
   const cr = Math.cos(r), sr = Math.sin(r);
-  windSceneOut.x = (w.x * cr - w.y * sr) * wk;
-  windSceneOut.y = (w.x * sr + w.y * cr) * wk;
+  windSceneOut.x = toSceneX((w.x * cr - w.y * sr) * wk);
+  windSceneOut.y = toSceneZ((w.x * sr + w.y * cr) * wk);
   windSceneOut.speed = w.speed * wk; windSceneOut.dir = w.dir + r;
   return windSceneOut;
 }
@@ -267,14 +258,17 @@ const svWind = WM && Fn(([p]) => {
   const v = p.y.sub(WM.y0).div(WM.c * (WM.ny - 1));
   return texture(windMapTex, vec2(u, v)).rg;
 });
-const svWindV = svWind && svWind(positionWorld.xz);
+// Сцена -> мир для шейдера воды: X сцены есть X мира, Z сцены есть -Y мира.
+// TSL-узел пишется явно, потому что числовой адаптер осей к нему неприменим.
+const seaWorldXY = vec2(positionWorld.x, positionWorld.z.negate());
+const svWindV = svWind && svWind(seaWorldXY);
 // Рябь гаснет со скоростью ветра, но в тени она же и резче — тем самым
 // множителем рваности, что в физике. Гашение вдвое слабее падения ветра:
 // полоса под берегом обязана читаться гладкой, но не мёртвой.
 const seaWindK = svWindV && svWindV.x.mul(0.5).add(0.5);
 const seaRough = svWindV && svWindV.y.oneMinus().mul(seaShadeGust).add(1.0);
 
-const seaRipple = svGust(positionWorld.xz).mul(seaGust);
+const seaRipple = svGust(seaWorldXY).mul(seaGust);
 seaMat.colorNode = color(SEA_COLOUR).mul(
   (seaWindK ? seaRipple.mul(seaWindK).mul(seaRough) : seaRipple).mul(3.0)
     .oneMinus().clamp(0.25, 1.8));
@@ -292,10 +286,14 @@ if (!seaMat.colorNode || typeof seaMat.colorNode.mul !== 'function') {
 }
 
 function waveHeight(x, z, t, dx, dz, amp) {
-  const a = Math.sin((x * dx + z * dz) * 0.28 + t * 1.35);
-  const b = Math.sin((x * dz - z * dx) * 0.17 - t * 0.85);
-  const c = Math.sin((x * dx + z * dz) * 0.72 + t * 2.6);
-  const d = Math.sin((x * 0.9 - z * 0.4) * 1.35 - t * 3.4);
+  // Шум определён в мире, а не в сцене: после flip тот же гребень должен
+  // оказаться в зеркальной точке, а не превратиться в другое море.
+  const wx = toWorldX(x), wy = toWorldY(z);
+  const wdx = toWorldX(dx), wdy = toWorldY(dz);
+  const a = Math.sin((wx * wdx + wy * wdy) * 0.28 + t * 1.35);
+  const b = Math.sin((wx * wdy - wy * wdx) * 0.17 - t * 0.85);
+  const c = Math.sin((wx * wdx + wy * wdy) * 0.72 + t * 2.6);
+  const d = Math.sin((wx * 0.9 - wy * 0.4) * 1.35 - t * 3.4);
   return amp * (0.5 * a + 0.28 * b + 0.14 * c + 0.08 * d);
 }
 
@@ -587,7 +585,8 @@ function shapeSails(side) {
       // Знак пуза берётся из расчёта: он говорит, на какую сторону выгнут
       // парус. Нормаль ниже — та же самая, что в physics.sailForces, поэтому
       // нарисованное и посчитанное полотно совпадают.
-      const camber = (g.camber || 0) * (g.fill == null ? 1 : g.fill);
+      const camber = bodyDirLocalZ(
+        (g.camber || 0) * (g.fill == null ? 1 : g.fill));
       const draft = Math.min(0.85, Math.max(0.15, g.draft == null ? 0.5 : g.draft));
 
       // Заполаскивание. Физика говорит, какая доля хорды от передней шкаторины
@@ -661,7 +660,7 @@ function shapeSails(side) {
       const len = Math.hypot(nx2, nz2) || 1;
       const ux = nx2 / len, uz = nz2 / len;
       // подветренная сторона — та, куда выгнут парус
-      const lee = Math.sign(g.camber || 1);
+      const lee = Math.sign(bodyDirLocalZ(g.camber || 1));
       const offX = -uz * TELL_OFF * lee, offZ = ux * TELL_OFF * lee;
 
       const margin = (g.margin || 0) / D;
@@ -814,10 +813,10 @@ const BUOY_COLOUR = {
 };
 if (terrain.ready && MARKS && MARKS.buoys && MARKS.buoys.length) {
   for (const b of MARKS.buoys)
-    buoy(b.x, b.y, BUOY_COLOUR[b.kind] || BUOY_COLOUR.fairway);
+    buoy(toSceneX(b.x), toSceneZ(b.y), BUOY_COLOUR[b.kind] || BUOY_COLOUR.fairway);
 } else {
   [[0, -90, 0xe8683c], [0, 90, 0xe8b83c], [70, 0, 0x4a9ad4], [-70, 0, 0x4a9ad4]]
-    .forEach(m => buoy(m[0], m[1], m[2]));
+    .forEach(m => buoy(toSceneX(m[0]), toSceneZ(m[1]), m[2]));
 }
 
 // --- отметка лодки на карте ---------------------------------------------------
@@ -961,12 +960,13 @@ function updateField(cx, cz, t) {
   const cref = boat.o.current || 1;
   for (let i = 0; i < arrowPts.length; i++) {
     const x = ox + arrowPts[i][0], z = oz + arrowPts[i][1];
-    terrain.current(x, z, boat.o.current, curProbe);
+    terrain.current(toWorldX(x), toWorldY(z), boat.o.current, curProbe);
     const sp = Math.hypot(curProbe.x, curProbe.y);
     // Стоячая вода — не стрелка нулевой длины, а её отсутствие: вырожденный
     // треугольник рисует пиксель мусора там, где показывать нечего.
     if (sp < 1e-4) { q.fill(0, i * ARR_V * 3, (i + 1) * ARR_V * 3); continue; }
-    putArrow(q, i * ARR_V * 3, x, z, curProbe.x / sp, curProbe.y / sp,
+    putArrow(q, i * ARR_V * 3, x, z,
+             toSceneX(curProbe.x / sp), toSceneZ(curProbe.y / sp),
              1.2 + 2.4 * (sp / cref), 0.13, 0.40, 0.85, 0.16);
   }
   curGeo.attributes.position.needsUpdate = true;
@@ -1103,8 +1103,8 @@ function saveDump() {
 // Всё, что ниже, включается только когда есть пакет акватории. Без него ничего
 // не создаётся вовсе, и сцена остаётся прежней — бесконечная вода со знаками.
 //
-// Оси: земля кладётся в те же, в которых ездит лодка, — three = (x, высота, y),
-// X на восток, Y на север. Ошибка знака по Y отражает участок зеркально, и
+// Оси: земля кладётся в правую сцену — three = (x, высота, -y), X на восток,
+// Y мира на север. Ошибка знака по Y отражает участок зеркально, и
 // глазом это не ловится совершенно: река на месте, берега на месте. Ловится
 // оно проверкой в tests/terrain.test.mjs и одним взглядом на то, какой берег
 // высокий, — правый, южный.
@@ -1149,7 +1149,8 @@ function buildTerrainScene() {
     for (let j = 0, v = 0; j < ny; j++)
       for (let i = 0; i < nx; i++, v++) {
         const k = (iy0 + j) * NX + ix0 + i;
-        pos[v * 3] = gx(k); pos[v * 3 + 1] = H[k] / 10; pos[v * 3 + 2] = gy(k);
+        pos[v * 3] = toSceneX(gx(k)); pos[v * 3 + 1] = H[k] / 10;
+        pos[v * 3 + 2] = toSceneZ(gy(k));
         const t = SDF[k] > 128 ? cc.setHex(0x2f4a52) : tint(H[k] / 10 - LEVEL);
         col[v * 3] = t.r; col[v * 3 + 1] = t.g; col[v * 3 + 2] = t.b;
       }
@@ -1161,7 +1162,7 @@ function buildTerrainScene() {
         // бумаге, а не на глаз: «очевидный» порядок обхода даёт нормали вниз,
         // вся суша уходит в отбраковку задних граней, и экран показывает
         // пустую воду, а не вывернутый рельеф.
-        idx.push(a, d, b, b, d, e);
+        idx.push(a, b, d, b, e, d);
       }
     const g = new BufferGeometry();
     g.setAttribute('position', new Float32BufferAttribute(pos, 3));
@@ -1186,21 +1187,26 @@ function buildTerrainScene() {
     const ytop = k => H[k] / 10 + (COVER[k] & 0x3F);
     const put = k => {
       let n = node.get(k);
-      if (n === undefined) { n = vp.length / 3; node.set(k, n); vp.push(gx(k), ytop(k), gy(k)); }
+      if (n === undefined) {
+        n = vp.length / 3; node.set(k, n);
+        vp.push(toSceneX(gx(k)), ytop(k), toSceneZ(gy(k)));
+      }
       return n;
     };
     const wall = (k1, k2) => {
       const n = vp.length / 3;
-      vp.push(gx(k1), H[k1] / 10, gy(k1), gx(k2), H[k2] / 10, gy(k2),
-              gx(k2), ytop(k2), gy(k2), gx(k1), ytop(k1), gy(k1));
-      vi.push(n, n + 1, n + 2, n, n + 2, n + 3);
+      const x1 = toSceneX(gx(k1)), z1 = toSceneZ(gy(k1));
+      const x2 = toSceneX(gx(k2)), z2 = toSceneZ(gy(k2));
+      vp.push(x1, H[k1] / 10, z1, x2, H[k2] / 10, z2,
+              x2, ytop(k2), z2, x1, ytop(k1), z1);
+      vi.push(n, n + 2, n + 1, n, n + 3, n + 2);
     };
     for (let j = 0; j < ny - 1; j++)
       for (let i = 0; i < nx - 1; i++) {
         if (!capped(i, j)) continue;
         const k = (iy0 + j) * NX + ix0 + i;
         const p0 = put(k), p1 = put(k + 1), p2 = put(k + NX + 1), p3 = put(k + NX);
-        vi.push(p0, p3, p1, p1, p3, p2);
+        vi.push(p0, p1, p3, p1, p2, p3);
         if (!capped(i, j - 1)) wall(k, k + 1);
         if (!capped(i, j + 1)) wall(k + NX, k + NX + 1);
         if (!capped(i - 1, j)) wall(k, k + NX);
@@ -1367,8 +1373,13 @@ function updateFlow() {
       lat.induced(x, y, z, ux, uy, 0, true, flowV);
       const vx = aw.x + flowV[0], vy = aw.y + flowV[1], vz = flowV[2];
       const sp = Math.hypot(vx, vy, vz) || 1;
+      // Интегрирование остаётся в осях лодки. В локальные оси переводятся лишь
+      // касательная трубки и записываемая точка: когда знак адаптера изменится,
+      // уже переведённая касательная не должна попасть обратно в координату y.
+      const bx0 = vx / sp, by0 = vy / sp, bz0 = vz / sp;
       // Касательная в осях отрисовки: X в нос, Y вверх, Z вправо.
-      const tx = vx / sp, ty = vz / sp, tz = vy / sp;
+      const tx = bodyDirLocalX(bx0), ty = bodyDirLocalY(bz0),
+            tz = bodyDirLocalZ(by0);
       // Поперечный репер. Линии тока почти горизонтальны, так что мировая
       // вертикаль годится за опорную и вырождения не даёт.
       let ax = -tz, ay = 0, az = tx;
@@ -1388,9 +1399,9 @@ function updateFlow() {
         const ca = Math.cos(a), sa = Math.sin(a);
         const nx = ax * ca + bx * sa, ny = ay * ca + by * sa, nz = az * ca + bz * sa;
         const o = at * 3;
-        p[o] = x + nx * FLOW_R;
-        p[o + 1] = z + ny * FLOW_R;
-        p[o + 2] = y + nz * FLOW_R;
+        p[o] = bodyPointLocalX(x) + nx * FLOW_R;
+        p[o + 1] = bodyPointLocalY(z) + ny * FLOW_R;
+        p[o + 2] = bodyPointLocalZ(y) + nz * FLOW_R;
         // Затенение по нормали грани: сверху светлее, снизу темнее. Отсюда и
         // кант, который держит линию читаемой на любом фоне.
         const d = nx * FLOW_LIGHT[0] + ny * FLOW_LIGHT[1] + nz * FLOW_LIGHT[2];
@@ -1399,9 +1410,9 @@ function updateFlow() {
         at++;
       }
       if (k === FLOW_STEPS) break;
-      x += tx * FLOW_DS;
-      z = Math.max(0.15, z + ty * FLOW_DS);
-      y += tz * FLOW_DS;
+      x += bx0 * FLOW_DS;
+      y += by0 * FLOW_DS;
+      z = Math.max(0.15, z + bz0 * FLOW_DS);
     }
   }
   flowGeo.attributes.position.needsUpdate = true;
@@ -1613,14 +1624,15 @@ function cycleCam() {
 function readControls(dt) {
   const o = boat.o;
   let target = 0;
-  // Положительный угол пера уводит корму вправо и, значит, нос влево.
+  // Стрелка задаёт направление поворота НОСА, а не движение румпеля:
+  // вправо — положительная команда, влево — отрицательная.
   const left = keys.ArrowLeft || keys.KeyA;
   const right = keys.ArrowRight || keys.KeyD;
   // Взялся за руль — авторулевой отключается сам. Иначе он молча перебивает
   // стрелки, и создаётся полное впечатление, что управление не работает.
   if (left || right) autopilot = false;
-  if (left) target = 35 * D;
-  if (right) target = -35 * D;
+  if (left) target = -35 * D;
+  if (right) target = 35 * D;
   if (autopilot) {
     const err = wrapPi(apHeading - boat.psi);
     target = Math.max(-25 * D, Math.min(25 * D, -(2.2 * err - 0.9 * boat.r)));
@@ -1741,22 +1753,23 @@ function frame() {
   const iphi = prev.phi + (boat.phi - prev.phi) * a;
   const t = boat.telemetry || {};
 
-  boatGroup.position.set(ix, 0, iy);
+  boatGroup.position.set(toSceneX(ix), 0, toSceneZ(iy));
   boatGroup.rotation.order = 'YXZ';
-  boatGroup.rotation.y = -ipsi;
-  boatGroup.rotation.x = -iphi;
-  rudderPivot.rotation.y = -boat.o.rudder;
+  boatGroup.rotation.y = headingRotY(ipsi);
+  boatGroup.rotation.x = heelRotX(iphi);
+  rudderPivot.rotation.y = rudderRotY(boat.o.rudder);
 
   // Борт паруса берём у физики: там он с запасом на перекидывание и меняется
   // за конечное время, так что гик переходит плавно, а не телепортируется.
   // До первого шага физики он ещё не поставлен.
-  const side = boat.rigSide != null ? boat.rigSide : 1;
+  const side = rigSideZ(boat.rigSide != null ? boat.rigSide : 1);
   shapeSails(side);
 
   const amp = 0.10 + 0.035 * boat.o.windSpeed;
   updateWindMap();
-  sea.position.set(Math.round(ix / CELL) * CELL, 0, Math.round(iy / CELL) * CELL);
-  const dirX = Math.cos(boat.o.windDir), dirZ = Math.sin(boat.o.windDir);
+  sea.position.set(toSceneX(Math.round(ix / CELL) * CELL), 0,
+                   toSceneZ(Math.round(iy / CELL) * CELL));
+  const dirX = dirSceneX(boat.o.windDir), dirZ = dirSceneZ(boat.o.windDir);
   const pos = seaGeo.attributes.position.array;
   for (let i = 0, v = 0; i < pos.length; i += 3, v++) {
     if (seaAmp[v] === 0) { pos[i + 1] = 0; continue; }
@@ -1779,22 +1792,23 @@ function frame() {
   seaWindDir.value = boat.wind.o.dir + (boat.chanRot || 0);
   seaWindSpeed.value = boat.wind.o.speed;
   seaTime.value = boat.t;
-  updateGrid(ix, iy, now, dirX, dirZ, amp);
+  updateGrid(toSceneX(ix), toSceneZ(iy), now, dirX, dirZ, amp);
   curField.visible = debugOn && terrain.ready && boat.o.current > 0;
   if (debugOn) {
-    updateField(ix, iy, now);
+    updateField(toSceneX(ix), toSceneZ(iy), now);
     updateBattens(side);
     // Линии тока считаются по всей решётке в каждой точке — это дорого, и
     // каждый кадр не нужно: поток меняется не быстрее самой лодки.
-    flowGroup.position.set(ix, 0, iy);
-    flowGroup.rotation.y = -ipsi;
+    flowGroup.position.set(toSceneX(ix), 0, toSceneZ(iy));
+    flowGroup.rotation.y = headingRotY(ipsi);
     if ((tick % 12) === 0) updateFlow();
   }
 
   const spd = t.speed || 0;
   if ((tick % 2) === 0) {
     wakePts.unshift({
-      x: ix - 2.9 * Math.cos(ipsi), z: iy - 2.9 * Math.sin(ipsi),
+      x: toSceneX(ix - 2.9 * Math.cos(ipsi)),
+      z: toSceneZ(iy - 2.9 * Math.sin(ipsi)),
       psi: ipsi, w: 0.30 + 0.07 * spd });
     if (wakePts.length > WAKE) wakePts.length = WAKE;
   }
@@ -1804,7 +1818,7 @@ function frame() {
     const p = wakePts[i];
     const f = 1 - i / WAKE;
     const w = p.w * (0.8 + 0.9 * (1 - f));
-    const nx = -Math.sin(p.psi), nz = Math.cos(p.psi);
+    const nx = stbdSceneX(p.psi), nz = stbdSceneZ(p.psi);
     wp[i * 6] = p.x + nx * w; wp[i * 6 + 1] = 0.05; wp[i * 6 + 2] = p.z + nz * w;
     wp[i * 6 + 3] = p.x - nx * w; wp[i * 6 + 4] = 0.05; wp[i * 6 + 5] = p.z - nz * w;
     const b = f * f * Math.min(1, spd / 3);
@@ -1819,27 +1833,28 @@ function frame() {
 
   if ((tick % 6) === 0 && trackN < TRACK) {
     const tp = trackGeo.attributes.position.array;
-    tp[trackN * 3] = ix; tp[trackN * 3 + 1] = 0.06; tp[trackN * 3 + 2] = iy;
+    tp[trackN * 3] = toSceneX(ix); tp[trackN * 3 + 1] = 0.06;
+    tp[trackN * 3 + 2] = toSceneZ(iy);
     trackN++;
     trackGeo.setDrawRange(0, trackN);
     trackGeo.attributes.position.needsUpdate = true;
   }
 
-  arrow.position.set(ix + 4 * Math.cos(boat.o.windDir), 6.2,
-                     iy + 4 * Math.sin(boat.o.windDir));
+  arrow.position.set(toSceneX(ix + 4 * Math.cos(boat.o.windDir)), 6.2,
+                     toSceneZ(iy + 4 * Math.sin(boat.o.windDir)));
   // Стрелка показывает ветер У ЛОДКИ, а не положение ползунка: с канализацией
   // поток разворачивается к оси долины на десятки градусов, и стрелка,
   // оставленная на свободном ветре, спорила бы со стрелками поля вокруг —
   // те-то считают поворот в каждой точке. Два указателя ветра, показывающие
   // разное и не говорящие об этом, читаются как поломка.
-  arrow.rotation.y = Math.PI - (boat.o.windDir + (boat.chanRot || 0));
+  arrow.rotation.y = windRotY(boat.o.windDir + (boat.chanRot || 0));
 
   // Орты лодки в сцене: куда смотрит нос и где правый борт. Через них
   // камеры пишутся без тригонометрии в каждой строке и, главное, без шанса
   // случайно поставить камеру не с того борта.
-  const bx = ix, bz = iy;
-  const fx = Math.cos(ipsi), fz = Math.sin(ipsi);      // в нос
-  const sx = -Math.sin(ipsi), sz = Math.cos(ipsi);     // на правый борт
+  const bx = toSceneX(ix), bz = toSceneZ(iy);
+  const fx = bowSceneX(ipsi), fz = bowSceneZ(ipsi);     // в нос
+  const sx = stbdSceneX(ipsi), sz = stbdSceneZ(ipsi);   // на правый борт
   const at = (fwd, stb, h) =>
     new Vector3(bx + fwd * fx + stb * sx, h, bz + fwd * fz + stb * sz);
   let want;
@@ -1862,7 +1877,7 @@ function frame() {
   mark.visible = camMode === HIGH_CAM;
   if (mark.visible) {
     mark.position.set(bx, 1.0, bz);
-    mark.rotation.y = -ipsi;
+    mark.rotation.y = headingRotY(ipsi);
     mark.scale.setScalar(Math.max(60, camPos.y) / MARK_AT);
   }
   // Туман зависит от вида: с воды он в километре, с высоты в четырёх.
@@ -1959,7 +1974,7 @@ function updateRose(t) {
   // Ноль наверху — нос, положительный угол вправо, то есть на правый борт.
   const pt = (ang, r) => [56 + r * Math.sin(ang), 56 - r * Math.cos(ang)];
   // Ветер справа — вектор кажущегося дует на левый борт, то есть ay < 0.
-  const stbd = boat.apparentWind().angle > 0 ? -1 : 1;
+  const stbd = roseSide(boat.apparentWind().angle);
   const tw = (t.twaAbsDeg || 0) * D * stbd;
   const aw = (t.awaDeg || 0) * D * stbd;
   const [tx, ty] = pt(tw, R - 3);
@@ -2100,7 +2115,7 @@ if (typeof BUILD !== 'undefined' && BUILD) {
 // Тот же дамп доступен из консоли — удобно, когда файл забирать некуда:
 // copy(JSON.stringify(sv20dump()))
 window.sv20dump = dumpState;
-shapeSails(1);
+shapeSails(rigSideZ(1));
 setDebug(false);
 // WebGPU поднимается асинхронно: устройство запрашивается у системы. До этого
 // рисовать нечем, поэтому цикл запускается после init.

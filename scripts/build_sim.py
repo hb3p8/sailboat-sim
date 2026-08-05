@@ -25,8 +25,8 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 THREE_BUNDLE = "three.webgpu.js"
 
 # Всё, что вклеивается в страницу, в порядке объявления.
-MODULES = ["terrain.js", "wind.js", "vlm.js", "membrane.js", "waves.js",
-           "trace.js", "physics.js", "main.js"]
+MODULES = ["terrain.js", "axes.js", "wind.js", "vlm.js", "membrane.js",
+           "waves.js", "trace.js", "physics.js", "main.js"]
 
 
 def three_bundle(strip):

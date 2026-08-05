@@ -862,6 +862,167 @@ tip.position.x = 1.35;
 arrow.add(shaft, tip);
 scene.add(arrow);
 
+// --- струи ветра ---------------------------------------------------------------
+//
+// Не прибор, а ощущение. Отладочные стрелки отвечают на вопрос «сколько и куда»,
+// и отвечают точно; но пока смотришь на воду, а не на них, ветра не видно вовсе —
+// он ровный, и глазу не за что зацепиться. Струи дают то, чего числа не дают:
+// движение воздуха мимо лодки.
+//
+// Живут они в МИРОВЫХ осях, а не в осях лодки: ветер дует над рекой, а не вокруг
+// корпуса. Лодка проходит сквозь них, и это единственный способ показать, что
+// движется она, а не они.
+//
+// Три вещи, которые пришлось сделать не самым коротким способом, и каждая по
+// своей причине.
+//
+// **Разворот к камере — в вершинном узле.** Лента, лежащая в фиксированной
+// плоскости, с половины ракурсов видна с ребра и пропадает. Поэтому поперечное
+// смещение считается не здесь, а в шейдере: `нормаль = dir × (камера − точка)`.
+// Тогда лента всегда стоит лицом к глазу, как это делают с толстыми линиями.
+// Сюда же уходит и толщина: она задаётся в долях расстояния, так что дальние
+// струи не истончаются в невидимую нить.
+//
+// **Веретено, а не прямоугольник.** Три станции вдоль струи с шириной 0 — макс —
+// 0: оба конца сходятся в остриё. Прямоугольник давал срезанные торцы, и хвост
+// обрывался ножом.
+//
+// **Прозрачность по вершинам, а не цвет.** Гасить хвост цветом означает уводить
+// его в чёрный — на светлой воде это грязный след, а не растворение. Альфа
+// приходит отдельным атрибутом и уходит в `opacityNode`.
+
+const STREAK_N = 150;
+const STREAK_R = 70;                     // радиус, в котором держатся, м
+const STREAK_LO = 0.4, STREAK_HI = 14;   // высоты, м
+// Струя летит медленнее ветра: с его настоящей скоростью пучок превращается в
+// мельтешение, которое читается как помеха, а не как движение воздуха.
+const STREAK_SPEED = 0.45;
+// Толщина в долях расстояния до глаза — то есть почти постоянная на экране.
+const STREAK_THICK = 0.0034;
+// Станции вдоль струи: доля длины и полуширина в долях максимальной.
+const STREAK_ST = [[0.0, 0.0], [0.15, 1.0], [1.0, 0.0]];
+
+const streaks = [];
+const STREAK_V = STREAK_ST.length * 2;
+const streakGeo = new BufferGeometry();
+{
+  const n = STREAK_N * STREAK_V;
+  streakGeo.setAttribute('position', new Float32BufferAttribute(new Float32Array(n * 3), 3));
+  // Направление струи и знаковая полуширина: из них шейдер и строит ленту.
+  streakGeo.setAttribute('aDir', new Float32BufferAttribute(new Float32Array(n * 3), 3));
+  streakGeo.setAttribute('aWide', new Float32BufferAttribute(new Float32Array(n), 1));
+  streakGeo.setAttribute('aFade', new Float32BufferAttribute(new Float32Array(n), 1));
+  const idx = [];
+  for (let i = 0; i < STREAK_N; i++) {
+    const b = i * STREAK_V;
+    for (let k = 0; k < STREAK_ST.length - 1; k++) {
+      const a = b + k * 2;
+      idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+  }
+  streakGeo.setIndex(idx);
+}
+
+const streakMat = new MeshBasicNodeMaterial({
+  color: 0xffffff, transparent: true, depthWrite: false, side: DoubleSide });
+{
+  const centre = positionGeometry;
+  const dir = attribute('aDir', 'vec3');
+  const wide = attribute('aWide', 'float');
+  // Нормаль к струе, всегда лицом к глазу. Вырождение — когда смотришь вдоль
+  // струи — гасится тем, что длина векторного произведения там стремится к нулю
+  // вместе с видимой шириной: лента честно исчезает, а не дёргается.
+  const toEye = cameraPosition.sub(centre);
+  const side = cross(dir, toEye).normalize();
+  streakMat.positionNode = centre.add(side.mul(wide.mul(toEye.length()).mul(STREAK_THICK)));
+  streakMat.opacityNode = attribute('aFade', 'float');
+}
+if (typeof streakMat.positionNode !== 'object' || !streakMat.positionNode) {
+  throw new Error('TSL: выражение струй собралось не в узел');
+}
+const streakMesh = new Mesh(streakGeo, streakMat);
+streakMesh.frustumCulled = false;
+streakMesh.renderOrder = 2;
+scene.add(streakMesh);
+
+// Посадить струю заново. Первая раздача — по всему кругу, дальнейшие — строго с
+// наветра, чтобы струя прошла мимо, а не возникла посреди кадра. Разброс по
+// радиусу квадратный: иначе все скучиваются у центра, где площади мало.
+function seedStreak(st, ix, iy, dx, dz, fresh) {
+  const a = Math.random() * Math.PI * 2;
+  const r = STREAK_R * Math.sqrt(Math.random());
+  if (fresh) {
+    st.x = ix + Math.cos(a) * r;
+    st.z = iy + Math.sin(a) * r;
+  } else {
+    const back = STREAK_R * (0.85 + 0.3 * Math.random());
+    st.x = ix - dx * back + Math.cos(a) * r * 0.5;
+    st.z = iy - dz * back + Math.sin(a) * r * 0.5;
+  }
+  st.y = STREAK_LO + Math.random() * (STREAK_HI - STREAK_LO);
+  st.len = 9 + Math.random() * 22;
+  st.w = 0.5 + Math.random() * 1.1;
+  st.k = 0.75 + Math.random() * 0.5;    // своя скорость: пучок не идёт стенкой
+  st.fade = 0;                          // проявляется, а не возникает
+}
+
+function updateStreaks(ix, iy, dt) {
+  const ws = boat.o.windSpeed;
+  // В штиль струй нет вовсе: рисовать движение воздуха там, где его нет, значит
+  // врать ровно о том, ради чего они и заведены.
+  const amp = Math.max(0, Math.min(1, (ws - 1.2) / 5));
+  streakMesh.visible = amp > 0.01;
+  if (!streakMesh.visible) return;
+
+  // Направление — то же, что чувствует лодка: с поворотом к оси долины, если он
+  // есть. Иначе струи спорили бы со стрелками поля, а спорящие приборы хуже
+  // отсутствующих.
+  const dir = boat.o.windDir + (boat.chanRot || 0);
+  const dx = -dirSceneX(dir), dz = -dirSceneZ(dir);      // куда дует
+  const v = ws * STREAK_SPEED;
+
+  const p = streakGeo.attributes.position.array;
+  const ad = streakGeo.attributes.aDir.array;
+  const aw = streakGeo.attributes.aWide.array;
+  const af = streakGeo.attributes.aFade.array;
+
+  for (let i = 0; i < STREAK_N; i++) {
+    let st = streaks[i];
+    if (!st) { st = streaks[i] = {}; seedStreak(st, ix, iy, dx, dz, true); }
+    st.x += dx * v * st.k * dt;
+    st.z += dz * v * st.k * dt;
+    st.fade = Math.min(1, st.fade + dt * 0.8);
+    const away = Math.hypot(st.x - ix, st.z - iy);
+    if (away > STREAK_R * 1.25) seedStreak(st, ix, iy, dx, dz, false);
+
+    // Гаснут и на краю круга: иначе видно, как они возникают и пропадают.
+    const edge = Math.max(0, Math.min(1, (STREAK_R * 1.25 - away) / (STREAK_R * 0.4)));
+    // Плотность держится низкой нарочно: струи должны читаться боковым
+    // зрением и не спорить с парусами, когда смотришь на них.
+    const A = 0.62 * amp * st.fade * edge;
+    const L = st.len * (0.6 + 0.6 * amp);
+
+    for (let k = 0; k < STREAK_ST.length; k++) {
+      const [t, wk] = STREAK_ST[k];
+      // Голова — там, где струя сейчас; хвост тянется назад по потоку.
+      const cx = st.x - dx * L * t, cz = st.z - dz * L * t;
+      // Хвост растворяется: альфа падает к нулю вместе с длиной.
+      const fade = A * (1 - t) * (1 - t) * (1 - t);
+      for (let e = 0; e < 2; e++) {
+        const q = (i * STREAK_V + k * 2 + e);
+        p[q * 3] = cx; p[q * 3 + 1] = st.y; p[q * 3 + 2] = cz;
+        ad[q * 3] = dx; ad[q * 3 + 1] = 0; ad[q * 3 + 2] = dz;
+        aw[q] = (e ? -1 : 1) * wk * st.w;
+        af[q] = fade;
+      }
+    }
+  }
+  streakGeo.attributes.position.needsUpdate = true;
+  streakGeo.attributes.aDir.needsUpdate = true;
+  streakGeo.attributes.aWide.needsUpdate = true;
+  streakGeo.attributes.aFade.needsUpdate = true;
+}
+
 // --- отладочный слой: поле ветра и полоски рига -------------------------------
 //
 // Обе новые вещи — профиль ветра по высоте и разбивка парусов на полоски —
@@ -1793,6 +1954,7 @@ function frame() {
   seaWindSpeed.value = boat.wind.o.speed;
   seaTime.value = boat.t;
   updateGrid(toSceneX(ix), toSceneZ(iy), now, dirX, dirZ, amp);
+  updateStreaks(toSceneX(ix), toSceneZ(iy), dt);
   curField.visible = debugOn && terrain.ready && boat.o.current > 0;
   if (debugOn) {
     updateField(toSceneX(ix), toSceneZ(iy), now);

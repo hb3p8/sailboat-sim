@@ -817,14 +817,21 @@ new GLTFLoader()
     }
   }, undefined, err => console.warn('фигурка экипажа не загрузилась:', err));
 
+// Плечо: какой момент экипаж создаёт сейчас, делённый на его вес. Груз на левом
+// борту (+Y) даёт момент отрицательный, отсюда знак. Не ограничивается ничем:
+// фигурки обязаны стоять там, где физика держит экипаж, и если он окажется за
+// бортом — это и надо увидеть, а не спрятать.
+//
+// Считается в одном месте: то же плечо ставит фигурки и рисует стрелку их веса
+// в отладке баланса, и разъезжаться этим двум нельзя.
+function crewArm() {
+  const m = boat.o.crewMass;
+  return m > 0 ? boat.hike / (m * PACK.environment.g) : 0;
+}
+
 function updateCrew() {
   if (!crewFigs.length) return;
-  const m = boat.o.crewMass;
-  // Плечо: какой момент экипаж создаёт сейчас, делённый на его вес. Груз на
-  // левом борту (+Y) даёт момент отрицательный, отсюда знак. Не ограничивается
-  // ничем: фигурки обязаны стоять там, где физика держит экипаж, и если он
-  // окажется за бортом — это и надо увидеть, а не спрятать.
-  const arm = m > 0 ? boat.hike / (m * PACK.environment.g) : 0;
+  const arm = crewArm();
   // Поперёк фигурки двигает плечо, а разворачивает — борт паруса. Знак плеча
   // для разворота не годится: у оси он вырождается в ноль, и фигурки принялись
   // бы крутиться на месте. Борт берётся тем же выражением, каким рисуется
@@ -918,13 +925,15 @@ function balMark(colour) {
 // синее — вода, белое — вес, оранжевое — плавучесть.
 const BAL_C = { aero: 0xe8443a, drive: 0x2fb26a, side: 0xff8fa0,
                 hydro: 0x2f4f9e, hside: 0x8f9fd8, drag: 0xd8dee6,
-                cg: 0xffffff, buoy: 0xf0a03c };
+                cg: 0xffffff, buoy: 0xf0a03c, crew: 0xf4d35e };
 const balCe = balMark(BAL_C.aero), balClr = balMark(BAL_C.hydro);
 const balCg = balMark(BAL_C.cg), balB = balMark(BAL_C.buoy);
+const balCrewM = balMark(BAL_C.crew);
 const balAero = balArrow(BAL_C.aero, 0.05), balDrive = balArrow(BAL_C.drive, 0.03);
 const balSide = balArrow(BAL_C.side, 0.03), balHydro = balArrow(BAL_C.hydro, 0.05);
 const balHside = balArrow(BAL_C.hside, 0.03), balDrag = balArrow(BAL_C.drag, 0.03);
 const balW = balArrow(BAL_C.cg, 0.035), balO = balArrow(BAL_C.buoy, 0.035);
+const balCrew = balArrow(BAL_C.crew, 0.035);
 const balTab = document.getElementById('baltab');
 const balNote = document.getElementById('balnote');
 
@@ -970,6 +979,19 @@ function updateBalance() {
          -ux, -uy, -uz, BAL_PAIR);
   balSet(balO, bodyPointLocalX(b.bX), bodyPointLocalY(b.bZ),
          bodyPointLocalZ(b.bY), ux, uy, uz, BAL_PAIR);
+
+  // Экипаж. В модели он входит МОМЕНТОМ, а не грузом: его вес не садит лодку в
+  // воду и не меняет водоизмещение. Но момент этот — вес на плече, и рисовать
+  // его честнее всего именно так: стрелка вниз там, где сидят фигурки.
+  const arm = crewArm(), sh = CREW_SHEER[1];
+  const crewX = bodyPointLocalX(CREW_X[1]), crewY = bodyPointLocalY(sh[1]),
+        crewZ = bodyPointLocalZ(-arm);
+  balCrewM.visible = b.weightCrewN > 0;
+  balCrew.g.visible = balCrewM.visible;
+  if (balCrewM.visible) {
+    balCrewM.position.set(crewX, crewY, crewZ);
+    balSet(balCrew, crewX, crewY, crewZ, -ux, -uy, -uz, BAL_PAIR);
+  }
 }
 
 // Карточка обновляется втрое реже сцены: это цифры, а не движение.
@@ -994,7 +1016,10 @@ function updateBalCard() {
     row(BAL_C.cg, 'ЦТ', 'x ' + m1(b.cgX) + ', z ' + m1(b.cgZ),
         'вес ' + n0(b.weightN)) +
     row(BAL_C.buoy, 'ЦВ', 'x ' + m1(b.bX) + ', под ветер ' + m1(Math.abs(b.bY)),
-        'плавучесть ' + n0(b.weightN));
+        'плавучесть ' + n0(b.weightN)) +
+    row(BAL_C.crew, 'Экипаж', 'плечо ' + m1(Math.abs(crewArm())),
+        'вес ' + n0(b.weightCrewN) + ' → ' +
+        Math.round(Math.abs(b.hikeNm)) + ' Н·м');
   balNote.innerHTML =
     'плечо ЦП−ЦБС <b>' + lever.toFixed(2) + ' м</b> ' +
     (lever > 0.01 ? 'вперёд, приводит' : lever < -0.01 ? 'назад, уваливает'
@@ -1002,9 +1027,9 @@ function updateBalCard() {
     ' · кренит <b>' + Math.round(Math.abs(b.heelNm)) + '</b>, экипаж <b>' +
     Math.round(Math.abs(b.hikeNm)) + '</b>, корпус <b>' +
     Math.round(b.weightN * b.gzM) + '</b> Н·м<br>' +
-    'у сопротивления второе слагаемое — волновое · стрелки <b>1 м = ' +
-    BAL_NM + ' Н</b>, кроме веса с плавучестью: они всегда равны, и говорит ' +
-    'у них расхождение';
+    'второе слагаемое сопротивления — волновое · стрелки <b>1 м = ' +
+    BAL_NM + ' Н</b>, кроме вертикальных: у веса, плавучести и экипажа ' +
+    'говорит не длина, а плечо';
 }
 
 // --- сетка на воде ------------------------------------------------------------

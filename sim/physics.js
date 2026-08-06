@@ -1172,7 +1172,8 @@ export class Boat {
       hydroSideN: hy, dragN: hullDrag, hullN: dragN, wavesN: this.wavesN,
       keelN: keelSide, rudderN: rudSide, hullSideN: hull.fy,
       cgX: cgx, cgZ: cgz, bX: bx, bY: by, bZ: bz,
-      weightN: W, gzM: gz, hikeNm: this.hike,
+      weightN: W, weightCrewN: this.o.crewMass * env.g,
+      gzM: gz, hikeNm: this.hike,
       heelNm: sail.mx, yawNm: sail.mz,
     };
   }

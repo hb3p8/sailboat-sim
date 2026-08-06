@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
-"""Сжать фигурку экипажа: `models/lego_sailor.glb` -> `assets/crew.glb`.
+"""Сжать фигурку экипажа: `models/obj/` -> `assets/crew.glb`.
 
     python3 scripts/build_crew.py [--size 512] [--quality 88]
 
-Исходник — тринадцать с половиной мегабайт, и почти всё это одна текстура
-4096x4096. Геометрии в нём четырнадцать тысяч треугольников, то есть меньше
-процента веса. Поэтому работы здесь две и они разного рода:
+Исходник — двадцать пять мегабайт, и почти всё это текстуры 4096x4096, четыре
+штуки. Геометрии в нём четырнадцать тысяч треугольников, то есть меньше процента
+веса. Отсюда и работы разного рода:
 
-* текстура уменьшается и переводится в JPEG — здесь и лежат все мегабайты;
+* берётся одна текстура из четырёх — цвет; металличность, шероховатость и
+  нормали для фигурки в полтора метра ростом, которую видно с десяти, не дают
+  ничего, кроме веса;
+* она уменьшается и переводится в JPEG — здесь и лежат все мегабайты;
 * геометрия жмётся Draco — это уже gltf-transform, он вызывается ниже.
 
-Заодно выбрасывается то, что положил экспортёр Lighttracer и что нам не нужно:
-картинка предпросмотра, карта окружения в формате Radiance (лежит с подписью
-`image/png`, но PNG не является) и его собственные расширения материала.
+Раньше входом был GLB, сохранённый из Lighttracer. От него пришлось отказаться:
+текстура на фигурке оказалась перепутана — атлас из мелких лоскутов, и стоит
+разъехаться развёртке, как каждый треугольник берёт цвет с чужого лоскута.
+Выглядит это не как поломка, а как грязная раскраска, и на глаз ловится плохо.
+OBJ — то, что отдал исходный конвейер, до всякого редактора.
 
-Матрицы узлов запекаются в вершины, а масштаб делится на 39.370079 — экспортёр
-переводил метры в дюймы. После этого фигурка имеет рост 1.90 м в метрах glTF,
-как того требует формат. Больше ничего не запекается нарочно: как её повернуть и
-куда посадить — знание симулятора, и проверяется оно там, глазами, а не здесь.
+Нормалей в OBJ нет вовсе, они считаются здесь усреднением по позиции: файл
+помечен `s 0`, но плоские нормали на скруглённой фигурке дают гранёный шар
+вместо головы.
+
+Ничего, кроме этого, не запекается нарочно: как фигурку повернуть и куда
+посадить — знание симулятора, и проверяется оно там, глазами.
 """
 
 import argparse
@@ -32,69 +39,51 @@ import numpy as np
 from PIL import Image
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-SRC = os.path.join(ROOT, "models", "lego_sailor.glb")
+SRC = os.path.join(ROOT, "models", "obj")
 DST = os.path.join(ROOT, "assets", "crew.glb")
-INCH = 39.370079                      # чем экспортёр умножил метры
 
 
-def read_glb(path):
-    """Разобрать GLB на JSON и двоичный кусок."""
-    data = open(path, "rb").read()
-    magic, ver, _ = struct.unpack("<III", data[:12])
-    if magic != 0x46546C67:
-        raise SystemExit("%s не GLB" % path)
-    off, js, bin_ = 12, None, b""
-    while off < len(data):
-        clen, ctype = struct.unpack("<II", data[off:off + 8])
-        chunk = data[off + 8:off + 8 + clen]
-        if ctype == 0x4E4F534A:
-            js = json.loads(chunk)
-        else:
-            bin_ = chunk
-        off += 8 + clen
-    return js, bin_
+def read_obj(path):
+    """Разобрать OBJ: позиции, развёртка, треугольники и имя карты цвета.
+
+    Грани в файле бывают четырёх- и пятиугольные, поэтому режутся веером.
+    Вершина в OBJ — пара «позиция/точка развёртки», и одна позиция входит в
+    несколько пар: на швах развёртки её приходится раздваивать. Поэтому пары
+    сводятся в свой список, а нормали считаются ДО раздвоения, по позициям, —
+    иначе шов развёртки становится ещё и швом освещения.
+    """
+    v, vt, faces = [], [], []
+    mtl = None
+    for line in open(path, encoding="utf-8", errors="replace"):
+        w = line.split()
+        if not w:
+            continue
+        if w[0] == "v":
+            v.append([float(x) for x in w[1:4]])
+        elif w[0] == "vt":
+            vt.append([float(x) for x in w[1:3]])
+        elif w[0] == "mtllib":
+            mtl = w[1]
+        elif w[0] == "f":
+            poly = []
+            for tok in w[1:]:
+                a = tok.split("/")
+                poly.append((int(a[0]) - 1,
+                             int(a[1]) - 1 if len(a) > 1 and a[1] else -1))
+            for k in range(1, len(poly) - 1):
+                faces.append((poly[0], poly[k], poly[k + 1]))
+    return np.array(v, float), np.array(vt, float), faces, mtl
 
 
-def accessor(js, bin_, i):
-    """Прочитать accessor как массив numpy, учитывая чересстрочность."""
-    a = js["accessors"][i]
-    bv = js["bufferViews"][a["bufferView"]]
-    off = bv.get("byteOffset", 0) + a.get("byteOffset", 0)
-    kind = {5120: "i1", 5121: "u1", 5122: "i2",
-            5123: "u2", 5125: "u4", 5126: "f4"}[a["componentType"]]
-    ncomp = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}[a["type"]]
-    item = ncomp * np.dtype(kind).itemsize
-    stride = bv.get("byteStride") or item
-    raw = np.frombuffer(bin_, np.uint8, count=stride * a["count"], offset=off)
-    return raw.reshape(a["count"], stride)[:, :item].copy().view(kind) \
-              .reshape(a["count"], ncomp)
-
-
-def node_matrix(js, i):
-    """Матрица узла. В glTF она хранится по столбцам, numpy ждёт по строкам."""
-    n = js["nodes"][i]
-    if "matrix" in n:
-        return np.array(n["matrix"], float).reshape(4, 4).T
-    m = np.eye(4)
-    if "scale" in n:
-        m = np.diag(list(n["scale"]) + [1.0]) @ m
-    if "translation" in n:
-        m[:3, 3] += n["translation"]
-    return m
-
-
-def chain(js, i):
-    """Произведение матриц от корня до узла с сеткой."""
-    parent = {}
-    for k, n in enumerate(js["nodes"]):
-        for c in n.get("children", []):
-            parent[c] = k
-    m, cur = np.eye(4), i
-    while True:
-        m = node_matrix(js, cur) @ m
-        if cur not in parent:
-            return m
-        cur = parent[cur]
+def map_kd(path, mtl):
+    """Найти в MTL карту цвета. Остальные карты нам не нужны."""
+    if not mtl:
+        return None
+    for line in open(os.path.join(path, mtl), encoding="utf-8", errors="replace"):
+        w = line.split()
+        if w and w[0] == "map_Kd":
+            return w[-1]
+    return None
 
 
 def pad(b, fill=b"\0"):
@@ -111,51 +100,53 @@ def main():
                     help="не звать gltf-transform (для отладки)")
     args = ap.parse_args()
 
-    if not os.path.exists(SRC):
-        raise SystemExit("нет %s" % os.path.relpath(SRC, ROOT))
-    js, bin_ = read_glb(SRC)
+    objs = [f for f in sorted(os.listdir(SRC))] if os.path.isdir(SRC) else []
+    obj = next((f for f in objs if f.endswith(".obj")), None)
+    if not obj:
+        raise SystemExit("нет .obj в %s" % os.path.relpath(SRC, ROOT))
+    v, vt, faces, mtl = read_obj(os.path.join(SRC, obj))
+    print("%s: позиций %d, точек развёртки %d, треугольников %d"
+          % (obj, len(v), len(vt), len(faces)))
 
-    if len(js["meshes"]) != 1 or len(js["meshes"][0]["primitives"]) != 1:
-        raise SystemExit("ожидалась одна сетка с одним примитивом")
-    prim = js["meshes"][0]["primitives"][0]
-    pos = accessor(js, bin_, prim["attributes"]["POSITION"]).astype(np.float32)
-    nrm = accessor(js, bin_, prim["attributes"]["NORMAL"]).astype(np.float32)
-    uv = accessor(js, bin_, prim["attributes"]["TEXCOORD_0"]).astype(np.float32)
-    idx = accessor(js, bin_, prim["indices"]).ravel().astype(np.uint32)
+    # Нормали по позициям, с весом по площади: длина векторного произведения и
+    # есть удвоенная площадь, поэтому ничего нормировать до сложения не нужно.
+    tri = np.array([[a[0], b[0], c[0]] for a, b, c in faces])
+    fn = np.cross(v[tri[:, 1]] - v[tri[:, 0]], v[tri[:, 2]] - v[tri[:, 0]])
+    vn = np.zeros_like(v)
+    for k in range(3):
+        np.add.at(vn, tri[:, k], fn)
+    vn /= np.maximum(1e-12, np.linalg.norm(vn, axis=1))[:, None]
 
-    # Узел с сеткой ищется по ссылке, а не по номеру: у экспортёра сетка висит
-    # третьим узлом, но полагаться на это незачем.
-    node = next(k for k, n in enumerate(js["nodes"]) if n.get("mesh") == 0)
-    m = chain(js, node)
-    # Делятся первые три строки, а не вся матрица: они и есть преобразование
-    # точки, и делить их на INCH значит перевести дюймы в метры разом и в
-    # повороте с масштабом, и в переносе. Нижняя строка к точкам отношения не
-    # имеет, а поделённая портит однородную координату.
-    m[:3, :] /= INCH
-    # errstate — не глушение ошибки, а глушение ложной тревоги: numpy 2 выдаёт
-    # на matmul предупреждения о делении на ноль и переполнении, потому что BLAS
-    # выставляет флаги сопроцессора на добивочных дорожках вектора. Проверено:
-    # ни в исходных нормалях, ни в результате нет ни NaN, ни бесконечностей, ни
-    # нулевой длины.
-    with np.errstate(all="ignore"):
-        pos = (np.c_[pos.astype(np.float64), np.ones(len(pos))] @ m.T)[:, :3] \
-            .astype(np.float32)
-        # Нормали преобразуются обратной транспонированной, иначе при
-        # неравномерном масштабе они перестают быть перпендикулярны поверхности.
-        nm = np.linalg.inv(m[:3, :3]).T
-        nrm = (nrm.astype(np.float64) @ nm.T).astype(np.float32)
-    nrm /= np.maximum(1e-9, np.linalg.norm(nrm, axis=1))[:, None]
+    # Пары «позиция/развёртка» — это и есть вершины glTF.
+    pairs = {}
+    idx = np.empty(len(faces) * 3, np.uint32)
+    for f, face in enumerate(faces):
+        for k, pair in enumerate(face):
+            j = pairs.get(pair)
+            if j is None:
+                j = pairs[pair] = len(pairs)
+            idx[f * 3 + k] = j
+    order = sorted(pairs, key=pairs.get)
+    pos = np.array([v[a] for a, _ in order], np.float32)
+    nrm = np.array([vn[a] for a, _ in order], np.float32)
+    # Развёртка в OBJ считается снизу вверх, в glTF сверху вниз.
+    uv = np.array([[vt[b][0], 1.0 - vt[b][1]] for _, b in order], np.float32)
+
+    # Никаких матриц узлов: в OBJ их нет, а сама сетка уже стоит вертикально
+    # (Y вверх) и в метрах — ровно то, чего требует glTF. Прежний GLB приходилось
+    # ещё и делить на 39.370079: экспортёр переводил метры в дюймы.
 
     lo, hi = pos.min(0), pos.max(0)
-    print("габарит, м: %.3f x %.3f x %.3f (рост по Y)" % tuple(hi - lo))
-    print("вершин %d, треугольников %d" % (len(pos), len(idx) // 3))
+    print("габарит: %.3f x %.3f x %.3f (рост по Y), вершин %d"
+          % (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2], len(pos)))
 
-    # Текстура. Альфа у неё сплошная, так что JPEG ничего не теряет, а весит он
+    # Текстура. Альфы у неё нет, так что JPEG ничего не теряет, а весит он
     # против PNG в разы меньше.
-    tex_i = js["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["index"]
-    img_i = js["textures"][tex_i]["source"]
-    bv = js["bufferViews"][js["images"][img_i]["bufferView"]]
-    src = bin_[bv.get("byteOffset", 0):bv.get("byteOffset", 0) + bv["byteLength"]]
+    kd = map_kd(SRC, mtl)
+    if not kd:
+        raise SystemExit("в %s не нашлось map_Kd" % mtl)
+    src_path = os.path.join(SRC, os.path.basename(kd))
+    src = open(src_path, "rb").read()
     im = Image.open(io.BytesIO(src))
     was = im.size
     im = im.convert("RGB").resize((args.size, args.size), Image.LANCZOS)
@@ -200,7 +191,7 @@ def main():
 
     out = {
         "asset": {"version": "2.0",
-                  "generator": "sv20 build_crew.py из %s" % os.path.basename(SRC)},
+                  "generator": "sv20 build_crew.py из %s" % obj},
         "scene": 0,
         "scenes": [{"nodes": [0]}],
         "nodes": [{"mesh": 0, "name": "crew"}],
@@ -212,9 +203,9 @@ def main():
                        "pbrMetallicRoughness": {
                            "baseColorTexture": {"index": 0},
                            "metallicFactor": 0.0,
-                           "roughnessFactor": float(
-                               js["materials"][0]["pbrMetallicRoughness"]
-                               .get("roughnessFactor", 0.5))}}],
+                           # Шероховатость одним числом: карту мы не берём, а
+                       # пластик у фигурки везде один.
+                       "roughnessFactor": 0.55}}],
         "textures": [{"source": 0, "sampler": 0}],
         "images": [{"bufferView": tex_view, "mimeType": "image/jpeg"}],
         "samplers": [{"magFilter": 9729, "minFilter": 9987,
@@ -255,9 +246,10 @@ def main():
             return
         os.remove(tmp)
 
+    was_mb = sum(os.path.getsize(os.path.join(SRC, f))
+                 for f in os.listdir(SRC)) / 1048576
     print("%s — %.0f КБ (было %.1f МБ)"
-          % (os.path.relpath(DST, ROOT), os.path.getsize(DST) / 1024,
-             os.path.getsize(SRC) / 1048576))
+          % (os.path.relpath(DST, ROOT), os.path.getsize(DST) / 1024, was_mb))
 
 
 if __name__ == "__main__":

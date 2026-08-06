@@ -19,9 +19,13 @@
 и никакой другой. Слушается только петля: наружу это не смотрит и смотреть не
 должно.
 
-Самодостаточные страницы никуда не деваются. `sim/index.html` открывается
-двойным кликом как открывался, `viewer/terrain.html` — тоже; без сервера у него
-просто не будет полей физики и разметки, о чём страница и скажет.
+**Отдавать ассеты.** Сюда переехало всё, что весит и что незачем вклеивать:
+фигурки экипажа и то, что появится дальше. Модели лежат в `assets/`, распаковщик
+Draco — в `viewer/vendor/draco/`.
+
+Страницы по-прежнему открываются двойным кликом, но уже не в полном составе:
+`sim/index.html` без сервера покажет лодку без экипажа, `viewer/terrain.html` —
+без полей физики и разметки. Обе об этом скажут, а не сломаются.
 """
 
 import argparse
@@ -124,6 +128,12 @@ def _line(it):
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    # Типы, которых нет в системной таблице python: без них .glb приезжает
+    # как text/html и загрузчик спотыкается на первой же строке разбора.
+    extensions_map = dict(http.server.SimpleHTTPRequestHandler.extensions_map,
+                          **{".glb": "model/gltf-binary",
+                             ".gltf": "model/gltf+json",
+                             ".wasm": "application/wasm"})
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=ROOT, **kw)
 

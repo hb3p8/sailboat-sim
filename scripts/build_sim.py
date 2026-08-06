@@ -23,16 +23,59 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 # три­х исходных сборок three между собой перекрёстные импорты с
 # переименованием (`log as log$1`), и простая склейка на них ломается.
 THREE_BUNDLE = "three.webgpu.js"
+# Загрузчик glTF с распаковкой Draco — те же examples/jsm, прогнанные esbuild с
+# `--external:three`: импорты у него остаются к именам, которые уже в области
+# видимости после вклейки ядра. Нужен ради ассетов, которые страница берёт с
+# сервера, — фигурки экипажа и всего, что появится дальше.
+GLTF_BUNDLE = "three.gltf.js"
 
 # Всё, что вклеивается в страницу, в порядке объявления.
 MODULES = ["terrain.js", "axes.js", "wind.js", "vlm.js", "membrane.js",
            "waves.js", "trace.js", "physics.js", "main.js"]
 
 
+def alias_three_imports(src):
+    """Превратить `import { A as A2 } from "three"` в `const A2 = A;`.
+
+    Загрузчик собран с `--external:three`, поэтому импорты в нём остаются. Просто
+    снять их, как у ядра, нельзя: esbuild переименовывает то, что столкнулось у
+    него внутри, — `Quaternion as Quaternion2`, — и после снятия импорта имя
+    `Quaternion2` не объявлено нигде. Страница падает на первой же строке
+    загрузчика. Ровно эта ловушка описана в viewer/vendor/README.md, только там
+    она случилась внутри самого three.
+
+    Непереименованные имена не трогаем: после вклейки ядра они уже в области
+    видимости.
+    """
+    seen = set()
+
+    def repl(m):
+        out = []
+        for part in m.group(1).split(","):
+            part = part.strip()
+            if " as " not in part:
+                continue
+            src_name, dst = (x.strip() for x in part.split(" as "))
+            if dst in seen:
+                continue
+            seen.add(dst)
+            out.append("const %s = %s;" % (dst, src_name))
+        return "\n".join(out)
+
+    src, n = re.subn(r"import\s*\{([^}]*)\}\s*from\s*[\'\"]three[\'\"];",
+                     repl, src)
+    if not n:
+        raise SystemExit("в %s не найдено импортов из three — сборка изменилась"
+                         % GLTF_BUNDLE)
+    return src
+
+
 def three_bundle(strip):
-    """Прочитать вендоренный three и снять с него import/export."""
-    path = os.path.join(ROOT, "viewer", "vendor", THREE_BUNDLE)
-    return strip(open(path).read())
+    """Прочитать вендоренный three с загрузчиком и снять с них import/export."""
+    core = os.path.join(ROOT, "viewer", "vendor", THREE_BUNDLE)
+    gltf = os.path.join(ROOT, "viewer", "vendor", GLTF_BUNDLE)
+    return strip(open(core).read()) + "\n" + \
+        strip(alias_three_imports(open(gltf).read()))
 
 
 def _git(*args):

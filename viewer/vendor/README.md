@@ -53,6 +53,32 @@ esbuild разрешает импорты между файлами и сам п
   единой ошибки в консоли. На старте `sim/main.js` стоит проверка на такое
   перекрытие.
 
+## `three.gltf.js` и `draco/`
+
+Загрузчик glTF с распаковкой Draco. Появился, когда странице понадобились
+ассеты, которые незачем вклеивать: фигурка экипажа весит сто килобайт против
+шести мегабайт самой страницы, и вклеивать её значило бы пересобирать страницу
+ради каждой правки модели. Их отдаёт `scripts/serve.py`.
+
+Собирается тем же esbuild, но с `--external:three`: ядро уже вклеено, второй раз
+оно не нужно. Отсюда ловушка, стоившая отдельной функции в `build_sim.py`. У
+загрузчика остаются импорты из `three`, а esbuild в них переименовывает то, что
+столкнулось внутри его собственной сборки:
+
+    import { Quaternion as Quaternion2, ... } from "three";
+
+Снять такой импорт, как у ядра, нельзя: `Quaternion2` после этого не объявлен
+нигде, и страница падает на первой же строке загрузчика. Поэтому
+`alias_three_imports` превращает каждое переименование в `const Quaternion2 =
+Quaternion;`, а непереименованные имена оставляет как есть — они уже в области
+видимости. Это та же ловушка, что описана выше про `log as log$1`, только
+снаружи.
+
+Распаковщик Draco в `draco/` — не код, а данные: `draco_wasm_wrapper.js` и
+`draco_decoder.wasm` из `examples/jsm/libs/draco/gltf/`. Берётся именно вариант
+`gltf/`, он вдвое меньше общего. Эти два файла страница забирает с сервера в тот
+момент, когда впервые встречает сжатую сетку.
+
 ## Обновление
 
     npm pack three@<версия>
@@ -60,6 +86,17 @@ esbuild разрешает импорты между файлами и сам п
     npx esbuild package/build/three.webgpu.js --bundle --format=esm \
         --outfile=viewer/vendor/three.webgpu.js
     cp package/LICENSE viewer/vendor/LICENSE-three.txt
+
+Загрузчик — из того же пакета, одной точкой входа на два класса:
+
+    printf "export { GLTFLoader } from './GLTFLoader.js';\n\
+    export { DRACOLoader } from './DRACOLoader.js';\n" \
+        > package/examples/jsm/loaders/_entry.js
+    npx esbuild package/examples/jsm/loaders/_entry.js --bundle --format=esm \
+        --external:three --outfile=viewer/vendor/three.gltf.js
+    cp package/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js \
+       package/examples/jsm/libs/draco/gltf/draco_decoder.wasm \
+       viewer/vendor/draco/
 
 После обновления обязательно прогнать `make viewer sim` и открыть оба файла:
 склейка ломается молча.

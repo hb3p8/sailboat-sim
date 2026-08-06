@@ -1,7 +1,7 @@
 PY ?= python3
 VENV := .venv/bin/python
 
-.PHONY: all extract hull viewer export physics sim terrain terrain-pack serve test slow all-tests fit clean
+.PHONY: all extract hull viewer export physics sim terrain terrain-pack crew serve test slow all-tests fit clean
 
 all: viewer export sim
 
@@ -68,6 +68,14 @@ viewer/terrain.html: scripts/build_terrain_viewer.py out/terrain.json \
 	$(VENV) scripts/build_terrain_viewer.py
 
 terrain: viewer/terrain.html
+
+# Фигурка экипажа: тринадцать мегабайт исходника в сто килобайт ассета. В `all`
+# не входит: исходник в репозитории не лежит (велик), а результат лежит и меняться
+# ему незачем. Нужен pillow с numpy, то есть .venv, и npx для Draco.
+assets/crew.glb: scripts/build_crew.py models/lego_sailor.glb
+	$(VENV) scripts/build_crew.py
+
+crew: assets/crew.glb
 
 # Локальный сервер. Нужен просмотрщику акватории: поля физики он читает по
 # частям, а разметку пишет обратно на диск, и ни того, ни другого `file://` не

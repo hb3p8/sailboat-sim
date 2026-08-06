@@ -599,7 +599,8 @@ export class Boat {
         });
       }
     }
-    this.sailOut = { fx: 0, fy: 0, fz: 0, mx: 0, mz: 0, ceZ: 0,
+    this.sailOut = { fx: 0, fy: 0, fz: 0, mx: 0, mz: 0,
+                     ceX: 0, ceY: 0, ceZ: 0,
                      awa: 0, awaEff: 0, alpha: 0, cl: 0, area: 0 };
     // Вихревая решётка на весь риг сразу: гроту и стакселю положено знать друг
     // о друге, и в одной решётке они узнают об этом сами.
@@ -717,7 +718,8 @@ export class Boat {
     const out = this.sailOut;
     out.fx = 0; out.fy = 0; out.fz = 0; out.mx = 0; out.mz = 0;
     out.awa = Math.PI - Math.abs(aw.angle);
-    out.awaEff = 0; out.alpha = 0; out.cl = 0; out.area = 0; out.ceZ = 0;
+    out.awaEff = 0; out.alpha = 0; out.cl = 0; out.area = 0;
+    out.ceX = 0; out.ceY = 0; out.ceZ = 0;
 
     const rigSide = this.rigSide;
     // Натянут ли шкот. Мерой служит угол атаки у нижней шкаторины: пока он
@@ -1087,7 +1089,10 @@ export class Boat {
       out.awaEff += g.awa * g.area; out.alpha += -rigSide * alpha * g.area;
       out.cl += Math.abs(k.cl) * g.area;
       const w = Math.abs(f2);
-      load += w; out.ceZ += g.zi * w;
+      // Центр парусности — не геометрический центр парусов, а центр НАГРУЗКИ:
+      // взвешенный по боковой силе полосок. Он и уходит с твистом, с пузом, с
+      // заполаскиванием, тогда как геометрический стоит на месте.
+      load += w; out.ceX += g.xi * w; out.ceY += g.yi * w; out.ceZ += g.zi * w;
 
       d.awaDeg = g.awa / DEG;
       // Знак угла атаки зависит от галса: с одного борта он положительный, с
@@ -1115,8 +1120,61 @@ export class Boat {
     if (out.area > 0) {
       out.awaEff /= out.area; out.alpha /= out.area; out.cl /= out.area;
     }
-    out.ceZ = load > 1e-6 ? out.ceZ / load : rig.ce_height_m * cphi;
+    if (load > 1e-6) {
+      out.ceX /= load; out.ceY /= load; out.ceZ /= load;
+    } else {
+      out.ceX = rig.ce_x_m; out.ceY = 0; out.ceZ = rig.ce_height_m * cphi;
+    }
     return out;
+  }
+
+  // Точки приложения сил и сами силы — для отладочного вида баланса.
+  //
+  // Ни одна из этих точек в расчёте не участвует: моменты собираются по
+  // полоскам паруса и по полоскам корпуса, у каждой своё плечо, и общий центр
+  // назначать не нужно. Здесь он восстанавливается ОБРАТНО — из силы и момента,
+  // — потому что человеку смотреть удобнее на пару «точка и стрелка», чем на
+  // сумму двадцати слагаемых. Восстановление честное: точка выбирается так,
+  // чтобы одна сила в ней давала тот же момент, что вся сумма.
+  //
+  // У пары «вес и плавучесть» точка приложения второй считается из плеча GZ:
+  // именно оно и есть всё содержание остойчивости, а положение центра величины
+  // по высоте берётся из гидростатики.
+  balanceOf(sail, wind, keelSide, rudSide, hull, dragN, gz, hullDrag) {
+    const P = this.p, m = P.mass, hs = P.hydrostatics, env = P.environment;
+    const cgx = m.cg_m[0], cgz = m.cg_m[2];
+    const keel = P.foils.keel, rud = P.foils.rudder;
+    // Боковая сила воды и её момент вокруг ЦТ. Точка приложения — там, где
+    // одна эта сила дала бы тот же момент.
+    const hy = keelSide + rudSide + hull.fy;
+    const hmz = keelSide * (keel.x_m - cgx) + rudSide * (rud.x_m - cgx) + hull.mz;
+    const hullZ = -0.5 * (hull.depth || hs.draft_canoe_m);
+    const hmx = keelSide * keel.z_centre_m + rudSide * rud.z_centre_m +
+                hull.fy * hullZ;
+    const small = Math.abs(hy) < 5;         // на стоянке точка вырождается
+    const W = this.mass * env.g;
+    const sphi = Math.sin(this.phi), cphi = Math.cos(this.phi);
+    // Центр величины: по длине и высоте из таблицы на рабочей ватерлинии, а
+    // поперёк — из плеча. Знак тот же, что у восстанавливающего момента.
+    const t0 = hs.table && hs.table.length
+      ? hs.table.reduce((a, b) => Math.abs(b.wl_mm) < Math.abs(a.wl_mm) ? b : a)
+      : null;
+    const bx = t0 ? t0.lcb_mm / 1000 : cgx;
+    const bz = t0 ? t0.vcb_mm / 1000 : cgz - 0.05;
+    const by = Math.abs(cphi) > 1e-3
+      ? (-Math.sign(this.phi || 1) * gz + (bz - cgz) * sphi) / cphi : 0;
+    return {
+      ceX: sail.ceX, ceY: sail.ceY, ceZ: sail.ceZ,
+      driveN: sail.fx, sideN: sail.fy, liftN: sail.fz,
+      windFx: wind.fx, windFy: wind.fy, windZ: wind.z,
+      clrX: small ? cgx : cgx + hmz / hy,
+      clrZ: small ? hullZ : hmx / hy,
+      hydroSideN: hy, dragN: hullDrag,
+      keelN: keelSide, rudderN: rudSide, hullSideN: hull.fy,
+      cgX: cgx, cgZ: cgz, bX: bx, bY: by, bZ: bz,
+      weightN: W, gzM: gz, hikeNm: this.hike,
+      heelNm: sail.mx, yawNm: sail.mz,
+    };
   }
 
   // Сопротивление корпуса по скорости И КРЕНУ.
@@ -1211,7 +1269,10 @@ export class Boat {
       fy += f;
       mz += f * arm;
     }
-    return { fy: fy, mz: mz };
+    // Глубина отдаётся наружу: по ней отладочный вид баланса ставит точку
+    // приложения боковой силы корпуса, а считать её второй раз значило бы
+    // завести второй источник правды.
+    return { fy: fy, mz: mz, depth: depth };
   }
 
   // Сила крыла сразу в связанных осях. Так не нужно отдельно решать, куда
@@ -1570,6 +1631,8 @@ export class Boat {
       sogKn: this.sog * 1.94384,
       sternway: this.u < -0.15,
       gzM: gz, yawRate: this.r / DEG,
+      balance: this.balanceOf(sail, wind, keelSide, rudSide, hull, rt + raw,
+                              gz, hullDrag),
       vmg: speed * Math.cos(this.trueWindAngle()) * 1.94384,
       twaAbsDeg: Math.abs(this.trueWindAngle()) / DEG,
     };

@@ -851,6 +851,159 @@ function updateCrew() {
     (boat.o.crewHike * 100).toFixed(0) + '% · плечо ' + Math.abs(arm).toFixed(2) + ' м';
 }
 
+// --- баланс: центры и приложенные к ним силы -----------------------------------
+//
+// Вид с картинки из учебника: центр парусности, центр бокового сопротивления,
+// центр тяжести и центр величины, и в каждом — сила, которая там приложена.
+//
+// Смысл его не в красоте, а в том, что ни одной из этих точек в расчёте нет.
+// Моменты собираются по полоскам паруса и по полоскам корпуса, у каждой своё
+// плечо; общий центр не нужен и не назначается. Здесь он восстановлен обратно
+// из силы и момента — и потому это ещё и проверка: если точка уехала в нос
+// сильнее, чем можно объяснить твистом и заполаскиванием, значит разъехалось
+// что-то в сборке моментов.
+//
+// Стрелки в масштабе, кроме веса и плавучести: пятьсот восемьдесят килограммов
+// в том же масштабе давали бы стрелку в тридцать метров, а сказать им нечего —
+// они всегда равны друг другу. Всё содержание в их РАСХОЖДЕНИИ, то есть в
+// плече GZ, и оно нарисовано как есть.
+
+const BAL_NM = 400;                  // ньютонов на метр стрелки
+const BAL_PAIR = 1.1;                // длина стрелок веса и плавучести, м
+const balGroup = new Group();
+boatGroup.add(balGroup);
+balGroup.visible = false;
+
+// Стрелка из цилиндра с конусом, а не линия: линия в WebGL толщиной в пиксель,
+// и на воде под острым углом её не видно вовсе.
+function balArrow(colour, r) {
+  const mat = new MeshBasicMaterial({ color: colour, depthTest: false,
+                                      transparent: true, opacity: 0.95 });
+  const shaft = new Mesh(new CylinderGeometry(r, r, 1, 8), mat);
+  const head = new Mesh(new ConeGeometry(r * 2.6, r * 7, 12), mat);
+  const g = new Group();
+  g.add(shaft, head);
+  g.renderOrder = 6;
+  balGroup.add(g);
+  return { g: g, shaft: shaft, head: head, r: r };
+}
+
+const BAL_UP = new Vector3(0, 1, 0);
+const balDir = new Vector3(), balAt = new Vector3();
+
+// Поставить стрелку: начало, направление и длина — всё в осях модели.
+function balSet(a, x, y, z, dx, dy, dz, len) {
+  const m = Math.hypot(dx, dy, dz);
+  const hide = !(m > 1e-6) || !(len > 0.05);
+  a.g.visible = !hide;
+  if (hide) return;
+  a.g.position.set(x, y, z);
+  balDir.set(dx / m, dy / m, dz / m);
+  a.g.quaternion.setFromUnitVectors(BAL_UP, balDir);
+  const hl = Math.min(a.r * 7, len * 0.4);
+  a.shaft.scale.y = len - hl;
+  a.shaft.position.y = (len - hl) / 2;
+  a.head.position.y = len - hl / 2;
+}
+
+function balMark(colour) {
+  const m = new Mesh(new SphereGeometry(0.075, 12, 8),
+                     new MeshBasicMaterial({ color: colour, depthTest: false }));
+  m.renderOrder = 7;
+  balGroup.add(m);
+  return m;
+}
+
+// Цвета взяты по смыслу и повторены в подписи карточки: красное — воздух,
+// синее — вода, белое — вес, оранжевое — плавучесть.
+const BAL_C = { aero: 0xe8443a, drive: 0x2fb26a, side: 0xff8fa0,
+                hydro: 0x2f4f9e, hside: 0x8f9fd8, drag: 0xd8dee6,
+                cg: 0xffffff, buoy: 0xf0a03c };
+const balCe = balMark(BAL_C.aero), balClr = balMark(BAL_C.hydro);
+const balCg = balMark(BAL_C.cg), balB = balMark(BAL_C.buoy);
+const balAero = balArrow(BAL_C.aero, 0.05), balDrive = balArrow(BAL_C.drive, 0.03);
+const balSide = balArrow(BAL_C.side, 0.03), balHydro = balArrow(BAL_C.hydro, 0.05);
+const balHside = balArrow(BAL_C.hside, 0.03), balDrag = balArrow(BAL_C.drag, 0.03);
+const balW = balArrow(BAL_C.cg, 0.035), balO = balArrow(BAL_C.buoy, 0.035);
+const balTab = document.getElementById('baltab');
+const balNote = document.getElementById('balnote');
+
+function updateBalance() {
+  const t = boat.telemetry, b = t && t.balance;
+  if (!b) return;
+  const k = 1 / BAL_NM;
+  // Точки: из осей лодки в оси модели, теми же переводами, что и всё остальное.
+  const put = (mk, x, y, z) => mk.position.set(
+    bodyPointLocalX(x), bodyPointLocalY(z), bodyPointLocalZ(y));
+  put(balCe, b.ceX, b.ceY, b.ceZ);
+  put(balClr, b.clrX, 0, b.clrZ);
+  put(balCg, b.cgX, 0, b.cgZ);
+  put(balB, b.bX, b.bY, b.bZ);
+
+  // Аэродинамика в ЦП: равнодействующая и её составляющие — тяга вдоль лодки и
+  // кренящая поперёк. Вертикальная составляющая есть, но она мала и картинку
+  // только засоряет.
+  const cx = bodyPointLocalX(b.ceX), cy = bodyPointLocalY(b.ceZ),
+        cz = bodyPointLocalZ(b.ceY);
+  const ax = bodyDirLocalX(b.driveN), ay = bodyDirLocalY(0),
+        az = bodyDirLocalZ(b.sideN);
+  balSet(balAero, cx, cy, cz, ax, ay, az, Math.hypot(b.driveN, b.sideN) * k);
+  balSet(balDrive, cx, cy, cz, bodyDirLocalX(1), 0, 0, Math.abs(b.driveN) * k);
+  balDrive.g.visible = balDrive.g.visible && b.driveN > 0;
+  balSet(balSide, cx, cy, cz, 0, 0, bodyDirLocalZ(b.sideN),
+         Math.abs(b.sideN) * k);
+
+  // Гидродинамика в ЦБС: то же самое, только сопротивление направлено назад.
+  const hx = bodyPointLocalX(b.clrX), hy = bodyPointLocalY(b.clrZ), hz = 0;
+  balSet(balHydro, hx, hy, hz, bodyDirLocalX(b.dragN), 0,
+         bodyDirLocalZ(b.hydroSideN), Math.hypot(b.dragN, b.hydroSideN) * k);
+  balSet(balHside, hx, hy, hz, 0, 0, bodyDirLocalZ(b.hydroSideN),
+         Math.abs(b.hydroSideN) * k);
+  balSet(balDrag, hx, hy, hz, bodyDirLocalX(b.dragN), 0, 0,
+         Math.abs(b.dragN) * k);
+
+  // Вес и плавучесть — по МИРОВОЙ вертикали, а не по палубе: в этом вся суть
+  // пары. Верх мира в осях лодки при крене phi есть (0, sin phi, cos phi).
+  const sp = Math.sin(boat.phi), cp = Math.cos(boat.phi);
+  const ux = 0, uy = bodyDirLocalY(cp), uz = bodyDirLocalZ(sp);
+  balSet(balW, bodyPointLocalX(b.cgX), bodyPointLocalY(b.cgZ), 0,
+         -ux, -uy, -uz, BAL_PAIR);
+  balSet(balO, bodyPointLocalX(b.bX), bodyPointLocalY(b.bZ),
+         bodyPointLocalZ(b.bY), ux, uy, uz, BAL_PAIR);
+}
+
+// Карточка обновляется втрое реже сцены: это цифры, а не движение.
+function updateBalCard() {
+  const t = boat.telemetry, b = t && t.balance;
+  if (!b) return;
+  const sw = c => '<i style="background:#' + c.toString(16).padStart(6, '0') + '"></i>';
+  const row = (c, name, geom, force) =>
+    '<tr><td class="n">' + sw(c) + name + '</td><td>' + geom +
+    '</td><td class="v">' + force + '</td></tr>';
+  const m1 = v => v.toFixed(2) + ' м';
+  const n0 = v => Math.round(v) + ' Н';
+  // Плечо ЦП—ЦБС: положительное, когда парус впереди, — это и есть приводящий.
+  const lever = b.ceX - b.clrX;
+  balTab.innerHTML =
+    row(BAL_C.aero, 'ЦП', 'x ' + m1(b.ceX) + ', высота ' + m1(b.ceZ),
+        'тяга ' + n0(b.driveN) + ', бок ' + n0(Math.abs(b.sideN))) +
+    row(BAL_C.hydro, 'ЦБС', 'x ' + m1(b.clrX) + ', z ' + m1(b.clrZ),
+        'бок ' + n0(Math.abs(b.hydroSideN)) + ', сопр ' + n0(Math.abs(b.dragN))) +
+    row(BAL_C.cg, 'ЦТ', 'x ' + m1(b.cgX) + ', z ' + m1(b.cgZ),
+        'вес ' + n0(b.weightN)) +
+    row(BAL_C.buoy, 'ЦВ', 'x ' + m1(b.bX) + ', под ветер ' + m1(Math.abs(b.bY)),
+        'плавучесть ' + n0(b.weightN));
+  balNote.innerHTML =
+    'плечо ЦП−ЦБС <b>' + lever.toFixed(2) + ' м</b> ' +
+    (lever > 0.01 ? 'вперёд, приводит' : lever < -0.01 ? 'назад, уваливает'
+                                        : '— нейтрально') +
+    ' · кренит <b>' + Math.round(Math.abs(b.heelNm)) + '</b>, экипаж <b>' +
+    Math.round(Math.abs(b.hikeNm)) + '</b>, корпус <b>' +
+    Math.round(b.weightN * b.gzM) + '</b> Н·м<br>' +
+    'стрелки: <b>1 м = ' + BAL_NM + ' Н</b>, кроме веса с плавучестью — ' +
+    'они всегда равны, и говорит у них расхождение';
+}
+
 // --- сетка на воде ------------------------------------------------------------
 //
 // Однородная вода не даёт ощущения хода: лодка будто висит. Сетка привязана к
@@ -1977,9 +2130,20 @@ function updateFlow() {
   flowGeo.attributes.color.needsUpdate = true;
 }
 
-let debugOn = false;
+// Отладочных видов теперь два, и клавиша одна: G крутит их по кругу — выключено,
+// поток, баланс. Держать под каждый свою клавишу дороже, чем нажать дважды, а
+// одновременно они и не нужны: стрелки поля ветра спорят со стрелками сил.
+const DEBUG_MODES = 3;
+let debugMode = 0;
+let debugOn = false;                 // «хоть какой-то» — им гасится общее
 function setDebug(on) {
-  debugOn = on;
+  debugMode = on === true ? 1 : on === false ? 0 : (on | 0) % DEBUG_MODES;
+  debugOn = debugMode > 0;
+  // Имена нарочно не `flow` и не `field`: так зовутся сами объекты сцены, и
+  // локальная переменная их перекрывает — картинка при этом не ломается, а
+  // падает вся отрисовка.
+  const isFlow = debugMode === 1, isBal = debugMode === 2;
+  const on_ = debugOn;
   // Паруса приспускаются в прозрачность только в отладочном виде: там сквозь
   // них угадывается и поток, и колдунчик с подветренной стороны. В обычном
   // полотно должно быть полотном.
@@ -1989,17 +2153,19 @@ function setDebug(on) {
   // по дальности, и держать в ней непрозрачный парус незачем. Смена флага
   // требует пересборки программы — отсюда needsUpdate.
   for (const m of [mainSail.material, jibSail.material]) {
-    m.transparent = on;
-    m.opacity = on ? 0.9 : 1;
+    m.transparent = on_;
+    m.opacity = on_ ? 0.9 : 1;
     m.needsUpdate = true;
   }
-  grid.visible = on;
-  arrow.visible = on;
-  field.visible = on;
-  battens.visible = on;
-  flow.visible = on;
-  flowGhost.visible = on;
-  document.getElementById('rigcard').hidden = !on;
+  grid.visible = on_;
+  arrow.visible = on_;
+  field.visible = isFlow;
+  battens.visible = isFlow;
+  flow.visible = isFlow;
+  flowGhost.visible = isFlow;
+  balGroup.visible = isBal;
+  document.getElementById('rigcard').hidden = !isFlow;
+  document.getElementById('balcard').hidden = !isBal;
 }
 
 // ---------------------------------------------------------------- ввод
@@ -2065,7 +2231,7 @@ addEventListener('keydown', e => {
   }
   if (e.code === 'KeyH') { autopilot = !autopilot; apHeading = boat.psi; }
   if (e.code === 'KeyC') cycleCam();
-  if (e.code === 'KeyG') setDebug(!debugOn);
+  if (e.code === 'KeyG') setDebug(debugMode + 1);
   // Подсказки прячутся по умолчанию: карточка длинная и закрывала собой
   // ползунки условий, а нужна она один раз — прочитать и убрать.
   if (e.key === '?' || e.key === '/') {
@@ -2334,7 +2500,10 @@ function renderOrtho(bx, bz, fx, fz, sx, sz) {
   orthoCam.lookAt(orthoAim);
 
   if (!orthoOff) {
-    orthoOff = [mainSail, jibSail, telltales[0], telltales[1], battens,
+    // Указатель ветра тоже снимается: он висит в четырёх метрах от лодки и в
+    // шести над ней, и в чертёжном кадре занимает половину картинки, споря со
+    // стрелками сил. Направление ветра и так на розе.
+    orthoOff = [mainSail, jibSail, telltales[0], telltales[1], battens, arrow,
                 sea, grid, wake, track, mark, streakMesh, field, curField,
                 flow, flowGhost].filter(Boolean);
     orthoWas = new Array(orthoOff.length);
@@ -2434,8 +2603,9 @@ function frame() {
   seaTime.value = boat.t;
   if (debugOn) updateGrid(toSceneX(ix), toSceneZ(iy), now, dirX, dirZ, amp);
   updateStreaks(toSceneX(ix), toSceneZ(iy), dt);
-  curField.visible = debugOn && terrain.ready && boat.o.current > 0;
-  if (debugOn) {
+  curField.visible = debugMode === 1 && terrain.ready && boat.o.current > 0;
+  if (debugMode === 2) updateBalance();
+  if (debugMode === 1) {
     updateField(toSceneX(ix), toSceneZ(iy), now);
     updateBattens(side);
     // Линии тока считаются по всей решётке в каждой точке — это дорого, и
@@ -2544,7 +2714,9 @@ function frame() {
   updateCrew();
   if (orthoView) renderOrtho(bx, bz, fx, fz, sx, sz);
   else renderer.render(scene, camera);
-  if ((tick % 3) === 0) { updateHud(t); updateRose(t); if (debugOn) updateRig(t); if (topShown) updateTop(); }
+  if ((tick % 3) === 0) { updateHud(t); updateRose(t); if (debugMode === 1) updateRig(t);
+    if (debugMode === 2) updateBalCard();
+    if (topShown) updateTop(); }
   tick++;
   requestAnimationFrame(frame);
 }

@@ -7,6 +7,7 @@ import {
   dirSceneX, dirSceneZ,
   headingRotY, windRotY, heelRotX, rudderRotY,
   bowSceneX, bowSceneZ, stbdSceneX, stbdSceneZ,
+  pitchRotZ, heaveY,
   bodyDirLocalX, bodyDirLocalY, bodyDirLocalZ,
   bodyPointLocalX, bodyPointLocalY, bodyPointLocalZ,
   rigSideZ, roseSide,
@@ -99,6 +100,20 @@ for (const phi of [-0.4, -0.1, 0.2, 0.55]) {
   near(rolledLocalY, bodyPointLocalY(rolledBodyZ), 'высота точки после крена');
   near(rolledLocalZ, bodyPointLocalZ(rolledBodyY), 'борт точки после крена');
 }
+
+// Дифферент проверяется точкой, как и крен: нос обязан подниматься, корма
+// опускаться, и обе — на ту же величину, что дал бы поворот в физике.
+for (const th of [-0.09, -0.02, 0.03, 0.11]) {
+  const bowX = 3.2, sternX = -1.4;
+  const a = pitchRotZ(th), ca = Math.cos(a), sa = Math.sin(a);
+  // Поворот локального (X в нос, Y вверх) вокруг Z: x' = x c - y s, y' = x s + y c.
+  near(bowX * sa, bowX * Math.sin(th), 'нос поднимается на дифференте');
+  assert.ok(bowX * sa > 0 === th > 0, 'плюс дифферента поднимает нос');
+  assert.ok(sternX * sa < 0 === th > 0, 'и опускает корму');
+  near(ca, Math.cos(th), 'дифферент не меняет длину');
+}
+for (const zc of [-0.4, 0, 0.25]) near(heaveY(zc), zc, 'всплытие переводится как есть');
+console.log('  ok    дифферент поднимает нос, всплытие переводится без знака');
 
 // Положительное отклонение пера направляет его хорду в +Y физики (влево).
 // В модели это -Z; положительный поворот three вокруг Y как раз ведёт +X в -Z.

@@ -19,6 +19,7 @@ import { WindField } from './wind.js';
 import { Lattice } from './vlm.js';
 import { membraneCamber, slackOf, luffFraction, luffFactor, sectionLift, capLift, liftCeiling } from './membrane.js';
 import { seaState, addedResistance } from './waves.js';
+import { Buoyancy } from './buoyancy.js';
 import { fetchFactor, shelterFactor, channelTurn,
          WIND_SHORE_A, WIND_SHORE_L } from './terrain.js';
 
@@ -185,6 +186,9 @@ const GYBE_RATE = 1.8;
 // пока почувствуешь, пока откинешься. Без запаздывания он гасит крен точно и
 // сразу, лодка стоит как вкопанная и вообще перестаёт качаться — а на воде
 // порыв сначала кладёт, и только потом его откренивают.
+// Доли критического демпфирования вертикальной и килевой качки. Вертикальная
+// гасится сильнее: она излучает волны всей площадью ватерлинии.
+const HEAVE_ZETA = 0.40, PITCH_ZETA = 0.30;
 const HIKE_TAU = 1.2;
 
 // Мачта стоит перед гротом и портит ему поток.
@@ -480,6 +484,11 @@ export class Boat {
 
     const m = pack.mass;
     this.mass = m.total_kg;
+    // Плавучесть по вытесненному объёму. Без шпангоутов в пакете модуль
+    // отвечает «не готов», и остойчивость возвращается к таблице GZ — то есть
+    // ровно к тому, что было до всплытия и дифферента. Это не запасной путь, а
+    // тот же принцип, что у акватории: нет данных — веди себя как раньше.
+    this.buoy = new Buoyancy(pack);
     this.buildStrips();
     this.reset();
   }
@@ -633,12 +642,39 @@ export class Boat {
     this.latRebuild = true;
   }
 
+  // Начальная посадка: подобрать всплытие и дифферент так, чтобы вес
+  // уравновешивался плавучестью, а продольный момент был нулевой. В динамике
+  // лодка пришла бы туда сама, но с раскачкой на первых секундах — а первые
+  // секунды это как раз старт.
+  settle() {
+    if (!this.buoy || !this.buoy.ready) { this.zc = 0; this.th = 0; return; }
+    const env = this.p.environment, cgx = this.p.mass.cg_m[0];
+    const vol = this.mass / env.rho_water;
+    for (let k = 0; k < 24; k++) {
+      this.zc = this.buoy.floatAt(vol, this.phi, this.th);
+      const h = this.buoy.at(this.zc, this.phi, this.th);
+      if (h.ilong < 1e-6) break;
+      // Смещение центра величины относительно центра тяжести гасится поворотом
+      // на угол, который даёт та же продольная остойчивость: dM = rho*g*Il*dth.
+      const dth = (h.cbx - cgx) * h.volume / Math.max(1e-6, h.ilong);
+      this.th += dth;
+      if (Math.abs(dth) < 1e-7) break;
+    }
+  }
+
   reset() {
     this.x = 0; this.y = 0;          // положение в мире, м
     this.psi = 0;                    // курс, рад, от оси X мира
     this.u = 0; this.v = 0;          // скорости в связанной системе, м/с
     this.r = 0;                      // угловая скорость рыскания, рад/с
     this.phi = 0; this.p_ = 0;       // крен и его скорость
+    // Всплытие и дифферент. zc — высота начала координат лодки над спокойной
+    // водой, th — дифферент, плюс это нос кверху. Начальная посадка не ноль:
+    // центр величины на рабочей ватерлинии стоит на двенадцать сантиметров
+    // впереди центра тяжести, и лодка сама встаёт носом чуть кверху.
+    this.zc = 0; this.w = 0;
+    this.th = 0; this.q = 0;
+    this.settle();
     this.rigSide = null;             // борт паруса, от −1 до 1; null — не ставлен
     this.rigTarget = null;           // куда он переходит
     this.hike = 0;                   // момент откренивания сейчас, Н·м
@@ -1140,7 +1176,7 @@ export class Boat {
   // У пары «вес и плавучесть» точка приложения второй считается из плеча GZ:
   // именно оно и есть всё содержание остойчивости, а положение центра величины
   // по высоте берётся из гидростатики.
-  balanceOf(sail, wind, keelSide, rudSide, hull, dragN, gz, hullDrag) {
+  balanceOf(sail, wind, keelSide, rudSide, hull, dragN, gz, hullDrag, hyd) {
     const P = this.p, m = P.mass, hs = P.hydrostatics, env = P.environment;
     const cgx = m.cg_m[0], cgz = m.cg_m[2];
     const keel = P.foils.keel, rud = P.foils.rudder;
@@ -1154,15 +1190,21 @@ export class Boat {
     const small = Math.abs(hy) < 5;         // на стоянке точка вырождается
     const W = this.mass * env.g;
     const sphi = Math.sin(this.phi), cphi = Math.cos(this.phi);
-    // Центр величины: по длине и высоте из таблицы на рабочей ватерлинии, а
-    // поперёк — из плеча. Знак тот же, что у восстанавливающего момента.
-    const t0 = hs.table && hs.table.length
-      ? hs.table.reduce((a, b) => Math.abs(b.wl_mm) < Math.abs(a.wl_mm) ? b : a)
-      : null;
-    const bx = t0 ? t0.lcb_mm / 1000 : cgx;
-    const bz = t0 ? t0.vcb_mm / 1000 : cgz - 0.05;
-    const by = Math.abs(cphi) > 1e-3
-      ? (-Math.sign(this.phi || 1) * gz + (bz - cgz) * sphi) / cphi : 0;
+    // Центр величины берётся из расчёта плавучести как есть — это настоящий
+    // центр вытесненного объёма, а не восстановленная по плечу точка. Без
+    // шпангоутов в пакете он собирается из таблицы и плеча, как раньше.
+    let bx, by, bz;
+    if (hyd) {
+      bx = hyd.cbx; by = hyd.cby; bz = hyd.cbz;
+    } else {
+      const t0 = hs.table && hs.table.length
+        ? hs.table.reduce((a, b) => Math.abs(b.wl_mm) < Math.abs(a.wl_mm) ? b : a)
+        : null;
+      bx = t0 ? t0.lcb_mm / 1000 : cgx;
+      bz = t0 ? t0.vcb_mm / 1000 : cgz - 0.05;
+      by = Math.abs(cphi) > 1e-3
+        ? (-Math.sign(this.phi || 1) * gz + (bz - cgz) * sphi) / cphi : 0;
+    }
     return {
       ceX: sail.ceX, ceY: sail.ceY, ceZ: sail.ceZ,
       driveN: sail.fx, sideN: sail.fy, liftN: sail.fz,
@@ -1173,6 +1215,9 @@ export class Boat {
       keelN: keelSide, rudderN: rudSide, hullSideN: hull.fy,
       cgX: cgx, cgZ: cgz, bX: bx, bY: by, bZ: bz,
       weightN: W, weightCrewN: this.o.crewMass * env.g,
+      buoyN: hyd ? env.rho_water * env.g * hyd.volume : W,
+      vertN: this.vertN || 0,
+      awpM2: hyd ? hyd.awp : 0, sinkM: this.zc, trimDeg: this.th / DEG,
       gzM: gz, hikeNm: this.hike,
       heelNm: sail.mx, yawNm: sail.mz,
     };
@@ -1524,10 +1569,30 @@ export class Boat {
           Math.sin(2 * this.phi);
     const dr = mz / iz;
 
-    // крен: кренящий момент паруса минус восстанавливающий и демпфирование
-    const heelDeg = Math.abs(this.phi) / DEG;
-    const gz = lerpTable(P.righting.gz, 'heel_deg', heelDeg, 'gz_m');
-    const righting = -Math.sign(this.phi || 1) * this.mass * env.g * gz;
+    // --- плавучесть
+    //
+    // Верх мира в связанных осях. Через него меряется всё вертикальное: и вес,
+    // и плавучесть, и вертикальные составляющие прочих сил. Считается при этом
+    // всё в осях лодки — переводится только направление.
+    const cgz = m.cg_m[2];
+    const cth = Math.cos(this.th), sth = Math.sin(this.th);
+    const nx = sth, ny = Math.sin(this.phi) * cth, nz = Math.cos(this.phi) * cth;
+    let hyd = null, righting = 0, gz = 0;
+    if (this.buoy.ready) {
+      hyd = this.buoy.at(this.zc, this.phi, this.th);
+      const fb = env.rho_water * env.g * hyd.volume;
+      const rx = hyd.cbx - cgx, ry = hyd.cby, rz = hyd.cbz - cgz;
+      // Восстанавливающий момент — момент пары «вес в ЦТ, плавучесть в ЦВ»
+      // вокруг продольной оси. Плечо GZ теперь не входное число из таблицы, а
+      // следствие: его считают из того же момента и показывают приборам.
+      righting = fb * (ry * nz - rz * ny);
+      gz = -righting / (this.mass * env.g);
+    } else {
+      // Без шпангоутов в пакете — прежняя таблица GZ. Всплытия и дифферента
+      // при этом нет вовсе, лодка стоит на своей ватерлинии.
+      gz = lerpTable(P.righting.gz, 'heel_deg', Math.abs(this.phi) / DEG, 'gz_m');
+      righting = -Math.sign(this.phi || 1) * this.mass * env.g * gz;
+    }
     const sailHeel = sail.mx;
     const windHeel = -(wind.z - m.cg_m[2]) * wind.fy;
     const foilHeel = (keelSide * (keel.z_centre_m - m.cg_m[2])
@@ -1558,6 +1623,53 @@ export class Boat {
     const wn = Math.sqrt(this.mass * env.g * Math.max(0.05, P.hydrostatics.gm_m) / ix);
     const damp = -2 * 0.18 * wn * ix * this.p_;
     const dp = (sailHeel + windHeel + foilHeel + righting + hikeMoment + damp) / ix;
+
+    // --- всплытие и дифферент
+    //
+    // Две степени свободы, которых у модели не было. Лодка садится под грузом,
+    // приседает под тягой и встаёт носом кверху там, где центр величины ушёл
+    // вперёд центра тяжести. Всё это делает одна и та же сила — плавучесть в
+    // центре величины, — и потому появляется вместе, а не по отдельности.
+    //
+    // Сопротивление корпуса приложено не в ЦТ, а под водой, иначе тяга не
+    // создавала бы дифферента вовсе. Высота взята половиной осадки корпуса —
+    // тем же числом, каким живёт боковая сила корпуса.
+    if (hyd) {
+      const fb = env.rho_water * env.g * hyd.volume;
+      const rx = hyd.cbx - cgx, rz = hyd.cbz - cgz;
+      const dragZ = -0.5 * P.hydrostatics.draft_canoe_m;
+      // Момент на нос кверху: продольное плечо на вертикальную силу минус
+      // высота на продольную.
+      let mth = fb * (rx * nz - rz * nx);
+      mth += (sail.ceX - cgx) * sail.fz - (sail.ceZ - cgz) * sail.fx;
+      mth += -(wind.z - cgz) * wind.fx;
+      mth += -(dragZ - cgz) * hullDrag;
+      mth += -(keel.z_centre_m - cgz) * keelFx - (rud.z_centre_m - cgz) * rudFx;
+      // Вертикальная сила по мировой вертикали: плавучесть, вес и проекции
+      // всего остального. На ровном киле последнее вырождается в подъёмную
+      // силу паруса, а на крене туда входит и то, чем киль тянет лодку вниз.
+      // Вертикальная составляющая всего, кроме веса и плавучести. На ровном
+      // киле это подъёмная сила паруса, на крене — главным образом то, чем
+      // накренённый риг тянет лодку вниз: боковая сила поворачивается вместе с
+      // мачтой, и её вертикальная доля садит лодку глубже. На двадцати
+      // градусах это уже сотни ньютонов, то есть десятки килограммов груза.
+      this.vertN = fx * nx + fy * ny + sail.fz * nz;
+      const fv = fb - this.mass * env.g + this.vertN;
+      const mh = this.mass * (1 + (m.added_heave != null ? m.added_heave : 1.2));
+      const ip = m.iyy_kg_m2 * (1 + (m.added_pitch != null ? m.added_pitch : 0.9));
+      // Демпфирование — доля критического, как и у качки. Жёсткость берётся из
+      // того же расчёта: площадь ватерлинии для всплытия, её продольный момент
+      // инерции для дифферента. Так коэффициент не приходится подбирать заново
+      // при каждой смене обводов.
+      const kh = env.rho_water * env.g * Math.max(0.5, hyd.awp);
+      const kp = env.rho_water * env.g * Math.max(0.5, hyd.ilong);
+      const dw = (fv - 2 * HEAVE_ZETA * Math.sqrt(kh * mh) * this.w) / mh;
+      const dq = (mth - 2 * PITCH_ZETA * Math.sqrt(kp * ip) * this.q) / ip;
+      this.w = clamp(this.w + dw * dt, 6);
+      this.q = clamp(this.q + dq * dt, 3);
+      this.zc = clamp(this.zc + this.w * dt, 2);
+      this.th = clamp(this.th + this.q * dt, 0.7);
+    }
 
     // --- интегрирование, полунеявная схема Эйлера
     this.u = clamp(this.u + du * dt, 25);
@@ -1632,8 +1744,14 @@ export class Boat {
       sogKn: this.sog * 1.94384,
       sternway: this.u < -0.15,
       gzM: gz, yawRate: this.r / DEG,
+      // Посадка и дифферент: их теперь считает плавучесть, и на них видно то,
+      // чего в модели не было — как лодка садится под грузом и приседает под
+      // тягой. Водоизмещение при этом не константа: в динамике оно ходит вокруг
+      // веса, и расхождение — это ровно то, что разгоняет вертикальную качку.
+      sinkM: this.zc, trimDeg: this.th / DEG,
+      dispKg: hyd ? env.rho_water * hyd.volume : this.mass,
       balance: this.balanceOf(sail, wind, keelSide, rudSide, hull, rt + raw,
-                              gz, hullDrag),
+                              gz, hullDrag, hyd),
       vmg: speed * Math.cos(this.trueWindAngle()) * 1.94384,
       twaAbsDeg: Math.abs(this.trueWindAngle()) / DEG,
     };

@@ -16,6 +16,10 @@
 export const TRACE_FIELDS = [
   // состояние лодки — по нему она восстанавливается целиком
   't', 'x', 'y', 'psi', 'u', 'v', 'r', 'phi', 'p_', 'rigSide', 'hike',
+  // Всплытие и дифферент с их скоростями: с динамической плавучестью лодка
+  // помнит, на сколько она села и как стоит по дифференту, и без этих четырёх
+  // чисел запись не воспроизводится.
+  'zc', 'w', 'th', 'q',
   // Запаздывающие углы атаки полосок — тоже состояние: парус выходит на
   // новую подъёмную силу не мгновенно. Единственное поле-массив в записи;
   // числом их не сделать, полосок может стать больше или меньше.
@@ -58,6 +62,7 @@ export function traceFrame(boat) {
     // Момент откренивания — тоже состояние: экипаж отзывается с запаздыванием.
     // Без него запись не воспроизводится, и это поймал тест, а не глаз.
     r9(boat.hike),
+    r9(boat.zc), r9(boat.w), r9(boat.th), r9(boat.q),
     boat.alphaLag ? Array.from(boat.alphaLag, r9) : null,
     r9(boat.o.rudder), r9(boat.o.sheet), r9(boat.o.jibTrim),
     r9(boat.o.twist), r4(boat.twistEff),
@@ -97,6 +102,10 @@ export function restoreFrom(boat, frame, index) {
   boat.phi = g('phi'); boat.p_ = g('p_'); boat.t = g('t');
   boat.rigSide = g('rigSide');
   if (index.hike != null) boat.hike = g('hike');
+  // Старые записи этих полей не знают — тогда посадка остаётся как есть.
+  if (index.zc != null) {
+    boat.zc = g('zc'); boat.w = g('w'); boat.th = g('th'); boat.q = g('q');
+  }
   const lag = g('lag');
   if (lag && boat.alphaLag && lag.length === boat.alphaLag.length) {
     boat.alphaLag.set(lag);

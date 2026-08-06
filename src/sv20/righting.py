@@ -19,19 +19,24 @@ import math
 MM3_PER_M3 = 1.0e9
 
 
-def section_polygon(hull, x):
+def section_polygon(hull, x, n=40, n_camber=5):
     """Замкнутый контур шпангоута: обшивка от борта до борта плюс палуба.
 
     Замыкание именно палубой, а не хордой по линии борта, — принципиально:
     на больших углах крена под воду уходит палуба, и объём должен считаться
     по ней.
+
+    `n` — точек на полборта. Здесь по умолчанию сорок: считается один раз при
+    сборке, и точность важнее. Симулятору те же контуры выгружаются грубее,
+    потому что он считает их тридцать раз в секунду; расхождение по объёму
+    печатается при сборке.
     """
     b = hull.b
     ys, zs = b.sheer_y(x), b.sheer_z(x)
-    sec = hull.section(x).by_arclength(40)
+    sec = hull.section(x).by_arclength(n)
     starboard = [(y, z) for y, z in sec]
     port = [(-y, z) for y, z in reversed(sec[:-1])]
-    deck = hull.deck_ring(x, ys, zs, n_camber=5)
+    deck = hull.deck_ring(x, ys, zs, n_camber=n_camber)
     # обход: левый борт вниз к килю, правый борт вверх, палуба обратно налево
     return port + starboard + list(reversed(deck[:-1]))
 

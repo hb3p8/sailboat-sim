@@ -22,6 +22,12 @@ export function dirSceneZ(angle) { return -Math.sin(angle); }
 export function headingRotY(psi) { return psi; }
 export function windRotY(dir) { return dir - Math.PI; }
 export function heelRotX(phi) { return phi; }
+// Дифферент: плюс — нос кверху. Локальная Y модели смотрит вверх, X в нос, и
+// положительный поворот вокруг локальной Z как раз поднимает нос.
+export function pitchRotZ(th) { return th; }
+// Всплытие: высота начала координат лодки над водой переводится в высоту сцены
+// как есть — вертикаль у сцены своя, но направлена туда же.
+export function heaveY(zc) { return zc; }
 export function rudderRotY(deflect) { return deflect; }
 
 // --- орты лодки в сцене -----------------------------------------------------

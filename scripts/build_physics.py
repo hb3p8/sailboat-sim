@@ -29,6 +29,32 @@ from sv20 import (appendages, calibrate, hullmodel, hydro, meshops,  # noqa: E40
                   righting, sailplan, stability, wavemaking)
 
 RHO_WATER = 1025.0
+
+
+def _sections_volume(xs, polys, z_w):
+    """Объём по выгруженным контурам — проверка огрубления, не расчёт."""
+    areas = []
+    for poly in polys:
+        out = []
+        n = len(poly)
+        for i in range(n):
+            a, b = poly[i], poly[(i + 1) % n]
+            ain, bin_ = a[1] <= z_w, b[1] <= z_w
+            if ain:
+                out.append(a)
+            if ain != bin_:
+                t = (z_w - a[1]) / (b[1] - a[1])
+                out.append([a[0] + t * (b[0] - a[0]), z_w])
+        s2 = 0.0
+        for i in range(len(out)):
+            y0, z0 = out[i]
+            y1, z1 = out[(i + 1) % len(out)]
+            s2 += y0 * z1 - y1 * z0
+        areas.append(abs(0.5 * s2))
+    v = 0.0
+    for i in range(len(xs) - 1):
+        v += 0.5 * (areas[i] + areas[i + 1]) * (xs[i + 1] - xs[i])
+    return v
 RHO_AIR = 1.225
 NU_WATER = 1.19e-6      # кинематическая вязкость морской воды, м²/с
 G = 9.80665
@@ -221,6 +247,31 @@ def main():
 
     gz = righting.curve(hull, mass, ref["kg_mm"],
                         angles=[0, 2] + list(range(5, 96, 5)))
+
+    # Шпангоуты для динамической плавучести. Симулятор считает по ним
+    # вытесненный объём на каждом шаге — теми же контурами и тем же отсечением,
+    # что и диаграмма остойчивости выше. Одна геометрия на расчёт и на ход:
+    # разъехаться им нельзя, иначе GZ на бумаге и GZ в симуляторе будут разные.
+    #
+    # Контуры выгружаются грубее, чем считаются здесь: тридцать раз в секунду
+    # сорок точек на полборта не нужны. Погрешность по объёму печатается ниже —
+    # это и есть цена огрубления, и она должна оставаться в сотых долях процента.
+    # Двадцать восемь шпангоутов и сорок восемь точек на полборта. Сходимость
+    # проверялась перебором: по длине хватает и двадцати восьми (сорок и
+    # пятьдесят шесть дают то же число), а вот по обводу решает всё — 22 точки
+    # дают −0.48% объёма, 32 дают −0.23%, 48 дают −0.09%. Многоугольник вписан
+    # в кривую, поэтому ошибка всегда в минус.
+    SEC_N, SEC_PTS = 28, 48
+    hb = hull.b
+    sec_x, sec_poly = [], []
+    for i in range(SEC_N + 1):
+        xs_mm = hb.x_deck_aft + (hb.x_stem - hb.x_deck_aft) * i / float(SEC_N)
+        poly = righting.section_polygon(hull, xs_mm, n=SEC_PTS, n_camber=3)
+        sec_x.append(round(xs_mm / 1000.0, 4))
+        sec_poly.append([[round(y / 1000.0, 4), round(z / 1000.0, 4)]
+                         for y, z in poly])
+    sec_vol = _sections_volume(sec_x, sec_poly, 0.0)
+    sec_err = 100.0 * (sec_vol - h["volume_m3"]) / h["volume_m3"]
     gz_sum = righting.summarise(gz, ref["gm_mm"])
 
     table = []
@@ -252,6 +303,12 @@ def main():
             # От них зависит не установившаяся циркуляция, а задержка отклика
             # на руль — та самая задумчивость.
             "added_sway": 1.0, "added_yaw": 0.7, "added_surge": 0.06,
+            # Вертикальная и килевая качка. Присоединённая масса при всплытии у
+            # мелкосидящего широкого корпуса близка к вытесненной, для килевой
+            # берётся чуть меньше — она определяется оконечностями, а они
+            # тонкие. Обе величины оценочные и названы, чтобы их можно было
+            # оспорить числом: от них зависит период качки, а не посадка.
+            "added_heave": 1.2, "added_pitch": 0.9,
             "budget": [{"name": i["name"], "mass_kg": i["mass_kg"],
                         "com_m": [c / 1000.0 for c in i["com_mm"]],
                         "note": i["note"]} for i in items],
@@ -279,6 +336,13 @@ def main():
         # мелкосидящего корпуса это обычная величина). У шестиметровой лодки
         # период выходит около 0.84 с, и в лавировку по короткой волне частота
         # встречи попадает как раз туда — оттого и провал хода.
+        # Шпангоуты для динамической плавучести в симуляторе.
+        "sections": {"x_m": sec_x, "poly": sec_poly,
+                     "volume_err_pct": round(sec_err, 4),
+                     "note": ("Замкнутые контуры шпангоутов, палуба включена. "
+                              "Симулятор отсекает их плоскостью воды и получает "
+                              "объём, центр величины и площадь ватерлинии на "
+                              "каждом шаге.")},
         "seakeeping": {
             "heave_period_s": round(2 * math.pi * math.sqrt(
                 2.0 * mass / (RHO_WATER * G * h["waterplane_area_m2"])), 4),
@@ -339,6 +403,9 @@ def main():
     g = gz_sum["gm_check"]
     print("сверка с GM на %.0f°: %.1f против %.1f мм, %+.1f%%"
           % (g["heel_deg"], g["gz_mm"], g["gm_sin_theta_mm"], g["deviation_pct"]))
+    print("шпангоуты для плавучести: %d штук по %d точек, объём %+.3f%% "
+          "к гидростатике" % (len(sec_x), len(sec_poly[len(sec_poly) // 2]),
+                              sec_err))
     print("моменты инерции: качка %.0f, киль %.0f, рыскание %.0f кг·м²"
           % (doc["mass"]["ixx_kg_m2"], doc["mass"]["iyy_kg_m2"],
              doc["mass"]["izz_kg_m2"]))

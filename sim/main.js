@@ -1016,7 +1016,7 @@ function updateBalCard() {
     row(BAL_C.cg, 'ЦТ', 'x ' + m1(b.cgX) + ', z ' + m1(b.cgZ),
         'вес ' + n0(b.weightN)) +
     row(BAL_C.buoy, 'ЦВ', 'x ' + m1(b.bX) + ', под ветер ' + m1(Math.abs(b.bY)),
-        'плавучесть ' + n0(b.weightN)) +
+        'плавучесть ' + n0(b.buoyN)) +
     row(BAL_C.crew, 'Экипаж', 'плечо ' + m1(Math.abs(crewArm())),
         'вес ' + n0(b.weightCrewN) + ' → ' +
         Math.round(Math.abs(b.hikeNm)) + ' Н·м');
@@ -1027,6 +1027,10 @@ function updateBalCard() {
     ' · кренит <b>' + Math.round(Math.abs(b.heelNm)) + '</b>, экипаж <b>' +
     Math.round(Math.abs(b.hikeNm)) + '</b>, корпус <b>' +
     Math.round(b.weightN * b.gzM) + '</b> Н·м<br>' +
+    'посадка <b>' + (b.sinkM * 1000).toFixed(0) + ' мм</b>, дифферент <b>' +
+    b.trimDeg.toFixed(2) + '°</b>, риг тянет <b>' +
+    (b.vertN < 0 ? 'вниз ' : 'вверх ') + Math.round(Math.abs(b.vertN)) +
+    ' Н</b> · водоизмещение <b>' + Math.round(b.buoyN / 9.81) + ' кг</b><br>' +
     'второе слагаемое сопротивления — волновое · стрелки <b>1 м = ' +
     BAL_NM + ' Н</b>, кроме вертикальных: у веса, плавучести и экипажа ' +
     'говорит не длина, а плечо';
@@ -1804,6 +1808,7 @@ function dumpState() {
     boat: {
       x: boat.x, y: boat.y, psi: boat.psi, u: boat.u, v: boat.v, r: boat.r,
       phi: boat.phi, p_: boat.p_, t: boat.t, rigSide: boat.rigSide,
+      zc: boat.zc, w: boat.w, th: boat.th, q: boat.q,
     },
     controls: Object.assign({}, boat.o),
     wind: Object.assign({}, boat.wind.o),
@@ -2472,7 +2477,7 @@ function readControls(dt) {
 let acc = 0, last = performance.now() / 1000, tick = 0;
 const camPos = new Vector3(-14, 5, 0);
 const camAim = new Vector3();
-const prev = { x: 0, y: 0, psi: 0, phi: 0 };
+const prev = { x: 0, y: 0, psi: 0, phi: 0, zc: 0, th: 0 };
 
 // --- отладочные ортогональные виды --------------------------------------------
 //
@@ -2569,6 +2574,7 @@ function frame() {
   let steps = 0;
   while (acc >= DT && steps < 8) {
     prev.x = boat.x; prev.y = boat.y; prev.psi = boat.psi; prev.phi = boat.phi;
+    prev.zc = boat.zc; prev.th = boat.th;
     readControls(DT);
     boat.step(DT);
     if (![boat.x, boat.y, boat.psi, boat.phi, boat.u, boat.v].every(Number.isFinite)) {
@@ -2588,12 +2594,18 @@ function frame() {
   const iy = prev.y + (boat.y - prev.y) * a;
   const ipsi = prev.psi + wrapPi(boat.psi - prev.psi) * a;
   const iphi = prev.phi + (boat.phi - prev.phi) * a;
+  const izc = prev.zc + (boat.zc - prev.zc) * a;
+  const ith = prev.th + (boat.th - prev.th) * a;
   const t = boat.telemetry || {};
 
-  boatGroup.position.set(toSceneX(ix), 0, toSceneZ(iy));
+  // Лодка теперь ходит и по вертикали: садится под грузом, приседает под тягой
+  // и стоит с дифферентом. Порядок поворотов YXZ означает, что дифферент
+  // применяется первым, в осях самой лодки, — то есть так, как он и получается.
+  boatGroup.position.set(toSceneX(ix), heaveY(izc), toSceneZ(iy));
   boatGroup.rotation.order = 'YXZ';
   boatGroup.rotation.y = headingRotY(ipsi);
   boatGroup.rotation.x = heelRotX(iphi);
+  boatGroup.rotation.z = pitchRotZ(ith);
   rudderPivot.rotation.y = rudderRotY(boat.o.rudder);
 
   // Борт паруса берём у физики: там он с запасом на перекидывание и меняется

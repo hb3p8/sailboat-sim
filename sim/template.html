@@ -194,6 +194,15 @@
   <label id="curbox"><span class="cap"><span>Течение на стрежне</span><span id="v-cur"></span></span>
     <input id="cur" type="range" min="0" max="1.5" step="0.05" value="0.55"></label>
 
+  <h2>Волна</h2>
+  <div class="cap"><span>Высота значительная</span><span id="v-seahs"></span></div>
+  <div class="cap"><span>Длина в пике</span><span id="v-sealp"></span></div>
+  <div class="cap"><span>Под лодкой</span><span id="v-seanow"></span></div>
+  <label><span class="cap"><span>Крутизна гребня</span><span id="v-chop"></span></span>
+    <input id="chop" type="range" min="0" max="1.6" step="0.05" value="0.85"></label>
+  <label><span class="cap"><span>Вид воды</span></span>
+    <select id="sealook"></select></label>
+
   <div id="shade">
     <h2>Ветер над рекой</h2>
     <label><span class="cap"><span>Глубина дефицита D₀</span><span id="v-shd0"></span></span>
@@ -297,6 +306,7 @@ const BUILD = /*__BUILD__*/ null;
 /*__MEMBRANE__*/
 /*__WAVES__*/
 /*__BUOYANCY__*/
+/*__OCEAN__*/
 /*__TRACE__*/
 /*__PHYSICS__*/
 /*__MAIN__*/
@@ -319,6 +329,10 @@ const BUILD = /*__BUILD__*/ null;
     shk: v => (+v).toFixed(0) + ' высот',
     shg: v => (+v === 0 ? 'ровно' : '×' + (1 + +v).toFixed(1)),
     chan: v => (+v === 0 ? 'нет' : 'до ' + (+v * 90).toFixed(0) + '°'),
+    // Единица — как в воде: столько горизонтального смещения даёт спектр сам.
+    // Ниже гребень приглаживается, выше заостряется сверх натурального.
+    chop: v => (+v === 0 ? 'синусы' : (+v).toFixed(2) +
+               (Math.abs(+v - 1) < 0.03 ? ' (как в воде)' : '')),
   };
   for (const id of Object.keys(fmt)) {
     const el = document.getElementById(id), out = document.getElementById('v-' + id);

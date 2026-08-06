@@ -75,52 +75,91 @@ scene.add(sun);
 //     x = A·u + B·u³,   u ∈ [−1, 1]
 //
 // Кубическая часть растягивает край, линейная держит середину. A подобрано так,
-// чтобы у лодки ячейка была полтора метра, A + B даёт нужный радиус. У SV20 с
-// акваторией это полтора метра под бортом и двести семьдесят на семи
-// километрах — при тех же ста пятидесяти делениях, что и раньше.
+// чтобы у лодки ячейка была полметра, A + B даёт нужный радиус. У SV20 с
+// акваторией это полметра под бортом и сто на семи километрах — при
+// четырёхстах делениях.
+//
+// Делений вчетверо прибавлено вместе с переходом волны на БПФ (ocean.js), и
+// прибавлено не для красоты. Ячейка растёт как квадрат удаления, и на прежних
+// ста пятидесяти делениях она добиралась до семи метров уже в полусотне метров
+// от борта — то есть основная волна, та самая, которой лодку и качает, дальше
+// тридцати метров просто не рисовалась. Теперь она держится до сотни.
+//
+// Стоить это стало не дороже, а дешевле: смещение вершин ушло с процессора на
+// видеокарту, и сто шестьдесят тысяч вершин там считаются быстрее, чем двадцать
+// две тысячи считались здесь. Нормали, которые раньше пересчитывались через
+// кадр по всей сетке, не считаются вовсе — они приходят из карты.
 //
 // Сетка ездит за лодкой шагами по ЦЕНТРАЛЬНОЙ ячейке, чтобы сгущение всегда
-// приходилось на лодку, а рябь и цвет считались по мировым координатам и
+// приходилось на лодку, а волна и цвет считались по мировым координатам и
 // оттого не ползли.
 
-const SEG = 150;
-const SEA_COLOUR = 0x2c5c7d;
+const SEG = 400;
+
+// Цвет воды — ПАРА цветов, а не один.
+//
+// Одним цветом вода не красится ни в природе, ни на картинке. Глубина уносит
+// свет: смотришь в толщу — видишь почти чёрное. А на гребне слой тонкий, свет
+// проходит его насквозь и рассеивается — гребень светится, и цвет у него
+// совсем другой, зеленоватый или бирюзовый. Ровно по этому свечению глаз и
+// читает, где гребень: с одним цветом волна опознаётся только по бликам, а на
+// пологой волне бликов почти нет.
+//
+// Наборы взяты из чужой готовой воды (threejswaterpro), где они подобраны
+// художником и проверены на глазах: свои три числа тут подбирались бы неделю и
+// вышли бы хуже. Первый — арктический, холодный и тёмный; он и стоит по
+// умолчанию, потому что здешнее небо серо-голубое и тёплая вода под ним
+// выглядит крашеной. «Река» — прежний цвет этого симулятора, разложенный на ту
+// же пару.
+const SEA_LOOKS = [
+  { id: 'arctic', name: 'Арктика', deep: 0x162731, scatter: 0x719cb8 },
+  { id: 'river', name: 'Река', deep: 0x1d3d52, scatter: 0x4a86ab },
+  { id: 'storm', name: 'Шторм', deep: 0x1b2a32, scatter: 0x346565 },
+  { id: 'dusk', name: 'Сумерки', deep: 0x112a37, scatter: 0x1e675c },
+];
+const seaDeep = uniform(new Color(SEA_LOOKS[0].deep));
+const seaScatter = uniform(new Color(SEA_LOOKS[0].scatter));
+// Цвет пены оттуда же и один на все виды: взбитая вода везде одинаково белая.
+const SEA_FOAM_COLOUR = 0xedf9fd;
 // Докуда стелется вода. С акваторией — до тумана, чтобы река доходила до
 // берега; без неё дальше двухсот метров всё равно ничего нет.
 const SEA_FAR = FAR_WATER ? 7000 : 260;
-const CELL = 1.5;                       // ячейка под лодкой, м
+const CELL = 0.5;                       // ячейка под лодкой, м
 const SEA_A = CELL * (SEG / 2);
 const SEA_B = SEA_FAR - SEA_A;
 const seaGeo = new PlaneGeometry(2, 2, SEG, SEG);
 seaGeo.rotateX(-Math.PI / 2);
+// Размер ячейки в каждой вершине. По нему в шейдере гасятся каскады волны:
+// далёкая ячейка в сотни метров волну не разрешает, и считать её там значит не
+// рисовать волну, а разводить муар из ошибок дискретизации. Гасится по размеру
+// ячейки, а не по расстоянию: размер и есть то, из-за чего гасить.
+//
+// Раньше это был один вес на вершину, посчитанный на процессоре. Теперь в
+// атрибут кладётся сам размер, а решение, какой каскад на нём ещё жив,
+// принимается там же, где известны размеры плиток, — в шейдере.
+const seaCell = new Float32Array((SEG + 1) * (SEG + 1));
 {
   const p = seaGeo.attributes.position.array;
   const warp = u => SEA_A * u + SEA_B * u * u * u;
-  for (let i = 0; i < p.length; i += 3) {
+  const du = 2 / SEG;
+  for (let i = 0, v = 0; i < p.length; i += 3, v++) {
+    // производная кубической растяжки в этой точке и есть размер ячейки
+    const cx = (SEA_A + 3 * SEA_B * p[i] * p[i]) * du;
+    const cz = (SEA_A + 3 * SEA_B * p[i + 2] * p[i + 2]) * du;
+    seaCell[v] = Math.max(cx, cz);
     p[i] = warp(p[i]);
     p[i + 2] = warp(p[i + 2]);
   }
 }
+seaGeo.setAttribute('seaCell', new Float32BufferAttribute(seaCell, 1));
 const seaMat = new MeshStandardNodeMaterial({ roughness: 0.28, metalness: 0.12 });
 const sea = new Mesh(seaGeo, seaMat);
 sea.frustumCulled = false;
 scene.add(sea);
-const seaBase = seaGeo.attributes.position.array.slice();
 
-// Вес волны по вершине. Далёкие ячейки в сотни метров волну не разрешают, и
-// считать её там значит не рисовать волну, а разводить рябь из ошибок
-// дискретизации. Гасится она по размеру ячейки, а не по расстоянию: размер и
-// есть то, из-за чего гасить.
-const seaAmp = new Float32Array(seaBase.length / 3);
-{
-  const du = 2 / SEG;
-  for (let i = 0, v = 0; i < seaBase.length; i += 3, v++) {
-    const r = Math.hypot(seaBase[i], seaBase[i + 2]);
-    const u = Math.min(1, r / SEA_FAR);
-    const cell = (SEA_A + 3 * SEA_B * u * u) * du;
-    seaAmp[v] = Math.max(0, Math.min(1, (8 - cell) / 6));
-  }
-}
+// Море. Считается целиком на видеокарте, каждый кадр; здесь только заводится и
+// раз в кадр получает состояние моря от физики — см. `frame`.
+const ocean = new Ocean(renderer, 1);
 
 // Рябь от порывов. На воде усиление ветра видно раньше, чем оно доходит до
 // парусов, — тёмными языками, ползущими по ветру. Это не украшение: без них
@@ -202,9 +241,11 @@ function updateWindMap() {
   terrain.windMap(d, { a: WIND_SHORE_A, l: WIND_SHORE_L, d0: d0, k: k }, windMapData);
   windMapTex.needsUpdate = true;
 }
-// Та же выборка на процессоре: по ней гасится высота волны на сетке воды.
-// Ближайший узел, без интерполяции — сто метров на ячейку, а волна и так
-// сглажена по вершинам.
+// Та же карта, но с процессора: по ней идут стрелки поля ветра. Ближайший узел,
+// без интерполяции — сто метров на ячейку, а стрелка и так стоит в узле.
+//
+// Высоту волны она больше не гасит: гашение ушло в шейдер вместе с самой
+// волной (ocean.js), и выборка там идёт из той же текстуры, что и цвет.
 const WM = terrain.ready
   ? { x0: TERRAIN_PACK.x0, y0: TERRAIN_PACK.y0, c: TERRAIN_PACK.coarse,
       nx: TERRAIN_PACK.cnx, ny: TERRAIN_PACK.cny }
@@ -215,10 +256,6 @@ function windMapCell(x, z) {
         j = Math.round((toWorldY(z) - WM.y0) / WM.c);
   if (i < 0 || j < 0 || i >= WM.nx || j >= WM.ny) return -1;
   return 2 * (j * WM.nx + i);
-}
-function windMapSample(x, z) {
-  const c = windMapCell(x, z);
-  return c < 0 ? 1 : windMapData[c] / 255;
 }
 
 // Ветер в точке сцены С УЧЁТОМ АКВАТОРИИ — ровно тот же, что чувствует лодка.
@@ -258,9 +295,20 @@ const svWind = WM && Fn(([p]) => {
   const v = p.y.sub(WM.y0).div(WM.c * (WM.ny - 1));
   return texture(windMapTex, vec2(u, v)).rg;
 });
-// Сцена -> мир для шейдера воды: X сцены есть X мира, Z сцены есть -Y мира.
-// TSL-узел пишется явно, потому что числовой адаптер осей к нему неприменим.
-const seaWorldXY = vec2(positionWorld.x, positionWorld.z.negate());
+// Опорная точка на НЕВОЗМУЩЁННОЙ воде: мировые XY вершины до того, как её
+// сдвинула волна.
+//
+// Брать `positionWorld` здесь больше нельзя, и не только из-за волны. В
+// вершинном шейдере positionWorld считается из положения, которое вот этим же
+// выражением и назначается, — вышел бы круг. А в пиксельном оно уже сдвинуто
+// волной, и выборка каскадов пошла бы не в той точке, что смещение: рябь
+// поехала бы относительно гребня, на который села.
+//
+// Сцена -> мир: X сцены есть X мира, Z сцены есть -Y мира. TSL-узел пишется
+// явно, потому что числовой адаптер осей к узлам неприменим.
+const seaRefWorld = modelWorldMatrix.mul(vec4(positionGeometry, 1.0)).xyz;
+const seaRefXY = vec2(seaRefWorld.x, seaRefWorld.z.negate());
+const seaWorldXY = varying(seaRefXY);
 const svWindV = svWind && svWind(seaWorldXY);
 // Рябь гаснет со скоростью ветра, но в тени она же и резче — тем самым
 // множителем рваности, что в физике. Гашение вдвое слабее падения ветра:
@@ -268,33 +316,139 @@ const svWindV = svWind && svWind(seaWorldXY);
 const seaWindK = svWindV && svWindV.x.mul(0.5).add(0.5);
 const seaRough = svWindV && svWindV.y.oneMinus().mul(seaShadeGust).add(1.0);
 
+// --- волна ------------------------------------------------------------------
+//
+// Само поле считает ocean.js; здесь оно только кладётся на сетку. Гасится оно
+// дважды и по разным причинам, и обе важны:
+//
+//   * по ветру. Под подветренным берегом волны нет, и вода там обязана быть
+//     плоской не только на вид. Множитель — тот же, что у сил (карта одна на
+//     физику и картинку), в квадрате: энергия волны идёт как квадрат ветра;
+//
+//   * по разрешению. Каскад с плиткой в три метра на ячейке в двести метров —
+//     это не волна, а муар. Но геометрия и затенение упираются в РАЗНЫЕ
+//     пределы, и потому гасятся порознь. Вершина не может нести волну короче
+//     своей ячейки — это предел сетки. Пиксель может: на то и карта нормалей,
+//     и мелкая рябь живёт в затенении там, где в геометрии её давно нет.
+//     Предел здесь — размер пикселя в метрах, а не размер ячейки.
+const seaCellAttr = attribute('seaCell', 'float');
+// Метры на пиксель на единицу дальности: 2·tg(fov/2)/высота экрана. Ставится в
+// кадре, потому что зависит от размера окна.
+const seaPerPixel = uniform(0.001);
+const seaFootprint = positionWorld.sub(cameraPosition).length().mul(seaPerPixel);
+// Множитель ветра берётся в каждой стадии своей выборкой: в вершинной —
+// напрямую из опорной точки, в пиксельной — через интерполированную. Смешивать
+// нельзя: varying в вершинном шейдере ещё не существует.
+//
+// Волна гасится ЧИСТЫМ множителем карты, в квадрате, — тем же выражением, что
+// стояло в прежнем счёте на процессоре. Не тем, что у ряби: у ряби множитель
+// поднят до половины (`x·0.5 + 0.5`) нарочно, чтобы вода под берегом читалась
+// гладкой, но не мёртвой. Волне такая поблажка не нужна и вредна: в мёртвой
+// тени берега волны нет, и она обязана быть плоской.
+const svWindVert = svWind && svWind(seaRefXY);
+const seaWaveKVert = svWindVert ? svWindVert.x.mul(svWindVert.x) : float(1.0);
+const seaWaveK = svWindV ? svWindV.x.mul(svWindV.x) : float(1.0);
+
+function seaGeomWeight(i) {
+  const tile = OCEAN_TILES[i];
+  return seaCellAttr.smoothstep(tile / 3, tile / 12).mul(seaWaveKVert);
+}
+function seaShadeWeight(i) {
+  const t = OCEAN_TILES[i] / 16;
+  return seaFootprint.smoothstep(t * 2.5, t).mul(seaWaveK);
+}
+
+// Смещение приходит в осях мира (восток, север, вверх) — в сцену оно
+// переводится тем же отображением, что и точка.
+//
+// Узел считается ОДИН раз и переиспользуется: из него берётся и положение
+// вершины, и высота гребня для цвета. Позвать `displace` второй раз значило бы
+// выбрать все каскады заново — двенадцать лишних выборок на вершину.
+const seaDisp = ocean.displace(seaRefXY, seaGeomWeight);
+seaMat.positionNode = positionLocal.add(
+  vec3(seaDisp.x, seaDisp.z, seaDisp.y.negate()));
+// Нормаль — из тех же каскадов, но на пиксель, а не на вершину. Материалу она
+// нужна в осях вида; сетка воды только двигается, не вращаясь, так что оси
+// объекта и мира у неё совпадают и перевод сводится к одной матрице.
+const seaSurf = ocean.surface(seaWorldXY, seaShadeWeight);
+seaMat.normalNode = transformNormalToView(
+  vec3(seaSurf.x, seaSurf.z, seaSurf.y.negate()));
+
 const seaRipple = svGust(seaWorldXY).mul(seaGust);
-seaMat.colorNode = color(SEA_COLOUR).mul(
+// Пена на заворачивающемся гребне. На здешней воде она появляется только в
+// свежий ветер, и это правильно: барашки на реке при пяти метрах в секунду не
+// бывают. Оттого она и не подкрашена «в белое» жёстко, а осветляет воду:
+// зачаток барашка — это ещё не барашек, а взбитая вода.
+const seaFoam = seaSurf.w.clamp(0, 1);
+// Свечение гребня.
+//
+// Мерится оно не в метрах, а в долях СВОЕЙ волны: на штилевой ряби в сантиметр
+// гребень обязан светиться так же, как на полуметровой волне, иначе в слабый
+// ветер вода делается однотонной клеёнкой. Отсюда деление на текущую высоту
+// волнения — то самое hs, что пришло от физики.
+//
+// Считается оно по КРУПНЫМ каскадам, без мелкого. Светится не всякая
+// поднявшаяся вода, а гребень волны: сквозь него слой тонкий. Рябь под бортом
+// в пару сантиметров ничего не просвечивает, и когда она входила в эту сумму,
+// вода шла светлыми пятнами по каждой мелкой морщине — не свечением, а сыпью.
+const seaCrest = varying(
+  ocean.displace(seaRefXY, i => i < OCEAN_TILES.length - 1 ? seaGeomWeight(i) : null).z)
+  .div(ocean.uHs.mul(0.8).max(0.03)).smoothstep(0.0, 1.0).mul(0.55);
+const seaBody = mix(seaDeep, seaScatter, seaCrest).mul(
   (seaWindK ? seaRipple.mul(seaWindK).mul(seaRough) : seaRipple).mul(3.0)
     .oneMinus().clamp(0.25, 1.8));
-// Гладкая вода и блестит иначе: в тени она ближе к зеркалу.
-if (seaWindK) seaMat.roughnessNode = seaWindK.mul(0.20).add(0.08);
+// mix берётся ФУНКЦИЕЙ, а не методом. У метода первым аргументом идёт доля, а
+// не первый цвет: `a.mix(b, t)` во вклеенной сборке значит mix(b, t, a). Вода
+// от этого выходила кремовой — смешивались пена с белилами, а долей служил цвет
+// воды, — и ни одной ошибки в консоли при этом не было. Та же ловушка, что с
+// clamp ниже, только тише.
+seaMat.colorNode = mix(seaBody, color(SEA_FOAM_COLOUR), seaFoam.mul(0.85));
+// Гладкая вода и блестит иначе: в тени она ближе к зеркалу. Пена не блестит
+// вовсе — она шершавая, и без этого барашек выглядит куском полированного льда.
+{
+  const base = seaWindK ? seaWindK.mul(0.20).add(0.08) : float(0.28);
+  seaMat.roughnessNode = mix(base, float(0.9), seaFoam);
+}
+
+// Отражение неба по Френелю.
+//
+// Без него волна не читается вовсе, и это не вкусовщина. Рассеянная
+// составляющая почти не зависит от наклона: у полуметровой волны длиной в
+// десять метров склон около десятой, и освещённость на нём меняется на
+// проценты — правильно посчитанная волна выглядит листом бумаги. У отражения
+// же зависимость от угла резкая: там, где склон подставлен глазу, воды почти
+// не видно, видно небо. Этим вода и читается на любой картинке, от фотографии
+// до мультфильма.
+//
+// Кладётся оно в СВЕЧЕНИЕ, а не в цвет: отражение не освещается лампами, оно
+// само и есть свет. В цвете его пришлось бы домножать на освещённость, и на
+// ярком небе вода уходила бы в белое.
+//
+// Небо здесь одного цвета, картой окружения сцена не пользуется, — значит и
+// отражать нечего, кроме этого цвета. Зато он тот же самый, что в фоне и в
+// тумане, и горизонт не рвётся.
+{
+  const cosView = transformedNormalView.dot(positionViewDirection.normalize())
+    .abs().clamp(0, 1);
+  // 0.02 — отражение воды в упор, дальше растёт пятой степенью до единицы.
+  const fres = cosView.oneMinus().pow(5).mul(0.9).add(0.02);
+  // Пена отражает как шершавое, а не как зеркало: на барашке Френеля нет.
+  seaMat.emissiveNode = color(SKY).mul(fres).mul(seaFoam.oneMinus().mul(0.75));
+}
 
 // Имена TSL живут в одной области видимости с вклеенным three, и какое-нибудь
 // из них может оказаться перекрыто одноимённой обычной функцией — так уже
 // вышло с clamp: в ядре есть числовой clamp, он молча вернул число вместо
 // узла, и вода стала чёрной без единой ошибки в консоли. Проверять по списку
 // имён незачем: достаточно убедиться, что собранное выражение — узел.
-if (!seaMat.colorNode || typeof seaMat.colorNode.mul !== 'function') {
-  throw new Error('TSL: выражение цвета воды собралось не в узел — ' +
-                  'какое-то имя перекрыто вклеенной сборкой three');
-}
-
-function waveHeight(x, z, t, dx, dz, amp) {
-  // Шум определён в мире, а не в сцене: после flip тот же гребень должен
-  // оказаться в зеркальной точке, а не превратиться в другое море.
-  const wx = toWorldX(x), wy = toWorldY(z);
-  const wdx = toWorldX(dx), wdy = toWorldY(dz);
-  const a = Math.sin((wx * wdx + wy * wdy) * 0.28 + t * 1.35);
-  const b = Math.sin((wx * wdy - wy * wdx) * 0.17 - t * 0.85);
-  const c = Math.sin((wx * wdx + wy * wdy) * 0.72 + t * 2.6);
-  const d = Math.sin((wx * 0.9 - wy * 0.4) * 1.35 - t * 3.4);
-  return amp * (0.5 * a + 0.28 * b + 0.14 * c + 0.08 * d);
+for (const [name, node] of [['цвета', seaMat.colorNode],
+                            ['положения', seaMat.positionNode],
+                            ['нормали', seaMat.normalNode],
+                            ['отражения', seaMat.emissiveNode]]) {
+  if (!node || typeof node.mul !== 'function') {
+    throw new Error('TSL: выражение ' + name + ' воды собралось не в узел — ' +
+                    'какое-то имя перекрыто вклеенной сборкой three');
+  }
 }
 
 // ------------------------------------------------------------------- лодка
@@ -1045,7 +1199,11 @@ function updateBalCard() {
 // Прибор, а не обстановка: сетка мерит ход в метрах, и на воде её нет. Поэтому
 // она включается вместе с остальной отладкой, а не живёт всегда.
 
-const GRID_STEP = 5, GRID_HALF = 11, GRID_SUB = 2;
+// Дробление вдоль линии измельчено с двух до восьми вместе с переходом волны на
+// БПФ: сетка лежит НА воде, а лечь на волну она может только там, где сама эту
+// волну разрешает. С двухметровым звеном она резала гребни хордами и висела над
+// подошвами — прибор врал ровно тем, что мерил.
+const GRID_STEP = 5, GRID_HALF = 11, GRID_SUB = 8;
 const gridLines = [];
 {
   const n = GRID_HALF * 2, m = n * GRID_SUB;
@@ -1064,22 +1222,47 @@ gridGeo.setAttribute('position',
   new Float32BufferAttribute(new Float32Array(gridLines.length * 3), 3));
 gridGeo.setAttribute('color',
   new Float32BufferAttribute(new Float32Array(gridLines.length * 3), 3));
-const grid = new LineSegments(gridGeo, new LineBasicMaterial({
-  vertexColors: true, transparent: true, opacity: 0.5, depthWrite: false }));
+const gridMat = new LineBasicNodeMaterial({
+  vertexColors: true, transparent: true, opacity: 0.5, depthWrite: false });
+// Сетку на волну кладёт та же выборка, что и воду. Не «та же формула», а
+// буквально тот же узел из ocean.js: две реализации одной поверхности разошлись
+// бы, и разошлись бы незаметно — прибор поехал бы вместе с тем, что мерит.
+//
+// Веса каскадов здесь постоянные: звено сетки везде одно и то же, и считать их
+// на вершину незачем. Считаются они той же формулой, что у воды, — сетка обязана
+// не разрешать ровно то же, чего не разрешает вода под ней, иначе она либо
+// провалится в гребень, либо повиснет над ним.
+{
+  const cell = GRID_STEP / GRID_SUB;
+  const w = OCEAN_TILES.map(tile => {
+    const a = tile / 3, b = tile / 12;
+    const x = Math.max(0, Math.min(1, (cell - a) / (b - a)));
+    return x * x * (3 - 2 * x);
+  });
+  const ref = modelWorldMatrix.mul(vec4(positionGeometry, 1.0)).xyz;
+  const d = ocean.displace(vec2(ref.x, ref.z.negate()), i => float(w[i]));
+  gridMat.positionNode = positionLocal.add(vec3(d.x, d.z, d.y.negate()));
+}
+const grid = new LineSegments(gridGeo, gridMat);
 grid.frustumCulled = false;
 scene.add(grid);
 const GRID_FADE = GRID_HALF * GRID_STEP;
 
-function updateGrid(cx, cz, t, dx, dz, amp) {
+// Плоская заготовка: высоту сетке даёт шейдер, здесь только положение в мире и
+// цвет. Пересчитывать её каждый кадр незачем — она переставляется шагами по
+// ячейке и между шагами не меняется.
+const gridAt = { x: NaN, z: NaN };
+function updateGrid(cx, cz) {
   const ox = Math.round(cx / GRID_STEP) * GRID_STEP;
   const oz = Math.round(cz / GRID_STEP) * GRID_STEP;
+  if (gridAt.x === ox && gridAt.z === oz) return;
+  gridAt.x = ox; gridAt.z = oz;
   const p = gridGeo.attributes.position.array;
   const c = gridGeo.attributes.color.array;
   for (let i = 0; i < gridLines.length; i++) {
-    const x = ox + gridLines[i][0], z = oz + gridLines[i][1];
-    p[i * 3] = x;
-    p[i * 3 + 1] = waveHeight(x, z, t, dx, dz, amp) + 0.03;
-    p[i * 3 + 2] = z;
+    p[i * 3] = ox + gridLines[i][0];
+    p[i * 3 + 1] = 0.03;
+    p[i * 3 + 2] = oz + gridLines[i][1];
     const d = Math.max(Math.abs(gridLines[i][0]), Math.abs(gridLines[i][1]));
     const f = Math.max(0, 1 - d / GRID_FADE);
     const v = 0.35 + 0.45 * f * f;
@@ -2280,8 +2463,38 @@ addEventListener('keyup', e => { keys[e.code] = false; });
 
 const ui = {};
 for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draft',
-                  'fetch', 'fetchover', 'cur', 'shd0', 'shk', 'shg', 'chan'])
+                  'fetch', 'fetchover', 'cur', 'shd0', 'shk', 'shg', 'chan', 'chop'])
   ui[id] = document.getElementById(id);
+
+// --- вода на панели -----------------------------------------------------------
+//
+// Волна здесь НЕ настраивается — она следствие ветра и разгона, и отдельного
+// ползунка высоты тут нет нарочно: он тут же развёл бы картинку с силами,
+// ровно от чего вся эта затея и уходила. Показываются поэтому не органы
+// управления, а ПРИБОР: во что ветер с разгоном превратились на воде и что под
+// лодкой прямо сейчас.
+//
+// Ползунков всё-таки два, и оба про вид, а не про состояние моря. Крутизна
+// гребня — это доля горизонтального смещения: спектр задаёт, сколько волны, а
+// крутизна — насколько остро она заворачивается; в воде это единица, ниже
+// приглаженнее, выше злее. Вид воды — пара цветов, глубина и рассеяние.
+const capSeaHs = document.getElementById('v-seahs');
+const capSeaLp = document.getElementById('v-sealp');
+const capSeaNow = document.getElementById('v-seanow');
+{
+  const sel = document.getElementById('sealook');
+  for (const look of SEA_LOOKS) {
+    const o = document.createElement('option');
+    o.value = look.id; o.textContent = look.name;
+    sel.appendChild(o);
+  }
+  sel.value = SEA_LOOKS[0].id;
+  sel.addEventListener('change', () => {
+    const look = SEA_LOOKS.find(l => l.id === sel.value) || SEA_LOOKS[0];
+    seaDeep.value.set(look.deep);
+    seaScatter.value.set(look.scatter);
+  });
+}
 
 // Тень берега — единственная часть модели, у которой нет объективной проверки:
 // её числа подгоняются глазом того, кто там ходит. Поэтому они и вынесены
@@ -2447,6 +2660,22 @@ function readControls(dt) {
       ? (t.fetchM / 1000).toFixed(1) + ' км по месту'
       : 'вне участка';
   }
+  // Волна: приборы и два органа вида. Высота и длина — из того же состояния
+  // моря, по которому идёт добавочное сопротивление, поэтому это не пересчёт, а
+  // показ. «Под лодкой» читается с пробы — это уже не оценка волнения вообще, а
+  // то, на чём лодка стоит сию секунду, и по нему видно, что качка не
+  // подрисована: цифра ходит вместе с корпусом.
+  ocean.uChop.value = parseFloat(ui.chop.value);
+  if (capSeaHs) {
+    const hs = boat.seaHs || 0;
+    const lp = 1.56 * seaState(o.windSpeed, boat.fetchM || 0).tp ** 2;
+    capSeaHs.textContent = hs > 0.005 ? (100 * hs).toFixed(0) + ' см' : 'гладко';
+    capSeaLp.textContent = hs > 0.005 ? lp.toFixed(1) + ' м' : '—';
+    const z = ocean.probeHeight(0);
+    const slope = Math.hypot(ocean.probeSlopeE(0), ocean.probeSlopeN(0));
+    capSeaNow.textContent = (z >= 0 ? '+' : '−') + Math.abs(100 * z).toFixed(0) +
+      ' см · склон ' + (Math.atan(slope) / D).toFixed(1) + '°';
+  }
   // Порывистость одним ползунком: сильнее дует — сильнее и заходит. Порознь
   // эти две вещи на воде не встречаются, а два ползунка вместо одного только
   // мешают понять, что происходит.
@@ -2557,6 +2786,11 @@ function resize() {
   renderer.setSize(r.width, r.height, true);
   camera.aspect = r.width / r.height;
   camera.updateProjectionMatrix();
+  // Сколько метров приходится на пиксель на каждый метр дальности. По этому
+  // числу в шейдере воды гаснут мелкие каскады: рябь, которая мельче пикселя,
+  // рисуется не рябью, а шумом. Зависит от угла и от высоты окна, поэтому
+  // ставится здесь, а не один раз при сборке материала.
+  seaPerPixel.value = 2 * Math.tan(camera.fov * D / 2) / r.height;
 }
 addEventListener('resize', resize);
 // Одного вызова мало: на момент запуска модуля раскладка ещё может не
@@ -2570,6 +2804,16 @@ function frame() {
   const dt = Math.min(0.25, now - last);
   last = now;
   acc += dt;
+
+  // Волна — плавучести, до шага, а не после. Проба даёт высоту поверхности под
+  // лодкой и два её наклона; глубину корпуса физика меряет уже от них, и качка
+  // на волне получается у неё сама — тем же объёмом, той же жёсткостью, тем же
+  // демпфированием, что и посадка под грузом. Подрисованной посадки корпуса в
+  // сцене больше нет и не нужно.
+  //
+  // Ответ приходит с прошлого кадра: читается он с видеокарты асинхронно.
+  // На волне с периодом в пару секунд это сантиметры.
+  boat.setWater(ocean.probeHeight(0), ocean.probeSlopeE(0), ocean.probeSlopeN(0));
 
   let steps = 0;
   while (acc >= DT && steps < 8) {
@@ -2598,9 +2842,14 @@ function frame() {
   const ith = prev.th + (boat.th - prev.th) * a;
   const t = boat.telemetry || {};
 
-  // Лодка теперь ходит и по вертикали: садится под грузом, приседает под тягой
-  // и стоит с дифферентом. Порядок поворотов YXZ означает, что дифферент
-  // применяется первым, в осях самой лодки, — то есть так, как он и получается.
+  // Лодка ходит и по вертикали: садится под грузом, приседает под тягой и
+  // стоит с дифферентом. С волной сюда же входит и то, как её поднимает
+  // гребнем: zc считается от СПОКОЙНОЙ воды, а плавучесть меряет глубину от
+  // местной поверхности, которую ей даёт проба из ocean.js. Поэтому подрисовывать
+  // здесь нечего — всплытие и дифферент приходят из физики целиком.
+  //
+  // Порядок поворотов YXZ означает, что дифферент применяется первым, в осях
+  // самой лодки, — то есть так, как он и получается.
   boatGroup.position.set(toSceneX(ix), heaveY(izc), toSceneZ(iy));
   boatGroup.rotation.order = 'YXZ';
   boatGroup.rotation.y = headingRotY(ipsi);
@@ -2614,23 +2863,29 @@ function frame() {
   const side = rigSideZ(boat.rigSide != null ? boat.rigSide : 1);
   shapeSails(side);
 
-  const amp = 0.10 + 0.035 * boat.o.windSpeed;
   updateWindMap();
   sea.position.set(toSceneX(Math.round(ix / CELL) * CELL), 0,
                    toSceneZ(Math.round(iy / CELL) * CELL));
-  const dirX = dirSceneX(boat.o.windDir), dirZ = dirSceneZ(boat.o.windDir);
-  const pos = seaGeo.attributes.position.array;
-  for (let i = 0, v = 0; i < pos.length; i += 3, v++) {
-    if (seaAmp[v] === 0) { pos[i + 1] = 0; continue; }
-    const x = seaBase[i] + sea.position.x, z = seaBase[i + 2] + sea.position.z;
-    // Волна гаснет там, где нет ветра: под подветренным берегом вода обязана
-    // быть не только гладкой на вид, но и плоской на ощупь. Множитель тот же,
-    // что у сил, — карта одна на физику и картинку.
-    const wk = windMapSample(x, z);
-    pos[i + 1] = waveHeight(x, z, now, dirX, dirZ, amp * seaAmp[v] * wk * wk);
+
+  // Море. Состояние берётся у физики, а не считается заново: высоту и период
+  // уже посчитал waves.js — по ветру и по разгону, который на акватории свой в
+  // каждой точке. Так волна на воде и волна в сопротивлении — одна и та же
+  // волна, и по виду моря можно судить, за что лодка платит ходом.
+  //
+  // Волны бегут по ветру. Направление берётся у лодки вместе с поворотом к оси
+  // долины — по тому же соображению, что и языки ряби ниже: там, где на волну
+  // смотрят, она обязана совпадать со стрелками.
+  {
+    const st = seaState(boat.o.windSpeed, boat.fetchM || 0);
+    ocean.setSea(boat.seaHs || 0, st.tp, boat.o.windDir + (boat.chanRot || 0));
+    // Проба под лодкой — ДО прогона: ядро проб идёт последним в том же пакете,
+    // и точка обязана быть свежей. Ответ всё равно придёт кадром позже, читается
+    // он асинхронно; на волне с периодом в секунды это меньше сантиметра.
+    ocean.setProbe(0, ix, iy);
+    // Время — модельное, а не настенное: при паузе и перемотке записи вода
+    // обязана стоять и отматываться вместе с лодкой.
+    ocean.step(boat.t);
   }
-  seaGeo.attributes.position.needsUpdate = true;
-  if ((tick & 1) === 0) seaGeo.computeVertexNormals();
   seaGust.value = boat.wind.o.gust;
   seaShadeGust.value = boat.o.shadeGust;
   // Языки ряби кладутся по направлению ветра У ЛОДКИ, вместе с поворотом к оси
@@ -2641,7 +2896,7 @@ function frame() {
   seaWindDir.value = boat.wind.o.dir + (boat.chanRot || 0);
   seaWindSpeed.value = boat.wind.o.speed;
   seaTime.value = boat.t;
-  if (debugOn) updateGrid(toSceneX(ix), toSceneZ(iy), now, dirX, dirZ, amp);
+  if (debugOn) updateGrid(toSceneX(ix), toSceneZ(iy));
   updateStreaks(toSceneX(ix), toSceneZ(iy), dt);
   curField.visible = debugMode === 1 && terrain.ready && boat.o.current > 0;
   if (debugMode === 2) updateBalance();

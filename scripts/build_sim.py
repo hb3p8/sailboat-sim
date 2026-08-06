@@ -31,7 +31,8 @@ GLTF_BUNDLE = "three.gltf.js"
 
 # Всё, что вклеивается в страницу, в порядке объявления.
 MODULES = ["terrain.js", "axes.js", "wind.js", "vlm.js", "membrane.js",
-           "waves.js", "buoyancy.js", "trace.js", "physics.js", "main.js"]
+           "waves.js", "buoyancy.js", "ocean.js", "trace.js", "physics.js",
+           "main.js"]
 
 
 def alias_three_imports(src):

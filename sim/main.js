@@ -988,7 +988,9 @@ function updateBalCard() {
     row(BAL_C.aero, 'ЦП', 'x ' + m1(b.ceX) + ', высота ' + m1(b.ceZ),
         'тяга ' + n0(b.driveN) + ', бок ' + n0(Math.abs(b.sideN))) +
     row(BAL_C.hydro, 'ЦБС', 'x ' + m1(b.clrX) + ', z ' + m1(b.clrZ),
-        'бок ' + n0(Math.abs(b.hydroSideN)) + ', сопр ' + n0(Math.abs(b.dragN))) +
+        'бок ' + n0(Math.abs(b.hydroSideN)) + ', сопр ' +
+        Math.round(Math.abs(b.hullN) - Math.abs(b.wavesN)) +
+        (b.wavesN > 0.5 ? '+' + Math.round(b.wavesN) : '') + ' Н') +
     row(BAL_C.cg, 'ЦТ', 'x ' + m1(b.cgX) + ', z ' + m1(b.cgZ),
         'вес ' + n0(b.weightN)) +
     row(BAL_C.buoy, 'ЦВ', 'x ' + m1(b.bX) + ', под ветер ' + m1(Math.abs(b.bY)),
@@ -1000,8 +1002,9 @@ function updateBalCard() {
     ' · кренит <b>' + Math.round(Math.abs(b.heelNm)) + '</b>, экипаж <b>' +
     Math.round(Math.abs(b.hikeNm)) + '</b>, корпус <b>' +
     Math.round(b.weightN * b.gzM) + '</b> Н·м<br>' +
-    'стрелки: <b>1 м = ' + BAL_NM + ' Н</b>, кроме веса с плавучестью — ' +
-    'они всегда равны, и говорит у них расхождение';
+    'у сопротивления второе слагаемое — волновое · стрелки <b>1 м = ' +
+    BAL_NM + ' Н</b>, кроме веса с плавучестью: они всегда равны, и говорит ' +
+    'у них расхождение';
 }
 
 // --- сетка на воде ------------------------------------------------------------

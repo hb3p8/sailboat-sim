@@ -1169,7 +1169,7 @@ export class Boat {
       windFx: wind.fx, windFy: wind.fy, windZ: wind.z,
       clrX: small ? cgx : cgx + hmz / hy,
       clrZ: small ? hullZ : hmx / hy,
-      hydroSideN: hy, dragN: hullDrag,
+      hydroSideN: hy, dragN: hullDrag, hullN: dragN, wavesN: this.wavesN,
       keelN: keelSide, rudderN: rudSide, hullSideN: hull.fy,
       cgX: cgx, cgZ: cgz, bX: bx, bY: by, bZ: bz,
       weightN: W, gzM: gz, hikeNm: this.hike,

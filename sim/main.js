@@ -1011,17 +1011,25 @@ scene.add(streakMesh);
 // поток равномерен, вход равен выходу, а перенос через центр сохраняет и
 // распределение по краю (входов больше там, где поток входит отвеснее).
 //
+// Перенос годится, только когда струя ТОЛЬКО ЧТО пересекла край. Лодка умеет
+// перескакивать: сброс, приход разметки через сеть, смена стартовой точки. Тогда
+// за краем оказываются разом все и с одной стороны — перенос сложил бы их в одну
+// точку, откуда они уже не разойдутся, потому что дальше сдвиг у всех общий.
+// Так и было: после загрузки разметки все семьдесят стояли одним комком в
+// семидесяти метрах от лодки, а в сцене не было видно ни одной. Поэтому далёкий
+// выход — это не выход, а повод раздать заново.
+//
 // Разброс по радиусу квадратный: иначе все скучиваются у центра, где площади мало.
 function seedStreak(st, ix, iy, ox, oz) {
-  if (ox === undefined) {
+  const d = ox === undefined ? 0 : Math.hypot(ox, oz);
+  if (d > STREAK_R && d < STREAK_R * 1.1) {
+    st.x = ix - ox / d * STREAK_R * 0.995;
+    st.z = iy - oz / d * STREAK_R * 0.995;
+  } else {
     const a = Math.random() * Math.PI * 2;
     const r = STREAK_R * Math.sqrt(Math.random());
     st.x = ix + Math.cos(a) * r;
     st.z = iy + Math.sin(a) * r;
-  } else {
-    const d = Math.hypot(ox, oz) || 1;
-    st.x = ix - ox / d * STREAK_R * 0.995;
-    st.z = iy - oz / d * STREAK_R * 0.995;
   }
   st.y = STREAK_LO + Math.random() * (STREAK_HI - STREAK_LO);
   st.len = 6 + Math.random() * 15;
@@ -1084,6 +1092,7 @@ function updateStreaks(ix, iy, dt) {
   const aw = aw0;
   const V = Math.hypot(aw.x, aw.y);
   streakMesh.visible = amp > 0.01 && V > 0.3;
+  topView.on = streakMesh.visible;
   if (!streakMesh.visible) return;
   const awDir = Math.atan2(aw.y, aw.x) + boat.psi;       // куда дует, в мире
   const dx = dirSceneX(awDir), dz = dirSceneZ(awDir);
@@ -1097,6 +1106,8 @@ function updateStreaks(ix, iy, dt) {
   const ux = aw.x / V, uy = aw.y / V;
   const cpsi = Math.cos(boat.psi), spsi = Math.sin(boat.psi);
   streakFree.dx = dx; streakFree.dz = dz; streakFree.s = 1;
+  topView.x = ix; topView.z = iy;
+  topView.dx = dx; topView.dz = dz; topView.v = v;
 
   const p = streakGeo.attributes.position.array;
   const ad = streakGeo.attributes.aDir.array;
@@ -1122,6 +1133,7 @@ function updateStreaks(ix, iy, dt) {
     // Плотность держится низкой нарочно: струи должны читаться боковым
     // зрением и не спорить с парусами, когда смотришь на них.
     const A = 0.62 * amp * st.fade * edge;
+    st.A = A;                             // для вида сверху: рисуем что видно
     const L = st.len * (0.6 + 0.6 * amp);
 
     // Хвост строится ЛОМАНОЙ НАЗАД ПО ПОТОКУ, а не отрезком: на каждой станции
@@ -1172,6 +1184,111 @@ function updateStreaks(ix, iy, dt) {
   streakGeo.attributes.aDir.needsUpdate = true;
   streakGeo.attributes.aWide.needsUpdate = true;
   streakGeo.attributes.aFade.needsUpdate = true;
+}
+
+// --- отладочный вид сверху: струи вокруг лодки --------------------------------
+//
+// Струи живут вокруг лодки, а видны в перспективе с кормы: половина за спиной,
+// половина мимо кадра. Ровно ли они лежат кругом, не отстают ли на полном курсе,
+// куда девается плотность — по такому виду не сказать, а по одному снимку тем
+// более. Здесь тот же набор сверху и схематично.
+//
+// Рисуется прямо в осях сцены: X вправо, Z вниз. Это уже карта севером кверху,
+// потому что сцена получена из мира переводом (x, y) -> (x, -y); заводить свои
+// знаки не нужно и нельзя — ровно ради этого axes.js и существует.
+//
+// Две стрелки от лодки отвечают на главный вопрос отладки: жёлтая — снос струй,
+// зелёная — ход лодки. Разница между ними и есть то движение, которое видно с
+// палубы. Когда они сходятся, струи стоят на месте относительно лодки; когда
+// зелёная длиннее, лодка обгоняет воздух, и струи обязаны идти назад.
+
+const TOP_PX = 240;         // сторона канваса
+const TOP_BOAT = 2;         // лодка нарисована крупнее натуры: иначе точка
+const topCv = document.getElementById('top');
+const topCtx = topCv.getContext('2d');
+{
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  topCv.width = TOP_PX * dpr; topCv.height = TOP_PX * dpr;
+  topCtx.scale(dpr, dpr);
+}
+const topView = { on: false, x: 0, z: 0, dx: 1, dz: 0, v: 0 };
+const topNote = document.getElementById('topnote');
+
+function topArrow(c, x, z, dx, dz, len, color) {
+  const hx = x + dx * len, hz = z + dz * len;
+  c.strokeStyle = color; c.fillStyle = color; c.lineWidth = 1.6;
+  c.beginPath(); c.moveTo(x, z); c.lineTo(hx, hz); c.stroke();
+  c.beginPath();
+  c.moveTo(hx + dx * 5, hz + dz * 5);
+  c.lineTo(hx - dx * 3 - dz * 3.2, hz - dz * 3 + dx * 3.2);
+  c.lineTo(hx - dx * 3 + dz * 3.2, hz - dz * 3 - dx * 3.2);
+  c.fill();
+}
+
+function updateTop() {
+  const c = topCtx, R = TOP_PX / 2;
+  const m = R / (STREAK_R * 1.06);       // пикселей на метр, с полем по краю
+  const px = x => R + (x - topView.x) * m;
+  const pz = z => R + (z - topView.z) * m;
+  c.clearRect(0, 0, TOP_PX, TOP_PX);
+
+  // Круг раздачи и половина его: по ним и читается, ровно ли лежит плотность.
+  c.strokeStyle = 'rgba(255,255,255,.22)'; c.lineWidth = 1;
+  c.setLineDash([3, 3]);
+  c.beginPath(); c.arc(R, R, STREAK_R * m, 0, 7); c.stroke();
+  c.strokeStyle = 'rgba(255,255,255,.10)';
+  c.beginPath(); c.arc(R, R, STREAK_R * m / 2, 0, 7); c.stroke();
+  c.setLineDash([]);
+
+  let fwd = 0, aft = 0, live = 0;
+  if (topView.on) {
+    const bx = bowSceneX(boat.psi), bz = bowSceneZ(boat.psi);
+    for (const st of streaks) {
+      if (!st || !st.pts) continue;
+      live++;
+      if ((st.x - topView.x) * bx + (st.z - topView.z) * bz > 0) fwd++; else aft++;
+      // Прозрачность — та же, с какой струя нарисована в сцене, только поднятая:
+      // иначе на отладке не видно как раз того, что и надо разглядеть.
+      c.strokeStyle = `rgba(255,255,255,${Math.min(0.9, (st.A || 0) * 2.4)})`;
+      c.lineWidth = 1.4;
+      c.beginPath();
+      for (let k = 0; k < STREAK_ST.length; k++) {
+        const x = px(st.pts[k * 2]), z = pz(st.pts[k * 2 + 1]);
+        if (k) c.lineTo(x, z); else c.moveTo(x, z);
+      }
+      c.stroke();
+      // Голова — точка, её размер по высоте: так видно, что струи раздаются по
+      // всей толще, а не лежат в одной плоскости.
+      const h = (st.y - STREAK_LO) / (STREAK_HI - STREAK_LO);
+      c.fillStyle = `rgba(255,207,90,${Math.min(0.95, (st.A || 0) * 2.4)})`;
+      c.beginPath(); c.arc(px(st.x), pz(st.z), 1 + 2.2 * h, 0, 7); c.fill();
+    }
+  }
+
+  // Лодка: корпус острым носом, чтобы курс читался без стрелки.
+  const L = 6.1 * m * TOP_BOAT / 2, W = 1.1 * m * TOP_BOAT / 2;
+  const fx = bowSceneX(boat.psi), fz = bowSceneZ(boat.psi);
+  const sx = stbdSceneX(boat.psi), sz = stbdSceneZ(boat.psi);
+  const at = (a, b) => [R + fx * a + sx * b, R + fz * a + sz * b];
+  c.fillStyle = 'rgba(255,255,255,.85)';
+  c.beginPath();
+  const hull = [[L, 0], [L * 0.25, W], [-L * 0.8, W * 0.8], [-L, 0],
+                [-L * 0.8, -W * 0.8], [L * 0.25, -W]];
+  hull.forEach((q, i) => { const [a, b] = at(q[0], q[1]); i ? c.lineTo(a, b) : c.moveTo(a, b); });
+  c.closePath(); c.fill();
+
+  // Снос струй и ход лодки. Скорость лодки собирается из осей лодки теми же
+  // ортами, что и корпус: продольная по носу, поперечная на левый борт.
+  topArrow(c, R, R, topView.dx, topView.dz, 10 + topView.v * 4, 'rgba(255,207,90,.9)');
+  const vx = boat.u * fx - boat.v * sx, vz = boat.u * fz - boat.v * sz;
+  const vs = Math.hypot(vx, vz) || 1;
+  topArrow(c, R, R, vx / vs, vz / vs, 10 + vs * 4, 'rgba(110,231,168,.9)');
+
+  topNote.innerHTML = topView.on
+    ? `струй <b>${live}</b> · впереди <b>${fwd}</b> / позади <b>${aft}</b><br>` +
+      `снос <b>${topView.v.toFixed(1)}</b> · ход <b>${vs.toFixed(1)}</b> м/с · ` +
+      `круг ${STREAK_R} м · лодка ×${TOP_BOAT}`
+    : 'струй нет: слишком слабый кажущийся ветер';
 }
 
 // --- отладочный слой: поле ветра и полоски рига -------------------------------
@@ -1752,6 +1869,7 @@ function setDebug(on) {
   flow.visible = on;
   flowGhost.visible = on;
   document.getElementById('rigcard').hidden = !on;
+  document.getElementById('topcard').hidden = !on;
 }
 
 // ---------------------------------------------------------------- ввод
@@ -2212,7 +2330,7 @@ function frame() {
   camera.lookAt(camAim);
 
   renderer.render(scene, camera);
-  if ((tick % 3) === 0) { updateHud(t); updateRose(t); if (debugOn) updateRig(t); }
+  if ((tick % 3) === 0) { updateHud(t); updateRose(t); if (debugOn) { updateRig(t); updateTop(); } }
   tick++;
   requestAnimationFrame(frame);
 }

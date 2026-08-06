@@ -91,6 +91,15 @@
   }
   #dump:hover { background: rgba(255,255,255,.14); }
   #dump:active { background: rgba(255,255,255,.22); }
+  /* Правее розы, а не под ней: ширину карточки с приборами задаёт её
+     содержимое, и на длинных числах она заезжает под соседа. */
+  #topcard { top: 14px; left: 434px; padding: 8px; }
+  #top { display: block; width: 240px; height: 240px; }
+  #topnote {
+    margin-top: 4px; font-size: 10.5px; color: var(--dim); line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+  }
+  #topnote b { color: var(--fg); font-weight: 600; }
   #rigcard { bottom: 52px; left: 14px; padding: 8px 10px 6px; }
   #rig { display: block; width: 384px; height: 132px; }
   #rig .cap {
@@ -182,6 +191,10 @@
   <div class="cap"><span>Камера</span><span id="cammode">погоня</span></div>
   <button id="dump" type="button">Сдампать состояние</button>
   <div id="stamp"></div>
+</div>
+<div id="topcard" class="card" hidden>
+  <canvas id="top"></canvas>
+  <div id="topnote"></div>
 </div>
 <div id="rigcard" class="card" hidden>
   <svg id="rig" viewBox="0 0 384 132"></svg>

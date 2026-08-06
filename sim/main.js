@@ -313,7 +313,8 @@ function meshFrom(data, colour, rough, metal) {
   }));
 }
 
-boatGroup.add(meshFrom(MESH.hull, 0xf4f7fa, 0.32));
+const hullMesh = meshFrom(MESH.hull, 0xf4f7fa, 0.32);
+boatGroup.add(hullMesh);
 boatGroup.add(meshFrom(MESH.keel_fin, 0x5d6873, 0.4));
 boatGroup.add(meshFrom(MESH.bulb, 0x8d7340, 0.35, 0.3));
 if (MESH.keel_case) boatGroup.add(meshFrom(MESH.keel_case, 0xe4eaee, 0.4));
@@ -2155,6 +2156,75 @@ const camPos = new Vector3(-14, 5, 0);
 const camAim = new Vector3();
 const prev = { x: 0, y: 0, psi: 0, phi: 0 };
 
+// --- отладочные ортогональные виды --------------------------------------------
+//
+// Ставить что-либо на лодку по перспективному виду нельзя: перспектива врёт о
+// симметрии. Стоящее на диаметральной кажется смещённым, равные отступы от неё
+// выглядят разными, а с кормы ближний борт крупнее дальнего. Ортогональный вид
+// — это чертёж: сзади видно, одинаково ли разнесены предметы по бортам и сидят
+// ли они на палубе; сверху — как они расставлены вдоль.
+//
+// Включается из консоли: sv20ortho('back' | 'top' | 'side'), sv20ortho(false)
+// вернуть. Паруса, вода и отладочные слои на время кадра снимаются — они
+// закрывают как раз проверяемое, — и сразу ставятся обратно: вид ничего не
+// должен оставлять за собой, иначе следующая же правка будет отлаживаться в
+// сцене с невидимой водой.
+//
+// Полкадра по вертикали известно в метрах, а лодка стоит в центре, — значит по
+// снимку экрана можно мерить линейкой, а не на глаз.
+
+const ORTHO_DIST = 40;             // относ камеры, м; для ортогональной — лишь порядок
+const orthoCam = new OrthographicCamera(-1, 1, 1, -1, -80, 80);
+const orthoAim = new Vector3();
+let orthoView = null, orthoHalf = 4.2, orthoOff = null, orthoWas = null;
+// Второй довод — полкадра в метрах: на палубу смотрят с двух метров, на рангоут
+// с пяти, и переключать это должно быть дешевле, чем пересобирать страницу.
+window.sv20ortho = (v = 'back', half = 4.2) => {
+  orthoView = (v === 'back' || v === 'top' || v === 'side') ? v : null;
+  orthoHalf = Math.max(0.3, +half || 4.2);
+  return orthoView && orthoView + ', полкадра ' + orthoHalf + ' м';
+};
+
+function renderOrtho(bx, bz, fx, fz, sx, sz) {
+  const r = stage.getBoundingClientRect();
+  const asp = Math.max(0.2, r.width / Math.max(1, r.height));
+  orthoCam.top = orthoHalf; orthoCam.bottom = -orthoHalf;
+  orthoCam.left = -orthoHalf * asp; orthoCam.right = orthoHalf * asp;
+  orthoCam.updateProjectionMatrix();
+  // Целить надо в середину лодки, а не в её начало координат: оно у транца, и
+  // при взгляде сверху корпус уезжает целиком за край кадра.
+  hullMesh.geometry.computeBoundingBox();
+  const bb = hullMesh.geometry.boundingBox;
+  const mid = (bb.min.x + bb.max.x) / 2;       // локальная X модели — в нос
+  orthoAim.set(bx + fx * mid, 0.8, bz + fz * mid);
+  if (orthoView === 'top') {
+    orthoCam.position.set(bx, ORTHO_DIST, bz);
+    orthoCam.up.set(fx, 0, fz);                // нос кверху экрана
+  } else if (orthoView === 'side') {
+    orthoCam.position.set(bx + sx * ORTHO_DIST, 0.8, bz + sz * ORTHO_DIST);
+    orthoCam.up.set(0, 1, 0);
+  } else {
+    orthoCam.position.set(bx - fx * ORTHO_DIST, 0.8, bz - fz * ORTHO_DIST);
+    orthoCam.up.set(0, 1, 0);
+  }
+  orthoCam.lookAt(orthoAim);
+
+  if (!orthoOff) {
+    orthoOff = [mainSail, jibSail, telltales[0], telltales[1], battens,
+                sea, grid, wake, track, mark, streakMesh, field, curField,
+                flow, flowGhost].filter(Boolean);
+    orthoWas = new Array(orthoOff.length);
+  }
+  for (let i = 0; i < orthoOff.length; i++) {
+    orthoWas[i] = orthoOff[i].visible; orthoOff[i].visible = false;
+  }
+  const fog = scene.fog;
+  scene.fog = null;                            // чертёж не выцветает с дальностью
+  renderer.render(scene, orthoCam);
+  scene.fog = fog;
+  for (let i = 0; i < orthoOff.length; i++) orthoOff[i].visible = orthoWas[i];
+}
+
 function resize() {
   const r = stage.getBoundingClientRect();
   if (r.width < 2 || r.height < 2) return;
@@ -2347,7 +2417,8 @@ function frame() {
   camera.position.copy(camPos);
   camera.lookAt(camAim);
 
-  renderer.render(scene, camera);
+  if (orthoView) renderOrtho(bx, bz, fx, fz, sx, sz);
+  else renderer.render(scene, camera);
   if ((tick % 3) === 0) { updateHud(t); updateRose(t); if (debugOn) updateRig(t); if (topShown) updateTop(); }
   tick++;
   requestAnimationFrame(frame);

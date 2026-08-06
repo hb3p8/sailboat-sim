@@ -742,6 +742,9 @@ let trackN = 0;
 // Однородная вода не даёт ощущения хода: лодка будто висит. Сетка привязана к
 // миру, а не к лодке, и переставляется шагами по ячейке — получается
 // бесконечное поле, по которому видно и скорость, и снос, и поворот.
+//
+// Прибор, а не обстановка: сетка мерит ход в метрах, и на воде её нет. Поэтому
+// она включается вместе с остальной отладкой, а не живёт всегда.
 
 const GRID_STEP = 5, GRID_HALF = 11, GRID_SUB = 2;
 const gridLines = [];
@@ -1224,6 +1227,18 @@ function topArrow(c, x, z, dx, dz, len, color) {
   c.lineTo(hx - dx * 3 + dz * 3.2, hz - dz * 3 - dx * 3.2);
   c.fill();
 }
+
+// Мини-карта нужна не рулевому, а тому, кто правит сами струи, поэтому она
+// спрятана и не привязана к G: включается из консоли вызовом sv20top(). Своим
+// переключателем, а не общим, — чтобы смотреть на струи можно было в обычной
+// обстановке, без стрелок поля и полупрозрачных парусов, которые как раз их и
+// загораживают.
+let topShown = false;
+window.sv20top = (on = true) => {
+  topShown = !!on;
+  document.getElementById('topcard').hidden = !topShown;
+  return topShown;
+};
 
 function updateTop() {
   const c = topCtx, R = TOP_PX / 2;
@@ -1864,12 +1879,13 @@ function setDebug(on) {
     m.opacity = on ? 0.9 : 1;
     m.needsUpdate = true;
   }
+  grid.visible = on;
+  arrow.visible = on;
   field.visible = on;
   battens.visible = on;
   flow.visible = on;
   flowGhost.visible = on;
   document.getElementById('rigcard').hidden = !on;
-  document.getElementById('topcard').hidden = !on;
 }
 
 // ---------------------------------------------------------------- ввод
@@ -2222,7 +2238,7 @@ function frame() {
   seaWindDir.value = boat.wind.o.dir + (boat.chanRot || 0);
   seaWindSpeed.value = boat.wind.o.speed;
   seaTime.value = boat.t;
-  updateGrid(toSceneX(ix), toSceneZ(iy), now, dirX, dirZ, amp);
+  if (debugOn) updateGrid(toSceneX(ix), toSceneZ(iy), now, dirX, dirZ, amp);
   updateStreaks(toSceneX(ix), toSceneZ(iy), dt);
   curField.visible = debugOn && terrain.ready && boat.o.current > 0;
   if (debugOn) {
@@ -2271,6 +2287,8 @@ function frame() {
     trackGeo.attributes.position.needsUpdate = true;
   }
 
+  // Стрелка — тоже прибор: рулевой читает ветер по колдунчикам, розе и воде, а
+  // указатель, висящий над мачтой, отвечает на вопрос отладки «куда дует здесь».
   arrow.position.set(toSceneX(ix + 4 * Math.cos(boat.o.windDir)), 6.2,
                      toSceneZ(iy + 4 * Math.sin(boat.o.windDir)));
   // Стрелка показывает ветер У ЛОДКИ, а не положение ползунка: с канализацией
@@ -2330,7 +2348,7 @@ function frame() {
   camera.lookAt(camAim);
 
   renderer.render(scene, camera);
-  if ((tick % 3) === 0) { updateHud(t); updateRose(t); if (debugOn) { updateRig(t); updateTop(); } }
+  if ((tick % 3) === 0) { updateHud(t); updateRose(t); if (debugOn) updateRig(t); if (topShown) updateTop(); }
   tick++;
   requestAnimationFrame(frame);
 }

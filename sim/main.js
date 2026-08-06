@@ -738,6 +738,75 @@ track.frustumCulled = false;
 scene.add(track);
 let trackN = 0;
 
+// --- экипаж -------------------------------------------------------------------
+//
+// Три фигурки на борту — не украшение, а показание прибора. Физика откренивает
+// не по ползунку, а против кренящего момента (physics.js, `hike`): в слабый
+// ветер экипаж сидит в лодке, в порыв выкладывается, и делает это с
+// запаздыванием. Ползунок задаёт лишь верхний предел. Поэтому фигурки отнесены
+// от диаметральной на НАСТОЯЩЕЕ плечо — момент, делённый на вес экипажа, — и
+// показывают то, что считается, а не то, что выставлено.
+//
+// Модель приходит с сервера: ровно на этом месте страница перестала быть
+// самодостаточной. Без сервера фигурок не будет, всё остальное работает как
+// прежде — поэтому загрузка и не мешает ничему стартовать.
+
+const CREW_H = 1.72;                 // рост фигурки, м
+// Фигурка занимает вдоль лодки метр с небольшим — отсюда и шаг станций. Ноги у
+// неё разнесены поперёк почти на полтора метра, и это удачно: так сидит на борту
+// откренивающий экипаж, ступни внутрь.
+const CREW_X = [1.15, 2.20, 3.25];   // станции вдоль лодки, м от транца
+const CREW_DECK = 0.66;              // высота борта на этих станциях, м
+const CREW_ARM = 1.0;                // предел плеча, м — тот же, что в physics.js
+const CREW_FACE = 0;                 // доворот фигурки вокруг своей оси, рад
+const crewFigs = [];
+let crewArm = 0;                     // плечо сейчас, м — его же показывает панель
+const crewGroup = new Group();
+boatGroup.add(crewGroup);
+
+new GLTFLoader()
+  .setDRACOLoader(new DRACOLoader().setDecoderPath('../viewer/vendor/draco/'))
+  .load('../assets/crew.glb', gltf => {
+    // Рост и посадка берутся из самой модели, а не из числа в коде: заменят
+    // фигурку — и всё сойдётся само.
+    const box = new Box3().setFromObject(gltf.scene);
+    const size = new Vector3(); box.getSize(size);
+    const k = CREW_H / size.y;
+    for (let i = 0; i < CREW_X.length; i++) {
+      const g = new Group();
+      const fig = i ? gltf.scene.clone() : gltf.scene;
+      fig.scale.setScalar(k);
+      // Ноги на палубу и по центру, а не серединой габарита в неё.
+      fig.position.set(-(box.min.x + box.max.x) / 2 * k, -box.min.y * k,
+                       -(box.min.z + box.max.z) / 2 * k);
+      g.add(fig);
+      crewGroup.add(g);
+      crewFigs.push(g);
+    }
+  }, undefined, err => console.warn('фигурка экипажа не загрузилась:', err));
+
+function updateCrew() {
+  if (!crewFigs.length) return;
+  const m = boat.o.crewMass;
+  // Ноль на ползунке в физике означает не «сидят в лодке», а «экипажа нет»:
+  // ни массы, ни парусности. Значит и фигурок быть не должно.
+  crewGroup.visible = m > 0;
+  if (!crewGroup.visible) return;
+  // Плечо: какой момент экипаж создаёт сейчас, делённый на его вес. Груз на
+  // левом борту (+Y) даёт момент отрицательный, отсюда знак.
+  const arm = Math.max(-CREW_ARM, Math.min(CREW_ARM,
+    boat.hike / (m * PACK.environment.g)));
+  crewArm = arm;
+  for (let i = 0; i < crewFigs.length; i++) {
+    const f = crewFigs[i];
+    f.position.set(bodyPointLocalX(CREW_X[i]), bodyPointLocalY(CREW_DECK),
+                   bodyPointLocalZ(-arm));
+    f.rotation.y = CREW_FACE;
+  }
+  if (capHike) capHike.textContent =
+    (boat.o.crewHike * 100).toFixed(0) + '% · плечо ' + Math.abs(arm).toFixed(2) + ' м';
+}
+
 // --- сетка на воде ------------------------------------------------------------
 //
 // Однородная вода не даёт ощущения хода: лодка будто висит. Сетка привязана к
@@ -1976,6 +2045,10 @@ for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draf
 // ползунками, и поэтому же группа целиком исчезает без акватории: тень берега
 // без берега — не «ноль», а бессмыслица.
 const capShade = document.getElementById('v-shade');
+// Ползунок задаёт лишь ПРЕДЕЛ откренивания, а сколько экипаж выкладывает сейчас,
+// решает кренящий момент. Подпись показывает и то и другое: без неё сто
+// процентов на ползунке при спокойной воде читаются как «врут фигурки».
+const capHike = document.getElementById('v-hike');
 if (!terrain.ready) {
   document.getElementById('shade').hidden = true;
   // Течение без реки — не «ноль», а бессмыслица, ровно как и тень берега.
@@ -2417,6 +2490,7 @@ function frame() {
   camera.position.copy(camPos);
   camera.lookAt(camAim);
 
+  updateCrew();
   if (orthoView) renderOrtho(bx, bz, fx, fz, sx, sz);
   else renderer.render(scene, camera);
   if ((tick % 3) === 0) { updateHud(t); updateRose(t); if (debugOn) updateRig(t); if (topShown) updateTop(); }

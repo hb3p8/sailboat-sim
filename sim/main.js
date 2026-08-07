@@ -459,27 +459,74 @@ const seaSteadyFrag = svWindV ? svWindV.x : float(1.0);
 const SEA_GUST_GAIN = 3.0;
 // Само поле берётся один раз на стадию: два вызова — две выборки из текстуры за
 // один и тот же ответ.
-const seaRipple = svGust(seaWorldXY).mul(seaGust);
-const seaGustVert = svGust(seaRefXY).mul(seaGust).mul(SEA_GUST_GAIN)
+const seaGustRaw = svGust(seaWorldXY);
+const seaGustRawVert = svGust(seaRefXY);
+const seaRipple = seaGustRaw.mul(seaGust);
+const seaGustVert = seaGustRawVert.mul(seaGust).mul(SEA_GUST_GAIN)
   .add(1.0).clamp(0.25, 1.9);
 const seaGustFrag = seaRipple.mul(SEA_GUST_GAIN).add(1.0).clamp(0.25, 1.9);
+
+// --- отладка воды -------------------------------------------------------------
+//
+// Порыв на воде — вещь, которую нельзя проверить, глядя на воду: он подмешан в
+// ту же поверхность, что несёт волну, рябь и блики, и «вижу — не вижу»
+// оказывается спором о вкусах. Поэтому его можно посмотреть отдельно.
+//
+//   «только порывы» — волны нет вовсе, вокруг зеркало, и рябь поднята ровно
+//     там, где поле положительно. Видно форму языков, их размер и как они едут
+//     по ветру. Ради этого режим и заведён: спор о том, видно порыв или нет,
+//     кончается тем, что на него смотрят в упор;
+//
+//   «поле порывов» — та же величина прямо цветом, без всякого затенения.
+//     Последняя инстанция: если языки и здесь не те, дело не в воде, а в поле,
+//     то есть в sim/wind.js, по которому идут и силы.
+//
+// Режимы живут в uniform, а не в пересборке материала: переключаются они мышью,
+// и ждать компиляции шейдера на каждый щелчок незачем.
+//
+// Флага два, и это ЧИСЛА 0/1, а переключение — через mix, а не через select.
+// Условный узел на цветовом выражении даёт чёрное: тип у него сходится к vec4,
+// ветки отдают vec3, и в альфу попадает ноль. Ошибка тихая — вода просто гаснет,
+// и ни строчки в консоли; полчаса на неё ушло. Через mix такого не бывает,
+// а стоит он на воде ровно ничего.
+const seaDbgOnly = uniform(0);     // 1 — только порывы
+const seaDbgField = uniform(0);    // 1 — поле порывов цветом
+// Доля ряби в отладке: от нуля вне языка до единицы в его сердцевине. Тройка
+// приводит к единице типичный порыв, а не редкий выброс, — то же соображение,
+// что у гейна выше.
+const dbgOnlyVert = seaGustRawVert.max(0.0).mul(3.0).min(1.0);
 
 // Множитель амплитуды каскада по ветру: длинным — только берег, мелкому ещё и
 // порыв.
 function seaWindOn(i, steady, gust) {
-  const k = i < OCEAN_TILES.length - 1 ? steady : steady.mul(gust);
-  return k.mul(k);
+  // Берег входит КВАДРАТОМ — как энергия волны от ветра.
+  const s2 = steady.mul(steady);
+  if (i < OCEAN_TILES.length - 1) return s2;
+  // Порыв — КУБОМ, и это не подгонка под глаз. Короткая волна несимметрична по
+  // времени: в порыве она поднимается за секунды, а в затишье гаснет вязкостью
+  // ещё быстрее, и потому затишье на воде выглядит зеркалом, а не «чуть глаже».
+  // Квадрат такой несимметрии не даёт: при типичном порыве он менял рябь на
+  // треть, а видно её становится примерно с двух раз.
+  return s2.mul(gust).mul(gust).mul(gust);
 }
+
+// Мелкий каскад — последний в списке; в отладке «только порывы» живёт он один.
+const seaFine = OCEAN_TILES.length - 1;
 
 function seaGeomWeight(i) {
   const tile = OCEAN_TILES[i];
-  return seaCellAttr.smoothstep(tile / 3, tile / 12)
-    .mul(seaWindOn(i, seaSteadyVert, seaGustVert));
+  const res = seaCellAttr.smoothstep(tile / 3, tile / 12);
+  const only = i === seaFine ? res.mul(dbgOnlyVert) : float(0);
+  const norm = res.mul(seaWindOn(i, seaSteadyVert, seaGustVert));
+  return mix(mix(norm, only, seaDbgOnly), float(0), seaDbgField);
 }
 function seaShadeWeight(i) {
   const t = OCEAN_TILES[i] / 16;
-  return seaFootprint.smoothstep(t * 2.5, t)
-    .mul(seaWindOn(i, seaSteadyFrag, seaGustFrag));
+  const res = seaFootprint.smoothstep(t * 2.5, t);
+  const only = i === seaFine
+    ? res.mul(seaGustRaw.max(0.0).mul(3.0).min(1.0)) : float(0);
+  const norm = res.mul(seaWindOn(i, seaSteadyFrag, seaGustFrag));
+  return mix(mix(norm, only, seaDbgOnly), float(0), seaDbgField);
 }
 
 // Смещение приходит в осях мира (восток, север, вверх) — в сцену оно
@@ -527,7 +574,14 @@ const seaBody = mix(seaDeep, seaScatter, seaCrest).mul(
 // от этого выходила кремовой — смешивались пена с белилами, а долей служил цвет
 // воды, — и ни одной ошибки в консоли при этом не было. Та же ловушка, что с
 // clamp ниже, только тише.
-seaMat.colorNode = mix(seaBody, color(SEA_FOAM_COLOUR), seaFoam.mul(0.85));
+// В отладке «поле порывов» вода красится прямо величиной поля: тёмное — затишье,
+// светлое — порыв. Ни волны, ни бликов, ни пены — только форма языков.
+// Размах поля — не единица, а примерно ±0.8, и делением ramp растягивается на
+// него: иначе половина шкалы стоит пустой и языки читаются бледнее, чем есть.
+const seaDbgColour = mix(color(0x0d1a26), color(0xffd48a),
+                         seaGustRaw.div(0.8).mul(0.5).add(0.5).clamp(0, 1));
+seaMat.colorNode = mix(mix(seaBody, color(SEA_FOAM_COLOUR), seaFoam.mul(0.85)),
+                       seaDbgColour, seaDbgField);
 // Гладкая вода и блестит иначе: в тени она ближе к зеркалу. Пена не блестит
 // вовсе — она шершавая, и без этого барашек выглядит куском полированного льда.
 {
@@ -558,7 +612,9 @@ seaMat.colorNode = mix(seaBody, color(SEA_FOAM_COLOUR), seaFoam.mul(0.85));
   // 0.02 — отражение воды в упор, дальше растёт пятой степенью до единицы.
   const fres = cosView.oneMinus().pow(5).mul(0.9).add(0.02);
   // Пена отражает как шершавое, а не как зеркало: на барашке Френеля нет.
-  seaMat.emissiveNode = color(SKY).mul(fres).mul(seaFoam.oneMinus().mul(0.75));
+  // В отладке поля отражение снимается: смотреть надо на величину, а не на небо.
+  seaMat.emissiveNode = color(SKY).mul(fres)
+    .mul(seaFoam.oneMinus().mul(0.75)).mul(seaDbgField.oneMinus());
 }
 
 // Имена TSL живут в одной области видимости с вклеенным three, и какое-нибудь
@@ -2677,6 +2733,21 @@ for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draf
 const capSeaHs = document.getElementById('v-seahs');
 const capSeaLp = document.getElementById('v-sealp');
 const capSeaNow = document.getElementById('v-seanow');
+{
+  // Отладка воды: показать порыв отдельно от всего остального. Смысл режимов —
+  // у объявления seaDbg.
+  const SEA_DBG = ['как есть', 'только порывы', 'поле порывов'];
+  const sel = document.getElementById('seadbg');
+  for (let i = 0; i < SEA_DBG.length; i++) {
+    const o = document.createElement('option');
+    o.value = String(i); o.textContent = SEA_DBG[i];
+    sel.appendChild(o);
+  }
+  sel.addEventListener('change', () => {
+    seaDbgOnly.value = sel.value === '1' ? 1 : 0;
+    seaDbgField.value = sel.value === '2' ? 1 : 0;
+  });
+}
 {
   const sel = document.getElementById('sealook');
   for (const look of SEA_LOOKS) {

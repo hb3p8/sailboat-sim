@@ -71,10 +71,10 @@ export function traceFrame(boat) {
     // Без него запись не воспроизводится, и это поймал тест, а не глаз.
     r9(boat.hike),
     r9(boat.zc), r9(boat.w), r9(boat.th), r9(boat.q),
-    boat.alphaLag ? Array.from(boat.alphaLag, r9) : null,
+    boat.rig.alphaLag ? Array.from(boat.rig.alphaLag, r9) : null,
     boat.rigTarget,
     r9(boat.o.rudder), r9(boat.o.sheet), r9(boat.o.jibTrim),
-    r9(boat.o.twist), r4(boat.twistEff),
+    r9(boat.o.twist), r4(boat.rig.twistEff),
     r9(boat.o.draft), r9(boat.o.fetch), boat.o.fetchOverride ? 1 : 0,
     r9(boat.o.windSpeed), r9(boat.o.windDir),
     r9(boat.wind.o.gust), r9(boat.wind.o.shift),
@@ -119,8 +119,8 @@ export function restoreFrom(boat, frame, index) {
     boat.zc = g('zc'); boat.w = g('w'); boat.th = g('th'); boat.q = g('q');
   }
   const lag = g('lag');
-  if (lag && boat.alphaLag && lag.length === boat.alphaLag.length) {
-    boat.alphaLag.set(lag);
+  if (lag && boat.rig.alphaLag && lag.length === boat.rig.alphaLag.length) {
+    boat.rig.alphaLag.set(lag);
   }
 }
 

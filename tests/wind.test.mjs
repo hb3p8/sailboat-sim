@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { WindField, gustAt, gustTexture, GUST_PERIOD } from '../sim/wind.js';
+import { windage } from '../sim/aero.js';
 import { Boat } from '../sim/physics.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -150,12 +151,12 @@ check('поле гладкое: на метр не больше 0.1 размах
 // --- полоски рига -------------------------------------------------------------
 
 const b = new Boat(PACK);
-const area = b.strips.reduce((s, x) => s + x.area, 0);
-const ceZ = b.strips.reduce((s, x) => s + x.area * x.h, 0) / area;
+const area = b.rig.strips.reduce((s, x) => s + x.area, 0);
+const ceZ = b.rig.strips.reduce((s, x) => s + x.area * x.h, 0) / area;
 // Центр площади, а не центр давления: именно так он посчитан в пакете, по
 // центрам тяжести парусных треугольников.
-const ceX = b.strips.reduce((s, x) => s + x.area * (x.xLuff - 0.5 * x.chord), 0) / area;
-console.log('\nПолоски рига: ' + b.strips.length + ' штук, площадь ' +
+const ceX = b.rig.strips.reduce((s, x) => s + x.area * (x.xLuff - 0.5 * x.chord), 0) / area;
+console.log('\nПолоски рига: ' + b.rig.strips.length + ' штук, площадь ' +
   area.toFixed(2) + ' м², центр площади x=' + ceX.toFixed(3) +
   ' z=' + ceZ.toFixed(3) + ' м\n');
 check('суммарная площадь полосок равна паспортной',
@@ -168,7 +169,7 @@ check('и по высоте',
   Math.abs(ceZ - PACK.rig.ce_height_m) < 0.06,
   ceZ.toFixed(3) + ' против ' + PACK.rig.ce_height_m.toFixed(3) + ' м');
 check('хорда убывает к топу',
-  b.strips.slice(0, 6).every((s, i, a) => i === 0 || s.chord < a[i - 1].chord));
+  b.rig.strips.slice(0, 6).every((s, i, a) => i === 0 || s.chord < a[i - 1].chord));
 
 // Однородный ветер без твиста и качки: все полоски обязаны видеть одно и то же.
 // Это проверка самой механики — если она провалится, различия между полосками
@@ -291,7 +292,7 @@ check('хорда убывает к топу',
     b.o.windSpeed = 6; b.o.windDir = twa * D; b.o.sheet = 24 * D; b.o.twist = 8 * D;
     b.u = 4; b.phi = 8 * D * Math.sign(twa);
     for (let i = 0; i < 60 * 30; i++) b.step(1 / 30);
-    return { strips: b.telemetry.strips, calc: b.stripCalc, side: b.rigSide };
+    return { strips: b.telemetry.strips, calc: b.rig.stripCalc, side: b.rigSide };
   };
   const stb = tack(60), prt = tack(-60);
   console.log('\nНа какую сторону выгнут парус (пузо со знаком):\n');
@@ -365,9 +366,9 @@ check('хорда убывает к топу',
   // Постоянная времени: сколько хорд пути прошло до 63% остатка. Хорда берётся
   // средневзвешенная по площади — полоски откликаются с разной скоростью.
   const b0 = new Boat(PACK);
-  const area = b0.strips.reduce((t, x) => t + x.area, 0);
-  const chord = b0.strips[2].chord;
-  const ve = p.stripCalc[2].ve;
+  const area = b0.rig.strips.reduce((t, x) => t + x.area, 0);
+  const chord = b0.rig.strips[2].chord;
+  const ve = p.rig.stripCalc[2].ve;
   const target = jump + 0.63 * (after - jump);
   let k = trace.findIndex(v => (after > jump ? v >= target : v <= target));
   const tau = (k + 1) / 30;
@@ -410,7 +411,7 @@ check('хорда убывает к топу',
 // нечего.
 {
   const m = new Boat(PACK);
-  const main = m.strips.slice(0, 6), jib = m.strips.slice(6);
+  const main = m.rig.strips.slice(0, 6), jib = m.rig.strips.slice(6);
   console.log('Потеря от мачты по высоте грота: ' +
     main.map(s => (100 * (1 - s.mastFill)).toFixed(0) + '%').join(', ') + '\n');
   check('мачта портит верх грота сильнее низа',
@@ -513,7 +514,7 @@ console.log('\nРешётка против сечения: подъёмная с
       b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * -b.psi - 0.9 * b.r)));
       b.step(1 / 30);
     }
-    const st = b.telemetry.strips, calc = b.stripCalc;
+    const st = b.telemetry.strips, calc = b.rig.stripCalc;
     let worst = 1, best = 1, n = 0;
     for (let i = 0; i < st.length; i++) {
       const g = calc[i];
@@ -556,7 +557,7 @@ console.log('\nПарусность в потоке\n');
 {
   const b = new Boat(PACK);
   b.o.crewHike = 1; b.o.crewMass = 240;
-  const at = (x, y) => b.windage({ x: x, y: y, speed: Math.hypot(x, y) });
+  const at = (x, y) => windage(PACK, b.o, { x: x, y: y, speed: Math.hypot(x, y) });
   // Все замеры на десяти метрах в секунду: F = ½·ρ·cx·A·V², отсюда и cx·A.
   const cda = w => 2 * Math.hypot(w.fx, w.fy) / (PACK.environment.rho_air * 100);
   const bow = at(-10, 0), beam = at(0, -10), close = at(-9.2, -3.9);
@@ -588,8 +589,8 @@ console.log('\nПарусность в потоке\n');
     PACK.rig.ce_height_m.toFixed(2) + ' м');
   // Сила квадратична по скорости и направлена ровно по кажущемуся ветру.
   {
-    const half = b.windage({ x: -5, y: -5, speed: Math.hypot(5, 5) });
-    const full = b.windage({ x: -10, y: -10, speed: Math.hypot(10, 10) });
+    const half = windage(PACK, b.o, { x: -5, y: -5, speed: Math.hypot(5, 5) });
+    const full = windage(PACK, b.o, { x: -10, y: -10, speed: Math.hypot(10, 10) });
     const ratio = Math.hypot(full.fx, full.fy) / Math.hypot(half.fx, half.fy);
     check('сопротивление растёт как квадрат скорости',
       Math.abs(ratio - 4) < 1e-9, ratio.toFixed(3) + ' при удвоении');

@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
+import { hullResistance } from '../sim/hydro.js';
 import { Terrain } from '../sim/terrain.js';
 
 import { Pool } from './lib/pool.mjs';
@@ -544,7 +545,7 @@ console.log('\nСопротивление корпуса на крене\n');
   for (const h of H) {
     console.log('  ' + (h.heel_deg + '°').padStart(5) + ' ' +
       h.wetted_m2.toFixed(2).padStart(8) + ' м² ' + h.lwl_m.toFixed(2).padStart(6) +
-      ' м ' + b.hullResistance(2.5, h.heel_deg).toFixed(0).padStart(12) + ' Н');
+      ' м ' + hullResistance(PACK, 2.5, h.heel_deg).toFixed(0).padStart(12) + ' Н');
   }
   console.log('');
   check('таблица по крену есть и начинается с ровного киля',
@@ -554,7 +555,7 @@ console.log('\nСопротивление корпуса на крене\n');
   {
     let worst = 0;
     for (const row of PACK.resistance.curve) {
-      worst = Math.max(worst, Math.abs(b.hullResistance(row.v_ms, 0) - row.rt_n));
+      worst = Math.max(worst, Math.abs(hullResistance(PACK, row.v_ms, 0) - row.rt_n));
     }
     check('на нуле крена кривая ровно прежняя', worst < 1e-9,
       worst.toExponential(1) + ' Н');
@@ -563,18 +564,18 @@ console.log('\nСопротивление корпуса на крене\n');
     H.every((h, i) => i === 0 || h.wetted_m2 < H[i - 1].wetted_m2),
     H.map(h => h.wetted_m2.toFixed(2)).join(' → ') + ' м²');
   check('сопротивление на крене меньше, но не втрое',
-    b.hullResistance(2.5, 20) < b.hullResistance(2.5, 0) &&
-    b.hullResistance(2.5, 20) > 0.7 * b.hullResistance(2.5, 0),
-    (b.hullResistance(2.5, 20) / b.hullResistance(2.5, 0)).toFixed(3) + ' от ровного киля');
+    hullResistance(PACK, 2.5, 20) < hullResistance(PACK, 2.5, 0) &&
+    hullResistance(PACK, 2.5, 20) > 0.7 * hullResistance(PACK, 2.5, 0),
+    (hullResistance(PACK, 2.5, 20) / hullResistance(PACK, 2.5, 0)).toFixed(3) + ' от ровного киля');
   // Между узлами таблицы и за её краем модель обязана вести себя разумно.
   check('между углами таблицы сопротивление меняется плавно',
     [5, 15, 25].every(a => {
-      const v = b.hullResistance(2.5, a);
-      return v < b.hullResistance(2.5, a - 5) + 1e-9 &&
-             v > b.hullResistance(2.5, a + 5) - 1e-9;
+      const v = hullResistance(PACK, 2.5, a);
+      return v < hullResistance(PACK, 2.5, a - 5) + 1e-9 &&
+             v > hullResistance(PACK, 2.5, a + 5) - 1e-9;
     }));
   check('за краем таблицы не разваливается',
-    Math.abs(b.hullResistance(2.5, 60) - b.hullResistance(2.5, 30)) < 1e-9);
+    Math.abs(hullResistance(PACK, 2.5, 60) - hullResistance(PACK, 2.5, 30)) < 1e-9);
 }
 
 // --- бесконечная вода --------------------------------------------------------

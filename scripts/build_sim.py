@@ -30,8 +30,9 @@ THREE_BUNDLE = "three.webgpu.js"
 GLTF_BUNDLE = "three.gltf.js"
 
 # Всё, что вклеивается в страницу, в порядке объявления.
-MODULES = ["terrain.js", "axes.js", "wind.js", "vlm.js", "membrane.js",
-           "waves.js", "buoyancy.js", "ocean.js", "trace.js", "physics.js",
+MODULES = ["util.js", "terrain.js", "axes.js", "wind.js", "vlm.js",
+           "membrane.js", "waves.js", "buoyancy.js", "ocean.js",
+           "aero.js", "hydro.js", "telemetry.js", "trace.js", "physics.js",
            "main.js"]
 
 

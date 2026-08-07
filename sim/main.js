@@ -904,16 +904,16 @@ function shapeSails(side) {
     const over = Math.min(1, Math.max(0, (own - sail.maxSheet) / (25 * D)));
     return held + (awa - held) * over;
   };
-  boomPivot.rotation.y = setOf(boat.sails[0]) * side;
-  const twist = boat.twistEff || boat.o.twist;
+  boomPivot.rotation.y = setOf(boat.rig.sails[0]) * side;
+  const twist = boat.rig.twistEff || boat.o.twist;
   // Пузо и положение горба больше не назначаются: их посчитала мембрана, по
   // полоске на каждую. Раньше здесь стояло 0.10 хорды по синусу — то есть
   // картинка жила отдельно от расчёта и врала вдвойне: и глубиной (в физике
   // было 0.026), и тем, что горб всегда стоял на середине. Теперь у смятого
   // спереди паруса горб уезжает назад ровно так, как получилось в расчёте.
-  const strips = boat.stripCalc;
+  const strips = boat.rig.stripCalc;
   const tele = boat.telemetry && boat.telemetry.strips;
-  boat.sails.forEach((sail, k) => {
+  boat.rig.sails.forEach((sail, k) => {
     const mesh = k === 0 ? mainSail : jibSail;
     const a = mesh.geometry.attributes.position.array;
     const col = mesh.geometry.attributes.color.array;
@@ -2206,12 +2206,12 @@ function updateBattens(side) {
   let peak = 1e-6;
   if (st) for (const d of st) peak = Math.max(peak, Math.abs(d.drive));
   for (let i = 0; i < NSTRIP; i++) {
-    const s = boat.strips[i], d = st ? st[i] : null;
+    const s = boat.rig.strips[i], d = st ? st[i] : null;
     const aw = d ? d.awaDeg * D : Math.PI;
     const held = Math.min(boat.o.sheet, aw);
     const over = Math.min(1, Math.max(0, (boat.o.sheet - s.maxSheet) / (25 * D)));
     const sheet = held + (aw - held) * over +
-                  (boat.twistEff || boat.o.twist) * s.twistF;
+                  (boat.rig.twistEff || boat.o.twist) * s.twistF;
     const ax = s.xLuff, az = 0;
     const bx = s.xLuff - s.chord * Math.cos(sheet);
     const bz = s.chord * Math.sin(sheet) * side;
@@ -2268,7 +2268,7 @@ function dumpState() {
     },
     telemetry: Object.assign({}, t, { strips: undefined }),
     strips: (t.strips || []).map(s => Object.assign({}, s)),
-    rig: boat.strips.map(s => ({
+    rig: boat.rig.strips.map(s => ({
       h: s.h, area: s.area, chord: s.chord, xLuff: s.xLuff,
       ar: s.ar, twistF: s.twistF,
     })),
@@ -3496,8 +3496,8 @@ function updateRig(t) {
   rigSvg.innerHTML = svg;
   document.getElementById('rignote').innerHTML =
     'ЦП по нагрузке <b>' + (t.ceHeightM || 0).toFixed(2) + ' м</b>' +
-    ' &nbsp;·&nbsp; твист <b>' + ((boat.twistEff || 0) / D).toFixed(0) + '°</b>' +
-    (boat.twistEff > boat.o.twist + 1 * D ? ' <span class="slack">шкот провис</span>' : '') +
+    ' &nbsp;·&nbsp; твист <b>' + ((boat.rig.twistEff || 0) / D).toFixed(0) + '°</b>' +
+    (boat.rig.twistEff > boat.o.twist + 1 * D ? ' <span class="slack">шкот провис</span>' : '') +
     ' &nbsp;·&nbsp; ветер у рига <b>' + (t.twsKn || 0).toFixed(1) + '</b> уз';
 }
 

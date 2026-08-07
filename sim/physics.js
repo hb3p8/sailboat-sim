@@ -189,6 +189,12 @@ const GYBE_RATE = 1.8;
 // Доли критического демпфирования вертикальной и килевой качки. Вертикальная
 // гасится сильнее: она излучает волны всей площадью ватерлинии.
 const HEAVE_ZETA = 0.40, PITCH_ZETA = 0.30;
+// Насколько далеко от центра тяжести точка приложения боковой силы ещё
+// считается точкой. Три метра — это от пера руля до бака, то есть вся лодка:
+// уже вне её точке взяться неоткуда. Меньший предел выглядел бы аккуратнее, но
+// врал бы: перо руля стоит в 2.86 м от центра тяжести, и когда весь снос держит
+// оно одно, точка ТАМ и находится по праву.
+const CLR_REACH = 3.0;
 const HIKE_TAU = 1.2;
 
 // Мачта стоит перед гротом и портит ему поток.
@@ -463,6 +469,13 @@ export class Boat {
       rudderTarget: null,      // куда его ведут; null — держать как есть
       crewHike: 0.0,           // откренивание: 0 — в ДП, 1 — на борту
       crewMass: 0.0,
+      // Где экипаж сидит: вдоль лодки и по высоте, м. Раньше это было не нужно
+      // — он входил одним моментом, — а с динамической плавучестью нужно:
+      // двести двадцать килограммов садят лодку и дифферентуют её. Значения по
+      // умолчанию отвечают трём фигуркам в кокпите; симулятор ставит сюда те же
+      // числа, по которым их и рисует.
+      crewX: 2.2,
+      crewZ: 0.62,
       sailScale: 1.0,          // 1 — грот со стакселем, больше — с генакером
       twist: 0.0,              // раскрытие задней шкаторины к топу, рад
       // Разгон волны берётся из акватории, а ползунок становится
@@ -648,8 +661,13 @@ export class Boat {
   // секунды это как раз старт.
   settle() {
     if (!this.buoy || !this.buoy.ready) { this.zc = 0; this.th = 0; return; }
-    const env = this.p.environment, cgx = this.p.mass.cg_m[0];
-    const vol = this.mass / env.rho_water;
+    const env = this.p.environment;
+    // Вес полный, вместе с экипажем, и центр тяжести общий: лодка садится под
+    // всех, кто на ней, и встаёт с тем дифферентом, какой они ей дают.
+    const mCrew = this.o.crewMass || 0;
+    const cgx = (this.mass * this.p.mass.cg_m[0] + mCrew * this.o.crewX) /
+                (this.mass + mCrew);
+    const vol = (this.mass + mCrew) / env.rho_water;
     for (let k = 0; k < 24; k++) {
       this.zc = this.buoy.floatAt(vol, this.phi, this.th);
       const h = this.buoy.at(this.zc, this.phi, this.th);
@@ -1211,8 +1229,21 @@ export class Boat {
     const hullZ = -0.5 * (hull.depth || hs.draft_canoe_m);
     const hmx = keelSide * keel.z_centre_m + rudSide * rud.z_centre_m +
                 hull.fy * hullZ;
-    const small = Math.abs(hy) < 5;         // на стоянке точка вырождается
-    const W = this.mass * env.g;
+    // Точка приложения существует, только пока есть сама сила. На фордевинде
+    // боковая обращается в ноль, а момент — нет: рыскание и дрейф оставляют
+    // киль и руль работать в разные стороны. «Точка, дающая тот же момент»
+    // тогда уезжает в бесконечность, и на отладочном виде ЦБС улетал за
+    // горизонт — это видно на картинке и это не сбой расчёта, а свойство
+    // самого понятия: у пары сил точки приложения нет.
+    //
+    // Поэтому здесь не подбирается предел по силе, а проверяется то, что
+    // проверять и следует: осталась ли точка на лодке. Не осталась — значит
+    // её нет, и показывать вместо неё подогнанное к борту число хуже, чем
+    // честно сказать «не определён».
+    const clrX = cgx + hmz / hy;
+    const small = !(Math.abs(hy) > 1e-6) ||
+                  !(Math.abs(clrX - cgx) < CLR_REACH);
+    const W = (this.mass + (this.o.crewMass || 0)) * env.g;
     const sphi = Math.sin(this.phi), cphi = Math.cos(this.phi);
     // Центр величины берётся из расчёта плавучести как есть — это настоящий
     // центр вытесненного объёма, а не восстановленная по плечу точка. Без
@@ -1233,12 +1264,14 @@ export class Boat {
       ceX: sail.ceX, ceY: sail.ceY, ceZ: sail.ceZ,
       driveN: sail.fx, sideN: sail.fy, liftN: sail.fz,
       windFx: wind.fx, windFy: wind.fy, windZ: wind.z,
-      clrX: small ? cgx : cgx + hmz / hy,
+      clrX: small ? cgx : clrX,
       clrZ: small ? hullZ : hmx / hy,
+      clrOk: !small,
       hydroSideN: hy, dragN: hullDrag, hullN: dragN, wavesN: this.wavesN,
       keelN: keelSide, rudderN: rudSide, hullSideN: hull.fy,
       cgX: cgx, cgZ: cgz, bX: bx, bY: by, bZ: bz,
       weightN: W, weightCrewN: this.o.crewMass * env.g,
+      crewX: this.o.crewX, crewZ: this.o.crewZ,
       buoyN: hyd ? env.rho_water * env.g * hyd.volume : W,
       vertN: this.vertN || 0,
       awpM2: hyd ? hyd.awp : 0, sinkM: this.zc, trimDeg: this.th / DEG,
@@ -1565,10 +1598,37 @@ export class Boat {
     const hull = this.hullLateral(this.v, this.r);
 
     // --- уравнения движения
-    const mx = this.mass * (1 + m.added_surge);
-    const my = this.mass * (1 + m.added_sway);
-    const iz = m.izz_kg_m2 * (1 + m.added_yaw);
-    const ix = m.ixx_kg_m2 * m.added_roll;
+    // --- экипаж как груз
+    //
+    // Раньше он входил в модель одним слагаемым — моментом откренивания, — и
+    // ни массы, ни места у него не было: лодку он не садил, не дифферентовал и
+    // не утяжелял. С динамической плавучестью это стало заметной неправдой:
+    // двести двадцать килограммов на пятьсот девяносто — тридцать семь
+    // процентов, и на глаз это добрых четыре сантиметра осадки.
+    //
+    // Теперь у экипажа есть вес и точка приложения, а откренивание перестало
+    // быть отдельной силой: оно стало тем, ГДЕ этот вес приложен. Плечо
+    // считается из момента, который экипаж держит сейчас (`this.hike`), — то
+    // есть ровно там же, где стоят фигурки в симуляторе.
+    //
+    // Плечо берётся с прошлого шага: сам `this.hike` обновляется ниже, в блоке
+    // крена. На сглаженной величине шаг запаздывания не виден, а порядок
+    // вычислений остаётся простым.
+    const mCrew = this.o.crewMass || 0;
+    const wCrew = mCrew * env.g;
+    const crewY = wCrew > 1 ? -this.hike / wCrew : 0;
+    const crewX = this.o.crewX, crewZ = this.o.crewZ;
+    const mAll = this.mass + mCrew;
+
+    const mx = mAll * (1 + m.added_surge);
+    const my = mAll * (1 + m.added_sway);
+    // Моменты инерции экипаж тоже добавляет, и заметно: на метровом плече это
+    // пятая часть к качке. Плечи меряются от центра тяжести корпуса — той же
+    // точки, вокруг которой собраны все прочие моменты.
+    const crewRz = crewZ - m.cg_m[2], crewRx = crewX - m.cg_m[0];
+    const iz = m.izz_kg_m2 * (1 + m.added_yaw) + mCrew * crewRx * crewRx;
+    const ix = m.ixx_kg_m2 * m.added_roll +
+               mCrew * (crewY * crewY + crewRz * crewRz);
 
     const fx = sail.fx + wind.fx + hullDrag + keelFx + rudFx;
     const fy = sail.fy + wind.fy + keelSide + rudSide + hull.fy;
@@ -1630,7 +1690,7 @@ export class Boat {
       // вокруг продольной оси. Плечо GZ теперь не входное число из таблицы, а
       // следствие: его считают из того же момента и показывают приборам.
       righting = fb * (ry * nz - rz * ny);
-      gz = -righting / (this.mass * env.g);
+      gz = -righting / (mAll * env.g);
     } else {
       // Без шпангоутов в пакете — прежняя таблица GZ. Всплытия и дифферента
       // при этом нет вовсе, лодка стоит на своей ватерлинии.
@@ -1660,7 +1720,12 @@ export class Boat {
     const heeling = sailHeel + windHeel + foilHeel;
     const wantHike = -Math.max(-maxHike, Math.min(maxHike, heeling));
     this.hike += (wantHike - this.hike) * Math.min(1, dt / HIKE_TAU);
-    const hikeMoment = this.hike;
+    // Момент от экипажа считается по его весу и плечу, а не подставляется
+    // числом. Разница не косметическая: у веса на плече есть множитель косинуса
+    // крена — на двадцати пяти градусах откренивание слабее на десятую часть, —
+    // и есть второе слагаемое от высоты посадки, которое, наоборот, кренить
+    // помогает. Оба следуют из геометрии и раньше просто отсутствовали.
+    const hikeMoment = -wCrew * (crewY * nz - crewRz * ny);
     // Гидродинамическое демпфирование качки: доля критического, иначе крен
     // звенит. Аэродинамическое сюда не входит и больше не нужно — оно
     // получается само из полосок, машущих по воздуху при качке.
@@ -1689,6 +1754,9 @@ export class Boat {
       mth += -(wind.z - cgz) * wind.fx;
       mth += -(dragZ - cgz) * hullDrag;
       mth += -(keel.z_centre_m - cgz) * keelFx - (rud.z_centre_m - cgz) * rudFx;
+      // Экипаж сидит в кокпите, то есть позади центра тяжести, и своим весом
+      // дифферентует лодку на корму. Раньше этого не было вовсе.
+      mth += -wCrew * (crewRx * nz - crewRz * nx);
       // Вертикальная сила по мировой вертикали: плавучесть, вес и проекции
       // всего остального. На ровном киле последнее вырождается в подъёмную
       // силу паруса, а на крене туда входит и то, чем киль тянет лодку вниз.
@@ -1698,8 +1766,8 @@ export class Boat {
       // мачтой, и её вертикальная доля садит лодку глубже. На двадцати
       // градусах это уже сотни ньютонов, то есть десятки килограммов груза.
       this.vertN = fx * nx + fy * ny + sail.fz * nz;
-      const fv = fb - this.mass * env.g + this.vertN;
-      const mh = this.mass * (1 + (m.added_heave != null ? m.added_heave : 1.2));
+      const fv = fb - mAll * env.g + this.vertN;
+      const mh = mAll * (1 + (m.added_heave != null ? m.added_heave : 1.2));
       const ip = m.iyy_kg_m2 * (1 + (m.added_pitch != null ? m.added_pitch : 0.9));
       // Демпфирование — доля критического, как и у качки. Жёсткость берётся из
       // того же расчёта: площадь ватерлинии для всплытия, её продольный момент

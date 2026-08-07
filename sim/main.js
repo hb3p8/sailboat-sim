@@ -1023,7 +1023,7 @@ let trackN = 0;
 // самодостаточной. Без сервера фигурок не будет, всё остальное работает как
 // прежде — поэтому загрузка и не мешает ничему стартовать.
 
-const CREW_H = 1.15;                 // габарит фигурки по высоте, м
+const CREW_H = 0.92;                 // габарит фигурки по высоте, м
 // Фигурка занимает вдоль лодки метр с небольшим — отсюда и шаг станций. Ноги у
 // неё разнесены поперёк почти на полтора метра, и это удачно: так сидит на борту
 // откренивающий экипаж, ступни внутрь.
@@ -1042,6 +1042,13 @@ const CREW_SHEER = CREW_X.map(x0 => {
       half = Math.max(half, Math.abs(p[i + 2]));
   return [half, top];
 });
+
+// Середина посадки и высота сиденья — для физики: вес экипажа приложен там же,
+// где стоят фигурки. Высота берётся по линии борта, а не по палубе: сидят на
+// борту, и центр тяжести сидящего примерно на треть роста выше сиденья.
+const CREW_MID = CREW_X.reduce((a, b) => a + b, 0) / CREW_X.length;
+const CREW_SEAT = CREW_SHEER.reduce((a, s) => a + s[1], 0) / CREW_SHEER.length
+                  + CREW_H * 0.33;
 
 const crewFigs = [];
 let crewLegs = 0;                    // куда вытянуты ноги в осях модели, рад
@@ -1231,13 +1238,20 @@ function updateBalance() {
          Math.abs(b.sideN) * k);
 
   // Гидродинамика в ЦБС: то же самое, только сопротивление направлено назад.
+  // На фордевинде боковой силы почти нет, и точки приложения у неё не остаётся
+  // — тогда не показывается ничего. Нарисовать её всё равно, подогнав к борту,
+  // значило бы придумать место, которого нет.
   const hx = bodyPointLocalX(b.clrX), hy = bodyPointLocalY(b.clrZ), hz = 0;
-  balSet(balHydro, hx, hy, hz, bodyDirLocalX(b.dragN), 0,
-         bodyDirLocalZ(b.hydroSideN), Math.hypot(b.dragN, b.hydroSideN) * k);
-  balSet(balHside, hx, hy, hz, 0, 0, bodyDirLocalZ(b.hydroSideN),
-         Math.abs(b.hydroSideN) * k);
-  balSet(balDrag, hx, hy, hz, bodyDirLocalX(b.dragN), 0, 0,
-         Math.abs(b.dragN) * k);
+  balClr.visible = b.clrOk;
+  balHydro.g.visible = balHside.g.visible = balDrag.g.visible = false;
+  if (b.clrOk) {
+    balSet(balHydro, hx, hy, hz, bodyDirLocalX(b.dragN), 0,
+           bodyDirLocalZ(b.hydroSideN), Math.hypot(b.dragN, b.hydroSideN) * k);
+    balSet(balHside, hx, hy, hz, 0, 0, bodyDirLocalZ(b.hydroSideN),
+           Math.abs(b.hydroSideN) * k);
+    balSet(balDrag, hx, hy, hz, bodyDirLocalX(b.dragN), 0, 0,
+           Math.abs(b.dragN) * k);
+  }
 
   // Вес и плавучесть — по МИРОВОЙ вертикали, а не по палубе: в этом вся суть
   // пары. Верх мира в осях лодки при крене phi есть (0, sin phi, cos phi).
@@ -1274,10 +1288,16 @@ function updateBalCard() {
   const n0 = v => Math.round(v) + ' Н';
   // Плечо ЦП—ЦБС: положительное, когда парус впереди, — это и есть приводящий.
   const lever = b.ceX - b.clrX;
+  const leverTxt = !b.clrOk ? 'плечо ЦП−ЦБС не считается'
+    : 'плечо ЦП−ЦБС <b>' + lever.toFixed(2) + ' м</b> ' +
+      (lever > 0.01 ? 'вперёд, приводит' : lever < -0.01 ? 'назад, уваливает'
+                                         : '— нейтрально');
   balTab.innerHTML =
     row(BAL_C.aero, 'ЦП', 'x ' + m1(b.ceX) + ', высота ' + m1(b.ceZ),
         'тяга ' + n0(b.driveN) + ', бок ' + n0(Math.abs(b.sideN))) +
-    row(BAL_C.hydro, 'ЦБС', 'x ' + m1(b.clrX) + ', z ' + m1(b.clrZ),
+    row(BAL_C.hydro, 'ЦБС',
+        b.clrOk ? 'x ' + m1(b.clrX) + ', z ' + m1(b.clrZ)
+                : 'нет: боковой силы почти нет',
         'бок ' + n0(Math.abs(b.hydroSideN)) + ', сопр ' +
         Math.round(Math.abs(b.hullN) - Math.abs(b.wavesN)) +
         (b.wavesN > 0.5 ? '+' + Math.round(b.wavesN) : '') + ' Н') +
@@ -1289,10 +1309,7 @@ function updateBalCard() {
         'вес ' + n0(b.weightCrewN) + ' → ' +
         Math.round(Math.abs(b.hikeNm)) + ' Н·м');
   balNote.innerHTML =
-    'плечо ЦП−ЦБС <b>' + lever.toFixed(2) + ' м</b> ' +
-    (lever > 0.01 ? 'вперёд, приводит' : lever < -0.01 ? 'назад, уваливает'
-                                        : '— нейтрально') +
-    ' · кренит <b>' + Math.round(Math.abs(b.heelNm)) + '</b>, экипаж <b>' +
+    leverTxt + ' · кренит <b>' + Math.round(Math.abs(b.heelNm)) + '</b>, экипаж <b>' +
     Math.round(Math.abs(b.hikeNm)) + '</b>, корпус <b>' +
     Math.round(b.weightN * b.gzM) + '</b> Н·м<br>' +
     'посадка <b>' + (b.sinkM * 1000).toFixed(0) + ' мм</b>, дифферент <b>' +
@@ -2810,6 +2827,11 @@ function readControls(dt) {
   // одного из пакета — чтобы то, что видно, и то, что считается, было одним
   // и тем же экипажем.
   o.crewMass = CREW_X.length * PACK.rig.windage.crew.mass_each_kg;
+  // Где экипаж сидит, физике сообщает картинка, а не наоборот: станции и линия
+  // борта уже посчитаны здесь, по ним же стоят фигурки. Так вес приложен ровно
+  // туда, где его видно, и разъехаться этим двум нельзя.
+  o.crewX = CREW_MID;
+  o.crewZ = CREW_SEAT;
   o.sailScale = parseFloat(ui.sailscale.value);
   o.twist = parseFloat(ui.twist.value) * D;
   o.draft = parseFloat(ui.draft.value) / 100;

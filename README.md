@@ -279,7 +279,7 @@ LWL 5469 мм снята с чертежа.
 - **подобрано** — ровно две величины, обе по наблюдениям владельца лодки:
   масштаб волнового сопротивления (`WAVE_SCALE` в `scripts/build_physics.py`,
   множитель к интегралу Мичелла) и коэффициент приводящего момента
-  накренённого корпуса (`HULL_HEEL_YAW` в `sim/physics.js`). Обе закреплены
+  накренённого корпуса (`HULL_HEEL_YAW` в `sim/hydro.js`). Обе закреплены
   проверками в тестах.
 
 Управление: `←→` руль, `↑↓` шкот, `R F` стаксель-шкот, `H` авторулевой,
@@ -488,8 +488,15 @@ src/sv20/righting.py    диаграмма остойчивости GZ на бо
 src/sv20/terrain.py     акватория: Copernicus DEM по диапазонам байтов + берег OSM
 scripts/build_physics.py -> out/export/physics.json, sim_mesh.json
 scripts/build_sim.py     -> sim/index.html
-sim/physics.js          модель хода: паруса, крылья, корпус, интегрирование
-sim/main.js             сцена, ввод, цикл
+sim/physics.js          состояние лодки, шаг, среда
+sim/aero.js             риг: полоски, обтекание, силы, парусность корпуса
+sim/hydro.js            вода на теле: сопротивление, поперечная сила, крылья
+sim/telemetry.js        показания и точки приложения сил
+sim/buoyancy.js         плавучесть по вытесненному объёму
+sim/util.js             угол, ограничитель, градус
+sim/main.js             сцена и цикл
+sim/controls.js         клавиши, органы управления, авторулевой
+sim/debug.js            отладочные виды: центры сил, линии тока, поле ветра
 scripts/extract.py      Ф0+Ф1 -> out/frame.json, drawing.json, report.md
 scripts/fit_hull.py     Ф3    -> out/params.json, fit.md
 scripts/build_hull.py   Ф2    -> out/hull.json, hull.md

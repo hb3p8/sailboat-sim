@@ -671,14 +671,14 @@ seaMat.colorNode = mix(seaBody, color(SEA_FOAM_COLOUR), seaFoam.mul(0.85));
 // Теперь шаг растёт геометрически: у борта полметра, к десятому шагу двести с
 // лишним. Луч, уходящий в небо, вылетает за кадр за три-четыре шага, и марш
 // обрывается — а это и есть самый частый случай.
-const SEA_SSR_STEPS = 10;
+const SEA_SSR_STEPS = 8;
 const SEA_SSR_NEAR = 0.5;     // м, первый шаг
-const SEA_SSR_GROW = 1.9;     // во сколько раз растёт следующий
+const SEA_SSR_GROW = 1.5;     // во сколько раз растёт следующий
 const SEA_SSR_THICK = 0.14;   // толщина в долях дальности
 // Дальше этого вода отражение не считает вовсе. На пологой камере далёкая вода
 // занимает полэкрана, отражать ей нечего — луч там уходит в небо, — а стоит она
 // ровно столько же, сколько вода под бортом.
-const SEA_SSR_FAR = 220;      // м
+const SEA_SSR_FAR = 30;      // м
 // Цвет и глубина сцены БЕЗ воды. Оба узла — по одному на всю страницу: каждый
 // снимает свой буфер один раз за кадр, перед тем как рисовать воду. Ради этого
 // вода и переставлена в конец очереди — см. renderOrder ниже.
@@ -686,7 +686,7 @@ const SEA_SSR_OFF = location.search.includes('nossr');
 const seaSceneColour = SEA_SSR_OFF ? null : viewportSharedTexture();
 const seaSceneDepth = SEA_SSR_OFF ? null : viewportDepthTexture();
 // Сила: 0 — только небо, как было; 1 — отражение сцены в полную меру.
-const seaSsr = uniform(0.85);
+const seaSsr = uniform(1.0);
 // Что вернул марш — наружу, для отладочных видов ниже.
 let seaHitColour = null, seaHitConf = null, seaHitSteps = null;
 
@@ -721,7 +721,7 @@ const seaReflectScene = Fn(() => {
       const p = from.add(dir.mul(t)).toVar();
       t.mulAssign(SEA_SSR_GROW);
       const clip = cameraProjectionMatrix.mul(vec4(p, 1.0)).toVar();
-      const uv = clip.xy.div(clip.w).mul(0.5).add(0.5).toVar();
+      const uv = clip.xy.div(clip.w).mul(vec2(0.5, -0.5)).add(0.5).toVar();
       // Ушли за кадр или за камеру — дальше искать нечего.
       If(clip.w.lessThanEqual(0.0)
          .or(uv.x.lessThan(0.0)).or(uv.x.greaterThan(1.0))
@@ -751,11 +751,8 @@ const seaReflectScene = Fn(() => {
   const edge = uvHit.sub(0.5).abs().mul(2.0).toVar();
   const fade = edge.x.max(edge.y).smoothstep(1.0, 0.72)
     .mul(dir.z.smoothstep(0.35, 0.0)).toVar();
-  // Снимок кадра лежит в sRGB: холст у three обычный bgra8unorm, а гамму
-  // накладывает выходной шейдер. Свечение же считается в линейном, и подмешать
-  // туда снимок как есть — значит осветлить отражение в полтора раза на
-  // полутонах. Возвращаем обратно.
-  return SeaHit(sRGBTransferEOTF(seaSceneColour.sample(uvHit)).xyz,
+
+  return SeaHit(seaSceneColour.sample(uvHit).xyz,
                 found.mul(fade).clamp(0, 1), steps);
 });
 

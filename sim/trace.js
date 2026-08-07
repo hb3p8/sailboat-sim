@@ -24,9 +24,16 @@ export const TRACE_FIELDS = [
   // новую подъёмную силу не мгновенно. Единственное поле-массив в записи;
   // числом их не сделать, полосок может стать больше или меньше.
   'lag',
+  // Цель перекладки: `rigSide` говорит, где гик сейчас, но не куда идёт. Внутри
+  // зоны гистерезиса этого мало — после восстановления он мог бы пойти обратно.
+  'rigTarget',
   // органы управления и условия — всё, что можно тронуть на ходу
   'rudder', 'sheet', 'jibTrim', 'twist', 'twistEff', 'draft', 'fetch', 'fetchOverride',
   'windSpeed', 'windDir', 'gust', 'shift', 'crewHike', 'crewMass', 'sailScale',
+  // Условия акватории — тоже ползунки, и они тоже меняются на ходу. Их не было,
+  // и запись, снятая с поворотом ползунка течения, воспроизводилась с конечным
+  // его значением на всю длину.
+  'current', 'shadeD0', 'shadeK', 'shadeGust', 'chan', 'crewX', 'crewZ',
   // показания — для сверки при воспроизведении и для разбора без пересчёта
   'speedKn', 'heelDeg', 'leewayDeg', 'driveN', 'sideN', 'alphaDeg',
   'awaDeg', 'twsKn',
@@ -36,7 +43,8 @@ export const TRACE_FIELDS = [
 export const TRACE_INPUTS = [
   'rudder', 'sheet', 'jibTrim', 'twist', 'draft', 'fetch', 'fetchOverride',
   'windSpeed', 'windDir',
-  'crewHike', 'crewMass', 'sailScale',
+  'crewHike', 'crewMass', 'crewX', 'crewZ', 'sailScale',
+  'current', 'shadeD0', 'shadeK', 'shadeGust', 'chan',
 ];
 
 // Округление разное, и не для красоты.
@@ -64,12 +72,15 @@ export function traceFrame(boat) {
     r9(boat.hike),
     r9(boat.zc), r9(boat.w), r9(boat.th), r9(boat.q),
     boat.alphaLag ? Array.from(boat.alphaLag, r9) : null,
+    boat.rigTarget,
     r9(boat.o.rudder), r9(boat.o.sheet), r9(boat.o.jibTrim),
     r9(boat.o.twist), r4(boat.twistEff),
     r9(boat.o.draft), r9(boat.o.fetch), boat.o.fetchOverride ? 1 : 0,
     r9(boat.o.windSpeed), r9(boat.o.windDir),
     r9(boat.wind.o.gust), r9(boat.wind.o.shift),
     r9(boat.o.crewHike), r9(boat.o.crewMass), r9(boat.o.sailScale),
+    r9(boat.o.current), r9(boat.o.shadeD0), r9(boat.o.shadeK),
+    r9(boat.o.shadeGust), r9(boat.o.chan), r9(boat.o.crewX), r9(boat.o.crewZ),
     r4(t.speedKn), r4(t.heelDeg), r4(t.leewayDeg), r4(t.driveN), r4(t.sideN),
     r4(t.alphaDeg), r4(t.awaDeg), r4(t.twsKn),
   ];
@@ -101,6 +112,7 @@ export function restoreFrom(boat, frame, index) {
   boat.u = g('u'); boat.v = g('v'); boat.r = g('r');
   boat.phi = g('phi'); boat.p_ = g('p_'); boat.t = g('t');
   boat.rigSide = g('rigSide');
+  if (index.rigTarget != null) boat.rigTarget = g('rigTarget');
   if (index.hike != null) boat.hike = g('hike');
   // Старые записи этих полей не знают — тогда посадка остаётся как есть.
   if (index.zc != null) {

@@ -288,7 +288,8 @@ def main():
     blade = rudder["blade"]
     doc = {
         "generator": "sv20, пакет физики для симулятора",
-        "units": "СИ: метры, килограммы, секунды. X в нос, Y на правый борт, Z вверх",
+        "units": ("СИ: метры, килограммы, секунды. "
+                  "X в нос, Y на ЛЕВЫЙ борт, Z вверх"),
         "environment": {"rho_water": RHO_WATER, "rho_air": RHO_AIR, "g": G,
                         "nu_water": NU_WATER},
         "mass": {

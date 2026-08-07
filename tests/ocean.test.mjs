@@ -62,12 +62,12 @@ check('мелкий каскад достаёт до ряби в единицы 
 // --- вся волна, какую даёт ветер, укладывается в полосы ------------------------
 
 console.log('Длина волны в пике по ветру и разгону (ползунки: ветер 1…16 м/с,');
-console.log('разгон 0…12 км), и каскад, которому она достаётся:\n');
+console.log('разгон 0…30 км), и каскад, которому она достаётся:\n');
 
 const spread = new Array(OCEAN_TILES.length).fill(0);
 let worstLow = Infinity, worstHigh = 0, worstAt = '';
 for (let u = 1; u <= 16; u += 0.5) {
-  for (let f = 500; f <= 12000; f += 500) {
+  for (let f = 500; f <= 30000; f += 500) {
     const s = seaState(u, f);
     const lp = peakLength(s.tp);
     if (lp < worstLow) worstLow = lp;
@@ -81,7 +81,7 @@ for (let u = 1; u <= 16; u += 0.5) {
     spread[k]++;
   }
 }
-for (const [u, f] of [[3, 1000], [6, 3000], [9, 5000], [12, 8000], [16, 12000]]) {
+for (const [u, f] of [[3, 1000], [6, 3000], [9, 5000], [12, 8000], [16, 30000]]) {
   const s = seaState(u, f);
   const lp = peakLength(s.tp);
   const k = OCEAN_TILES.findIndex((t, i) =>

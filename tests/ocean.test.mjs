@@ -15,7 +15,8 @@
 // с разгоном, попадает внутрь, и плитки не кратны друг другу.
 
 import { seaState } from '../sim/waves.js';
-import { oceanBand, oceanPlaneFit, OCEAN_TILES, OCEAN_N, OCEAN_LOOP } from '../sim/ocean.js';
+import { oceanBand, oceanPlaneFit, OCEAN_PROBE, OCEAN_TILES, OCEAN_N,
+         OCEAN_LOOP } from '../sim/ocean.js';
 
 const G = 9.80665;
 
@@ -153,11 +154,13 @@ console.log('\nПлоскость воды по пробам\n');
   const Z0 = 0.2, SE = 0.08, SN = -0.03;
   const h = (dx, dy) => Z0 + SE * dx + SN * dy;
   // Пробы там же, где их кладёт main.js: смещения в осях лодки, повёрнутые по
-  // курсу; центр сдвинут вперёд на X0.
+  // курсу; центр сдвинут вперёд на X0. Раскладка берётся из ocean.js — тест
+  // проверяет подгонку, а не свою копию раскладки: разойдись они, и проверялось
+  // бы не то, что работает.
   const probesAt = psi => {
     const c = Math.cos(psi), s = Math.sin(psi);
     const at = (bx, by) => h(bx * c - by * s, bx * s + by * c);
-    return [at(X0, 0), at(X0 + L, 0), at(X0 - L, 0), at(X0, B), at(X0, -B)];
+    return OCEAN_PROBE.map(p => at(X0 + p[0] * L, p[1] * B));
   };
   let worst = 0;
   for (let deg = 0; deg < 360; deg += 15) {
@@ -171,20 +174,21 @@ console.log('\nПлоскость воды по пробам\n');
 
   // Тот же снос, но проверенный отдельно: без него ровная наклонная вода дала бы
   // в нуле высоту из середины ватерлинии, то есть лодку посадило бы носом.
-  const noShift = (probesAt(0)[0] + probesAt(0)[1] + probesAt(0)[2] +
-                   probesAt(0)[3] + probesAt(0)[4]) / 5;
+  const hs0 = probesAt(0);
+  const noShift = hs0.reduce((a, b) => a + b, 0) / hs0.length;
   check('снос на середину ватерлинии учтён',
     Math.abs(noShift - Z0) > 0.2 && Math.abs(noShift - Z0) < 0.3,
     'без сноса вышло бы ' + noShift.toFixed(3) + ' м вместо ' + Z0);
 
   // И знак: вода, поднимающаяся на восток, при курсе на восток даёт нос кверху.
   const psi = 0;
-  const up = oceanPlaneFit([0, 0.1 * L, -0.1 * L, 0, 0], psi, L, B, 0, {});
+  const slope = (se, sn) => OCEAN_PROBE.map(p => se * p[0] * L + sn * p[1] * B);
+  const up = oceanPlaneFit(slope(0.1, 0), psi, L, B, 0, {});
   check('склон по курсу — это положительный наклон вперёд',
     up.se > 0.09 && up.se < 0.11 && Math.abs(up.sn) < 1e-12,
     'se ' + up.se.toFixed(3) + ', sn ' + up.sn.toFixed(3));
   // Вода, поднимающаяся на левый борт, при том же курсе даёт наклон на север.
-  const left = oceanPlaneFit([0, 0, 0, 0.1 * B, -0.1 * B], psi, L, B, 0, {});
+  const left = oceanPlaneFit(slope(0, 0.1), psi, L, B, 0, {});
   check('склон на левый борт при курсе на восток — это наклон на север',
     left.sn > 0.09 && left.sn < 0.11 && Math.abs(left.se) < 1e-12,
     'se ' + left.se.toFixed(3) + ', sn ' + left.sn.toFixed(3));
@@ -194,11 +198,51 @@ console.log('\nПлоскость воды по пробам\n');
   const lam = 1.2, k = 2 * Math.PI / lam, amp = 0.1;
   const wave = dx => amp * Math.cos(k * dx);
   const short = oceanPlaneFit(
-    [wave(0), wave(L), wave(-L), wave(0), wave(0)], 0, L, B, 0, {});
+    OCEAN_PROBE.map(p => wave(p[0] * L)), 0, L, B, 0, {});
   check('волна короче корпуса не проходит в наклон целиком',
     Math.abs(short.se) < 0.25 * amp * k,
     'наклон ' + short.se.toFixed(3) + ' против ' + (amp * k).toFixed(3) +
     ' у самой волны');
+
+  // Ради чего проб восемь, а не пять.
+  //
+  // Наклон по двум точкам держится на двух числах, и рябь, попавшая под нос,
+  // уходит в него целиком. Наименьшие квадраты по восьми ту же ошибку делят.
+  //
+  // Мерится это не на одной синусоиде: у каждой оценки свои нули по длине
+  // волны, и на подобранной длине выиграет любая. Мерится на случайном коротком
+  // волнении — сумме двух десятков волн от сорока сантиметров до четырёх метров
+  // со случайными фазами и направлениями, то есть на том, что под корпусом и
+  // бывает. Обе оценки считаются ИЗ ОДНИХ И ТЕХ ЖЕ проб: двухточечная из первой
+  // пары (нос и корма) и из второй (борта).
+  //
+  // Настоящего наклона у такого поля нет — всё, что обе оценки покажут, есть
+  // шум, и меньше значит лучше.
+  {
+    let seed = 12345;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+                        return seed / 0x7fffffff; };
+    let e8 = 0, e2 = 0, n8 = 0, n2 = 0;
+    const R = 3000;
+    for (let r = 0; r < R; r++) {
+      const ws = [];
+      for (let w = 0; w < 24; w++) {
+        const lam = 0.4 + 3.6 * rnd();
+        ws.push([2 * Math.PI / lam, 2 * Math.PI * rnd(), 2 * Math.PI * rnd()]);
+      }
+      const at = (x, y) => ws.reduce((a, w) =>
+        a + 0.04 * Math.cos(w[0] * (x * Math.cos(w[2]) + y * Math.sin(w[2])) + w[1]), 0);
+      const hh = OCEAN_PROBE.map(p => at(p[0] * L, p[1] * B));
+      const f = oceanPlaneFit(hh, 0, L, B, 0, {});
+      e8 += f.se * f.se; e2 += ((hh[0] - hh[1]) / (2 * L)) ** 2;
+      n8 += f.sn * f.sn; n2 += ((hh[2] - hh[3]) / (2 * B)) ** 2;
+    }
+    const q = x => Math.sqrt(x / R);
+    check('восемь проб держат наклон устойчивее двух',
+      q(e8) < 0.85 * q(e2) && q(n8) < 0.85 * q(n2),
+      'шум наклона вдоль ' + (q(e8) / q(e2)).toFixed(2) +
+      '×, поперёк ' + (q(n8) / q(n2)).toFixed(2) + '× от двухточечного');
+  }
 }
 
 console.log(failures ? '\n' + failures + ' проверок не прошло\n' : '\nвсе проверки прошли\n');

@@ -191,12 +191,12 @@ const seaPlane = { z: 0, se: 0, sn: 0 };
 
 // Разложить пробы под корпусом: их читает СЛЕДУЮЩИЙ кадр.
 //
-// Смещения даются в связанных осях лодки (X в нос, Y на левый борт) и
-// поворачиваются по курсу — сюда же уходит и снос на середину ватерлинии.
+// Раскладка берётся из ocean.js — оттуда же, откуда её берёт подгонка плоскости.
+// Смещения даются в долях полудлины и полуширины, здесь превращаются в метры,
+// сносятся на середину ватерлинии и поворачиваются по курсу.
 function seaProbeOffset(i, c, s, out) {
-  const l = SEA_PROBE.l, b = SEA_PROBE.b;
-  const bx = SEA_PROBE.x0 + (i === 1 ? l : i === 2 ? -l : 0);
-  const by = i === 3 ? b : i === 4 ? -b : 0;
+  const p = OCEAN_PROBE[i];
+  const bx = SEA_PROBE.x0 + p[0] * SEA_PROBE.l, by = p[1] * SEA_PROBE.b;
   out.x = bx * c - by * s;
   out.y = bx * s + by * c;
   return out;
@@ -204,7 +204,7 @@ function seaProbeOffset(i, c, s, out) {
 const seaProbeAt = { x: 0, y: 0 };
 function placeSeaProbes(x, y, psi) {
   const c = Math.cos(psi), s = Math.sin(psi);
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < OCEAN_PROBE.length; i++) {
     seaProbeOffset(i, c, s, seaProbeAt);
     ocean.setProbe(i, x + seaProbeAt.x, y + seaProbeAt.y);
   }
@@ -215,9 +215,9 @@ function placeSeaProbes(x, y, psi) {
 //
 // Саму подгонку делает ocean.js: там она под тестом. Здесь остаётся только
 // гашение по ветру — тем же множителем, каким гасит волну шейдер.
-const seaProbeH = new Float64Array(5);
+const seaProbeH = new Float64Array(OCEAN_PROBE.length);
 function readSeaPlane(psi, damp) {
-  for (let i = 0; i < 5; i++) seaProbeH[i] = ocean.probeHeight(i);
+  for (let i = 0; i < seaProbeH.length; i++) seaProbeH[i] = ocean.probeHeight(i);
   oceanPlaneFit(seaProbeH, psi, SEA_PROBE.l, SEA_PROBE.b, SEA_PROBE.x0, seaPlane);
   seaPlane.z *= damp; seaPlane.se *= damp; seaPlane.sn *= damp;
 }
@@ -1344,9 +1344,8 @@ function updateBalance() {
   balSet(balO, bodyPointLocalX(b.bX), bodyPointLocalY(b.bZ),
          bodyPointLocalZ(b.bY), ux, uy, uz, BAL_PAIR);
 
-  // Экипаж. В модели он входит МОМЕНТОМ, а не грузом: его вес не садит лодку в
-  // воду и не меняет водоизмещение. Но момент этот — вес на плече, и рисовать
-  // его честнее всего именно так: стрелка вниз там, где сидят фигурки.
+  // Экипаж. Стрелка вниз там, где сидят фигурки: его вес и садит лодку, и
+  // создаёт момент откренивания — одно и то же приложенное в одном месте.
   const arm = crewArm(), sh = CREW_SHEER[1];
   const crewX = bodyPointLocalX(CREW_X[1]), crewY = bodyPointLocalY(sh[1]),
         crewZ = bodyPointLocalZ(-arm);
@@ -1422,7 +1421,8 @@ function updateBalCard() {
 // корпусом короче корпуса, и её честно усредняет, а не теряет.
 const seaProbeGeo = new BufferGeometry();
 seaProbeGeo.setAttribute('position',
-  new Float32BufferAttribute(new Float32Array(6 * 2 * 3), 3));
+  new Float32BufferAttribute(
+    new Float32Array((2 + OCEAN_PROBE.length) * 2 * 3), 3));
 const seaProbeMarks = new LineSegments(seaProbeGeo, new LineBasicMaterial({
   color: 0xff9d4a, transparent: true, opacity: 0.9, depthTest: false }));
 seaProbeMarks.frustumCulled = false;
@@ -1436,7 +1436,7 @@ function updateSeaProbes(x, y, psi) {
   // положение проб по-своему, показывает не пробы, а свою копию — и врёт ровно
   // тогда, когда на него и смотрят.
   const pts = [];
-  for (let i = 1; i < 5; i++) {
+  for (let i = 0; i < OCEAN_PROBE.length; i++) {
     seaProbeOffset(i, c, s, seaProbeAt);
     pts.push([seaProbeAt.x, seaProbeAt.y, ocean.probeHeight(i)]);
   }
@@ -1449,7 +1449,7 @@ function updateSeaProbes(x, y, psi) {
   };
   // две перекладины креста — сама плоскость
   for (const i of [0, 1, 2, 3]) put(pts[i][0], pts[i][1], onPlane(pts[i][0], pts[i][1]));
-  // и четыре отвеса до самих проб: их длина и есть то, что плоскость усреднила
+  // и отвесы до самих проб: их длина и есть то, что плоскость усреднила
   for (const [dx, dy, h] of pts) {
     put(dx, dy, onPlane(dx, dy));
     put(dx, dy, h);

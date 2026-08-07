@@ -145,33 +145,46 @@ check('цикл длиннее любого разумного заезда',
 console.log('\nПлоскость воды по пробам\n');
 {
   const L = 5.47 / 2, B = 1.9 / 2;
-  // Известная плоскость: поднята на 0.2 м и наклонена на 0.08 к востоку и
-  // на −0.03 к северу.
+  // Пробы стоят не вокруг начала координат: ноль модели у транца, а середина
+  // ватерлинии в трёх метрах от него. Высота же наружу нужна В НУЛЕ.
+  const X0 = 3.29;
+  // Известная плоскость: в нуле лодки поднята на 0.2 м, наклонена на 0.08 к
+  // востоку и на −0.03 к северу.
   const Z0 = 0.2, SE = 0.08, SN = -0.03;
   const h = (dx, dy) => Z0 + SE * dx + SN * dy;
+  // Пробы там же, где их кладёт main.js: смещения в осях лодки, повёрнутые по
+  // курсу; центр сдвинут вперёд на X0.
+  const probesAt = psi => {
+    const c = Math.cos(psi), s = Math.sin(psi);
+    const at = (bx, by) => h(bx * c - by * s, bx * s + by * c);
+    return [at(X0, 0), at(X0 + L, 0), at(X0 - L, 0), at(X0, B), at(X0, -B)];
+  };
   let worst = 0;
   for (let deg = 0; deg < 360; deg += 15) {
-    const psi = deg * Math.PI / 180, c = Math.cos(psi), s = Math.sin(psi);
-    // пробы там же, где их кладёт main.js: центр, нос, корма, левый, правый
-    const probes = [
-      h(0, 0), h(L * c, L * s), h(-L * c, -L * s),
-      h(-B * s, B * c), h(B * s, -B * c),
-    ];
-    const out = oceanPlaneFit(probes, psi, L, B, { z: 0, se: 0, sn: 0 });
+    const psi = deg * Math.PI / 180;
+    const out = oceanPlaneFit(probesAt(psi), psi, L, B, X0, { z: 0, se: 0, sn: 0 });
     worst = Math.max(worst, Math.abs(out.z - Z0),
                      Math.abs(out.se - SE), Math.abs(out.sn - SN));
   }
-  check('наклоны в мире не зависят от курса',
+  check('плоскость восстанавливается в нуле лодки на любом курсе',
     worst < 1e-12, 'худшая невязка по 24 курсам ' + worst.toExponential(1));
+
+  // Тот же снос, но проверенный отдельно: без него ровная наклонная вода дала бы
+  // в нуле высоту из середины ватерлинии, то есть лодку посадило бы носом.
+  const noShift = (probesAt(0)[0] + probesAt(0)[1] + probesAt(0)[2] +
+                   probesAt(0)[3] + probesAt(0)[4]) / 5;
+  check('снос на середину ватерлинии учтён',
+    Math.abs(noShift - Z0) > 0.2 && Math.abs(noShift - Z0) < 0.3,
+    'без сноса вышло бы ' + noShift.toFixed(3) + ' м вместо ' + Z0);
 
   // И знак: вода, поднимающаяся на восток, при курсе на восток даёт нос кверху.
   const psi = 0;
-  const up = oceanPlaneFit([0, 0.1 * L, -0.1 * L, 0, 0], psi, L, B, {});
+  const up = oceanPlaneFit([0, 0.1 * L, -0.1 * L, 0, 0], psi, L, B, 0, {});
   check('склон по курсу — это положительный наклон вперёд',
     up.se > 0.09 && up.se < 0.11 && Math.abs(up.sn) < 1e-12,
     'se ' + up.se.toFixed(3) + ', sn ' + up.sn.toFixed(3));
   // Вода, поднимающаяся на левый борт, при том же курсе даёт наклон на север.
-  const left = oceanPlaneFit([0, 0, 0, 0.1 * B, -0.1 * B], psi, L, B, {});
+  const left = oceanPlaneFit([0, 0, 0, 0.1 * B, -0.1 * B], psi, L, B, 0, {});
   check('склон на левый борт при курсе на восток — это наклон на север',
     left.sn > 0.09 && left.sn < 0.11 && Math.abs(left.se) < 1e-12,
     'se ' + left.se.toFixed(3) + ', sn ' + left.sn.toFixed(3));
@@ -181,7 +194,7 @@ console.log('\nПлоскость воды по пробам\n');
   const lam = 1.2, k = 2 * Math.PI / lam, amp = 0.1;
   const wave = dx => amp * Math.cos(k * dx);
   const short = oceanPlaneFit(
-    [wave(0), wave(L), wave(-L), wave(0), wave(0)], 0, L, B, {});
+    [wave(0), wave(L), wave(-L), wave(0), wave(0)], 0, L, B, 0, {});
   check('волна короче корпуса не проходит в наклон целиком',
     Math.abs(short.se) < 0.25 * amp * k,
     'наклон ' + short.se.toFixed(3) + ' против ' + (amp * k).toFixed(3) +

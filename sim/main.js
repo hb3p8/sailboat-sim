@@ -174,22 +174,40 @@ const ocean = new Ocean(renderer, 1);
 // секунду вертикальной скорости на волне в семнадцать сантиметров, то есть
 // лодку подбрасывает. С плоскостью по корпусу — восемь десятых.
 //
-// База берётся по ватерлинии: нос-корма это длина, борта это ширина. Не «чтобы
-// сгладить посильнее», а потому что фильтрует именно корпус, и фильтрует он
-// ровно на своей длине.
-const SEA_PROBE = { l: PACK.hydrostatics.lwl_m / 2, b: PACK.hydrostatics.bwl_m / 2 };
+// База берётся по ВАТЕРЛИНИИ, и по ней же — середина. Ноль модели у SV20 стоит
+// у транца: ватерлиния идёт от 0.55 до 6.02 м, и её середина в трёх с лишним
+// метрах от начала координат. Раскладывать пробы вокруг нуля значит увести
+// половину креста за корму — что и было видно на отладочном виде, оттуда это и
+// нашлось.
+//
+// Не «чтобы сгладить посильнее», а потому что фильтрует именно корпус, и
+// фильтрует он ровно на своей длине.
+const SEA_PROBE = {
+  x0: (PACK.hydrostatics.lwl_aft_x_m + PACK.hydrostatics.lwl_fwd_x_m) / 2,
+  l: PACK.hydrostatics.lwl_m / 2,
+  b: PACK.hydrostatics.bwl_m / 2,
+};
 const seaPlane = { z: 0, se: 0, sn: 0 };
 
 // Разложить пробы под корпусом: их читает СЛЕДУЮЩИЙ кадр.
+//
+// Смещения даются в связанных осях лодки (X в нос, Y на левый борт) и
+// поворачиваются по курсу — сюда же уходит и снос на середину ватерлинии.
+function seaProbeOffset(i, c, s, out) {
+  const l = SEA_PROBE.l, b = SEA_PROBE.b;
+  const bx = SEA_PROBE.x0 + (i === 1 ? l : i === 2 ? -l : 0);
+  const by = i === 3 ? b : i === 4 ? -b : 0;
+  out.x = bx * c - by * s;
+  out.y = bx * s + by * c;
+  return out;
+}
+const seaProbeAt = { x: 0, y: 0 };
 function placeSeaProbes(x, y, psi) {
   const c = Math.cos(psi), s = Math.sin(psi);
-  const l = SEA_PROBE.l, b = SEA_PROBE.b;
-  // нос и корма по курсу, борта поперёк; ось Y лодки смотрит на левый борт
-  ocean.setProbe(0, x, y);
-  ocean.setProbe(1, x + l * c, y + l * s);
-  ocean.setProbe(2, x - l * c, y - l * s);
-  ocean.setProbe(3, x - b * s, y + b * c);
-  ocean.setProbe(4, x + b * s, y - b * c);
+  for (let i = 0; i < 5; i++) {
+    seaProbeOffset(i, c, s, seaProbeAt);
+    ocean.setProbe(i, x + seaProbeAt.x, y + seaProbeAt.y);
+  }
 }
 
 // Собрать из проб плоскость воды. Курс тот же, с которым пробы раскладывались:
@@ -200,7 +218,7 @@ function placeSeaProbes(x, y, psi) {
 const seaProbeH = new Float64Array(5);
 function readSeaPlane(psi, damp) {
   for (let i = 0; i < 5; i++) seaProbeH[i] = ocean.probeHeight(i);
-  oceanPlaneFit(seaProbeH, psi, SEA_PROBE.l, SEA_PROBE.b, seaPlane);
+  oceanPlaneFit(seaProbeH, psi, SEA_PROBE.l, SEA_PROBE.b, SEA_PROBE.x0, seaPlane);
   seaPlane.z *= damp; seaPlane.se *= damp; seaPlane.sn *= damp;
 }
 
@@ -1269,25 +1287,23 @@ scene.add(seaProbeMarks);
 function updateSeaProbes(x, y, psi) {
   const p = seaProbeGeo.attributes.position.array;
   const c = Math.cos(psi), s = Math.sin(psi);
-  const l = SEA_PROBE.l, b = SEA_PROBE.b;
-  // Точки в осях мира, как их раскладывал placeSeaProbes, и высота у каждой
-  // своя — та, что пришла с видеокарты.
-  const pts = [
-    [l * c, l * s, ocean.probeHeight(1)],
-    [-l * c, -l * s, ocean.probeHeight(2)],
-    [-b * s, b * c, ocean.probeHeight(3)],
-    [b * s, -b * c, ocean.probeHeight(4)],
-  ];
+  // Точки берутся ТОЙ ЖЕ функцией, что их раскладывает: вид, который считает
+  // положение проб по-своему, показывает не пробы, а свою копию — и врёт ровно
+  // тогда, когда на него и смотрят.
+  const pts = [];
+  for (let i = 1; i < 5; i++) {
+    seaProbeOffset(i, c, s, seaProbeAt);
+    pts.push([seaProbeAt.x, seaProbeAt.y, ocean.probeHeight(i)]);
+  }
+  // Плоскость задана высотой в НАЧАЛЕ КООРДИНАТ лодки, и смещения здесь от него
+  // же, так что подставляются как есть.
   const onPlane = (dx, dy) => seaPlane.z + seaPlane.se * dx + seaPlane.sn * dy;
   let k = 0;
   const put = (dx, dy, h) => {
     p[k++] = toSceneX(x + dx); p[k++] = h; p[k++] = toSceneZ(y + dy);
   };
   // две перекладины креста — сама плоскость
-  put(pts[0][0], pts[0][1], onPlane(pts[0][0], pts[0][1]));
-  put(pts[1][0], pts[1][1], onPlane(pts[1][0], pts[1][1]));
-  put(pts[2][0], pts[2][1], onPlane(pts[2][0], pts[2][1]));
-  put(pts[3][0], pts[3][1], onPlane(pts[3][0], pts[3][1]));
+  for (const i of [0, 1, 2, 3]) put(pts[i][0], pts[i][1], onPlane(pts[i][0], pts[i][1]));
   // и четыре отвеса до самих проб: их длина и есть то, что плоскость усреднила
   for (const [dx, dy, h] of pts) {
     put(dx, dy, onPlane(dx, dy));

@@ -15,7 +15,7 @@
 // с разгоном, попадает внутрь, и плитки не кратны друг другу.
 
 import { seaState } from '../sim/waves.js';
-import { oceanBand, OCEAN_TILES, OCEAN_N, OCEAN_LOOP } from '../sim/ocean.js';
+import { oceanBand, oceanPlaneFit, OCEAN_TILES, OCEAN_N, OCEAN_LOOP } from '../sim/ocean.js';
 
 const G = 9.80665;
 
@@ -129,6 +129,64 @@ check('зацикливание не перевирает частоту дли�
   (100 * dOmega / wLongest).toFixed(2) + '% при периоде цикла ' + OCEAN_LOOP + ' с');
 check('цикл длиннее любого разумного заезда',
   OCEAN_LOOP >= 300, OCEAN_LOOP + ' с');
+
+// --- плоскость воды по пробам --------------------------------------------------
+//
+// Пять проб по корпусу превращаются в высоту и два наклона, по востоку и по
+// северу. Проверяется здесь одно: НАКЛОНЫ В МИРЕ НЕ ЗАВИСЯТ ОТ КУРСА. Вода
+// одна и та же, лодка на ней может стоять как угодно, и если поворот сделан с
+// ошибкой в борте или в знаке, то на одних курсах лодка будет крениться
+// правильно, а на других наоборот — то есть ошибка окажется тихой и найдётся
+// не скоро.
+//
+// Ровно из этого семейства была ошибка, от которой лодку подбрасывало: проба
+// отдавала нормаль поверхности вместо наклона, то есть наклон наизнанку.
+
+console.log('\nПлоскость воды по пробам\n');
+{
+  const L = 5.47 / 2, B = 1.9 / 2;
+  // Известная плоскость: поднята на 0.2 м и наклонена на 0.08 к востоку и
+  // на −0.03 к северу.
+  const Z0 = 0.2, SE = 0.08, SN = -0.03;
+  const h = (dx, dy) => Z0 + SE * dx + SN * dy;
+  let worst = 0;
+  for (let deg = 0; deg < 360; deg += 15) {
+    const psi = deg * Math.PI / 180, c = Math.cos(psi), s = Math.sin(psi);
+    // пробы там же, где их кладёт main.js: центр, нос, корма, левый, правый
+    const probes = [
+      h(0, 0), h(L * c, L * s), h(-L * c, -L * s),
+      h(-B * s, B * c), h(B * s, -B * c),
+    ];
+    const out = oceanPlaneFit(probes, psi, L, B, { z: 0, se: 0, sn: 0 });
+    worst = Math.max(worst, Math.abs(out.z - Z0),
+                     Math.abs(out.se - SE), Math.abs(out.sn - SN));
+  }
+  check('наклоны в мире не зависят от курса',
+    worst < 1e-12, 'худшая невязка по 24 курсам ' + worst.toExponential(1));
+
+  // И знак: вода, поднимающаяся на восток, при курсе на восток даёт нос кверху.
+  const psi = 0;
+  const up = oceanPlaneFit([0, 0.1 * L, -0.1 * L, 0, 0], psi, L, B, {});
+  check('склон по курсу — это положительный наклон вперёд',
+    up.se > 0.09 && up.se < 0.11 && Math.abs(up.sn) < 1e-12,
+    'se ' + up.se.toFixed(3) + ', sn ' + up.sn.toFixed(3));
+  // Вода, поднимающаяся на левый борт, при том же курсе даёт наклон на север.
+  const left = oceanPlaneFit([0, 0, 0, 0.1 * B, -0.1 * B], psi, L, B, {});
+  check('склон на левый борт при курсе на восток — это наклон на север',
+    left.sn > 0.09 && left.sn < 0.11 && Math.abs(left.se) < 1e-12,
+    'se ' + left.se.toFixed(3) + ', sn ' + left.sn.toFixed(3));
+
+  // Короткая волна под корпусом обязана усредняться, а не проходить насквозь:
+  // это и есть смысл пяти проб вместо одной.
+  const lam = 1.2, k = 2 * Math.PI / lam, amp = 0.1;
+  const wave = dx => amp * Math.cos(k * dx);
+  const short = oceanPlaneFit(
+    [wave(0), wave(L), wave(-L), wave(0), wave(0)], 0, L, B, {});
+  check('волна короче корпуса не проходит в наклон целиком',
+    Math.abs(short.se) < 0.25 * amp * k,
+    'наклон ' + short.se.toFixed(3) + ' против ' + (amp * k).toFixed(3) +
+    ' у самой волны');
+}
 
 console.log(failures ? '\n' + failures + ' проверок не прошло\n' : '\nвсе проверки прошли\n');
 process.exit(failures ? 1 : 0);

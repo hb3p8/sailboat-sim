@@ -161,6 +161,49 @@ scene.add(sea);
 // раз в кадр получает состояние моря от физики — см. `frame`.
 const ocean = new Ocean(renderer, 1);
 
+// --- поверхность под корпусом --------------------------------------------------
+//
+// То, что плавучесть считает водой. Пять проб по корпусу — центр, нос, корма и
+// оба борта, — и по ним подгоняется плоскость: высота и два наклона.
+//
+// Плоскость, а не точка, и не ради точности, а потому что иначе получается не
+// лодка. В поле волны живут длины от сантиметров до десятков метров;
+// шестиметровый корпус коротких не чувствует вовсе — он их перекрывает, и
+// давление под ним усредняется само. Проба точкой отдаёт всё подряд, и лодка
+// начинает отыгрывать каждую рябь: на замере это три с половиной метра в
+// секунду вертикальной скорости на волне в семнадцать сантиметров, то есть
+// лодку подбрасывает. С плоскостью по корпусу — восемь десятых.
+//
+// База берётся по ватерлинии: нос-корма это длина, борта это ширина. Не «чтобы
+// сгладить посильнее», а потому что фильтрует именно корпус, и фильтрует он
+// ровно на своей длине.
+const SEA_PROBE = { l: PACK.hydrostatics.lwl_m / 2, b: PACK.hydrostatics.bwl_m / 2 };
+const seaPlane = { z: 0, se: 0, sn: 0 };
+
+// Разложить пробы под корпусом: их читает СЛЕДУЮЩИЙ кадр.
+function placeSeaProbes(x, y, psi) {
+  const c = Math.cos(psi), s = Math.sin(psi);
+  const l = SEA_PROBE.l, b = SEA_PROBE.b;
+  // нос и корма по курсу, борта поперёк; ось Y лодки смотрит на левый борт
+  ocean.setProbe(0, x, y);
+  ocean.setProbe(1, x + l * c, y + l * s);
+  ocean.setProbe(2, x - l * c, y - l * s);
+  ocean.setProbe(3, x - b * s, y + b * c);
+  ocean.setProbe(4, x + b * s, y - b * c);
+}
+
+// Собрать из проб плоскость воды. Курс тот же, с которым пробы раскладывались:
+// за кадр лодка поворачивается на доли градуса, и брать текущий незачем.
+//
+// Саму подгонку делает ocean.js: там она под тестом. Здесь остаётся только
+// гашение по ветру — тем же множителем, каким гасит волну шейдер.
+const seaProbeH = new Float64Array(5);
+function readSeaPlane(psi, damp) {
+  for (let i = 0; i < 5; i++) seaProbeH[i] = ocean.probeHeight(i);
+  oceanPlaneFit(seaProbeH, psi, SEA_PROBE.l, SEA_PROBE.b, seaPlane);
+  seaPlane.z *= damp; seaPlane.se *= damp; seaPlane.sn *= damp;
+}
+
 // Рябь от порывов. На воде усиление ветра видно раньше, чем оно доходит до
 // парусов, — тёмными языками, ползущими по ветру. Это не украшение: без них
 // порыв приходит из ниоткуда, и понять, что произошло, невозможно.
@@ -256,6 +299,13 @@ function windMapCell(x, z) {
         j = Math.round((toWorldY(z) - WM.y0) / WM.c);
   if (i < 0 || j < 0 || i >= WM.nx || j >= WM.ny) return -1;
   return 2 * (j * WM.nx + i);
+}
+// Тот же множитель ветра, что берёт шейдер воды, но с процессора: им плавучести
+// гасится волна там, где её гасит и картинка. Без этого лодка качалась бы на
+// волне, которой под подветренным берегом не нарисовано.
+function windMapSample(x, z) {
+  const c = windMapCell(x, z);
+  return c < 0 ? 1 : windMapData[c] / 255;
 }
 
 // Ветер в точке сцены С УЧЁТОМ АКВАТОРИИ — ровно тот же, что чувствует лодка.
@@ -1188,6 +1238,62 @@ function updateBalCard() {
     'второе слагаемое сопротивления — волновое · стрелки <b>1 м = ' +
     BAL_NM + ' Н</b>, кроме вертикальных: у веса, плавучести и экипажа ' +
     'говорит не длина, а плечо';
+}
+
+// --- пробы воды под корпусом --------------------------------------------------
+//
+// Пять точек, по которым плавучесть узнаёт, где вода. Показываются они не для
+// красоты: это единственное место, где видно РАСХОЖДЕНИЕ между водой, которую
+// нарисовали, и водой, которую чувствует лодка. Пока пробы лежат на
+// поверхности, всё в порядке; поехали — значит поехало что-то одно из двух, и
+// сразу видно, какое.
+//
+// Заводится этот вид не впустую: на нём и разбирались скачки. Проба отдавала
+// нормаль вместо наклона, то есть наклон наизнанку, а снималась в одной точке —
+// и лодка отыгрывала каждую рябь, которой шестиметровый корпус не чувствует.
+// Обе ошибки на такой картинке видны с одного взгляда: крест стоит поперёк
+// волны и дёргается вчетверо чаще неё.
+//
+// Крест — подогнанная плоскость: перекладина вдоль корпуса и поперёк. Точки на
+// его концах — сами пробы. Расходятся точки с крестом — значит волна под
+// корпусом короче корпуса, и её честно усредняет, а не теряет.
+const seaProbeGeo = new BufferGeometry();
+seaProbeGeo.setAttribute('position',
+  new Float32BufferAttribute(new Float32Array(6 * 2 * 3), 3));
+const seaProbeMarks = new LineSegments(seaProbeGeo, new LineBasicMaterial({
+  color: 0xff9d4a, transparent: true, opacity: 0.9, depthTest: false }));
+seaProbeMarks.frustumCulled = false;
+seaProbeMarks.renderOrder = 3;
+scene.add(seaProbeMarks);
+
+function updateSeaProbes(x, y, psi) {
+  const p = seaProbeGeo.attributes.position.array;
+  const c = Math.cos(psi), s = Math.sin(psi);
+  const l = SEA_PROBE.l, b = SEA_PROBE.b;
+  // Точки в осях мира, как их раскладывал placeSeaProbes, и высота у каждой
+  // своя — та, что пришла с видеокарты.
+  const pts = [
+    [l * c, l * s, ocean.probeHeight(1)],
+    [-l * c, -l * s, ocean.probeHeight(2)],
+    [-b * s, b * c, ocean.probeHeight(3)],
+    [b * s, -b * c, ocean.probeHeight(4)],
+  ];
+  const onPlane = (dx, dy) => seaPlane.z + seaPlane.se * dx + seaPlane.sn * dy;
+  let k = 0;
+  const put = (dx, dy, h) => {
+    p[k++] = toSceneX(x + dx); p[k++] = h; p[k++] = toSceneZ(y + dy);
+  };
+  // две перекладины креста — сама плоскость
+  put(pts[0][0], pts[0][1], onPlane(pts[0][0], pts[0][1]));
+  put(pts[1][0], pts[1][1], onPlane(pts[1][0], pts[1][1]));
+  put(pts[2][0], pts[2][1], onPlane(pts[2][0], pts[2][1]));
+  put(pts[3][0], pts[3][1], onPlane(pts[3][0], pts[3][1]));
+  // и четыре отвеса до самих проб: их длина и есть то, что плоскость усреднила
+  for (const [dx, dy, h] of pts) {
+    put(dx, dy, onPlane(dx, dy));
+    put(dx, dy, h);
+  }
+  seaProbeGeo.attributes.position.needsUpdate = true;
 }
 
 // --- сетка на воде ------------------------------------------------------------
@@ -2671,8 +2777,11 @@ function readControls(dt) {
     const lp = 1.56 * seaState(o.windSpeed, boat.fetchM || 0).tp ** 2;
     capSeaHs.textContent = hs > 0.005 ? (100 * hs).toFixed(0) + ' см' : 'гладко';
     capSeaLp.textContent = hs > 0.005 ? lp.toFixed(1) + ' м' : '—';
-    const z = ocean.probeHeight(0);
-    const slope = Math.hypot(ocean.probeSlopeE(0), ocean.probeSlopeN(0));
+    // Показывается не проба, а ПЛОСКОСТЬ — ровно то, что получает плавучесть.
+    // Прибор обязан показывать вход модели, а не сырьё для него: разойдись они
+    // когда-нибудь, по такому прибору этого не увидеть.
+    const z = seaPlane.z;
+    const slope = Math.hypot(seaPlane.se, seaPlane.sn);
     capSeaNow.textContent = (z >= 0 ? '+' : '−') + Math.abs(100 * z).toFixed(0) +
       ' см · склон ' + (Math.atan(slope) / D).toFixed(1) + '°';
   }
@@ -2805,15 +2914,16 @@ function frame() {
   last = now;
   acc += dt;
 
-  // Волна — плавучести, до шага, а не после. Проба даёт высоту поверхности под
-  // лодкой и два её наклона; глубину корпуса физика меряет уже от них, и качка
-  // на волне получается у неё сама — тем же объёмом, той же жёсткостью, тем же
-  // демпфированием, что и посадка под грузом. Подрисованной посадки корпуса в
-  // сцене больше нет и не нужно.
+  // Волна — плавучести, до шага, а не после. Глубину корпуса физика меряет от
+  // этой поверхности, и качка на волне получается у неё сама — тем же объёмом,
+  // той же жёсткостью, тем же демпфированием, что и посадка под грузом.
+  // Подрисованной посадки корпуса в сцене нет.
   //
-  // Ответ приходит с прошлого кадра: читается он с видеокарты асинхронно.
-  // На волне с периодом в пару секунд это сантиметры.
-  boat.setWater(ocean.probeHeight(0), ocean.probeSlopeE(0), ocean.probeSlopeN(0));
+  // Ответ приходит с прошлого кадра: читается он с видеокарты асинхронно. На
+  // волне с периодом в пару секунд это сантиметры.
+  readSeaPlane(boat.psi,
+               windMapSample(toSceneX(boat.x), toSceneZ(boat.y)) ** 2);
+  boat.setWater(seaPlane.z, seaPlane.se, seaPlane.sn);
 
   let steps = 0;
   while (acc >= DT && steps < 8) {
@@ -2878,10 +2988,9 @@ function frame() {
   {
     const st = seaState(boat.o.windSpeed, boat.fetchM || 0);
     ocean.setSea(boat.seaHs || 0, st.tp, boat.o.windDir + (boat.chanRot || 0));
-    // Проба под лодкой — ДО прогона: ядро проб идёт последним в том же пакете,
-    // и точка обязана быть свежей. Ответ всё равно придёт кадром позже, читается
-    // он асинхронно; на волне с периодом в секунды это меньше сантиметра.
-    ocean.setProbe(0, ix, iy);
+    // Пробы под корпусом — ДО прогона: ядро проб идёт последним в том же
+    // пакете, и точки обязаны быть свежими. Ответ придёт следующим кадром.
+    placeSeaProbes(ix, iy, ipsi);
     // Время — модельное, а не настенное: при паузе и перемотке записи вода
     // обязана стоять и отматываться вместе с лодкой.
     ocean.step(boat.t);
@@ -2897,6 +3006,8 @@ function frame() {
   seaWindSpeed.value = boat.wind.o.speed;
   seaTime.value = boat.t;
   if (debugOn) updateGrid(toSceneX(ix), toSceneZ(iy));
+  seaProbeMarks.visible = debugOn && camMode !== HIGH_CAM;
+  if (seaProbeMarks.visible) updateSeaProbes(ix, iy, ipsi);
   updateStreaks(toSceneX(ix), toSceneZ(iy), dt);
   curField.visible = debugMode === 1 && terrain.ready && boat.o.current > 0;
   if (debugMode === 2) updateBalance();

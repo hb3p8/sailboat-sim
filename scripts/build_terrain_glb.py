@@ -182,11 +182,19 @@ def land_chunk(ix0, iy0, nx, ny):
 
 
 
-def cover_chunk(ix0, iy0, nx, ny, cls, mask):
+def cover_chunk(ix0, iy0, nx, ny, mask):
     """Крышка по верху слоя и вертикальные стенки там, где массив кончается.
 
     С воды квартал и опушка читаются сплошной стеной, а не набором коробок, —
     ради этого стенки и нужны.
+
+    НАМОТКА СТЕНОК СЧИТАЕТСЯ, а не отдаётся двусторонности. Раньше материал
+    покрова был doubleSided: намотка зависит от того, с какой стороны ячейки
+    выросла стенка, и разбираться с четырьмя случаями было не за что. Теперь
+    есть за что — лес едет в общий буфер с землёй, а земля односторонняя, и
+    двусторонний материал пришлось бы поднимать на весь рельеф. Сторона берётся
+    из того же условия, по которому стенка и появилась: наружу — туда, где
+    крышки нет.
     """
     vp, vi, node = [], [], {}
 
@@ -210,13 +218,16 @@ def cover_chunk(ix0, iy0, nx, ny, cls, mask):
             vp.append((sx, TOP[y0, x0], sz))
         return n
 
-    def wall(y1, x1, y2, x2):
+    def wall(y1, x1, y2, x2, flip):
         n = len(vp)
         ax, az = scene_xz(y1, x1)
         bx, bz = scene_xz(y2, x2)
         vp.extend([(ax, HEIGHT[y1, x1], az), (bx, HEIGHT[y2, x2], bz),
                    (bx, TOP[y2, x2], bz), (ax, TOP[y1, x1], az)])
-        vi.extend([n, n + 2, n + 1, n, n + 3, n + 2])
+        if flip:
+            vi.extend([n, n + 1, n + 2, n, n + 2, n + 3])
+        else:
+            vi.extend([n, n + 2, n + 1, n, n + 3, n + 2])
 
     for j in range(ny - 1):
         for i in range(nx - 1):
@@ -226,14 +237,16 @@ def cover_chunk(ix0, iy0, nx, ny, cls, mask):
             p0, p1 = put(y0, x0), put(y0, x0 + 1)
             p2, p3 = put(y0 + 1, x0 + 1), put(y0 + 1, x0)
             vi.extend([p0, p1, p3, p1, p2, p3])
+            # Ось Z сцены смотрит против оси Y мира, оттого «вперёд по j» и
+            # «назад по j» дают зеркальные намотки, а по i — нет.
             if not capped(i, j - 1):
-                wall(y0, x0, y0, x0 + 1)
+                wall(y0, x0, y0, x0 + 1, True)
             if not capped(i, j + 1):
-                wall(y0 + 1, x0, y0 + 1, x0 + 1)
+                wall(y0 + 1, x0, y0 + 1, x0 + 1, False)
             if not capped(i - 1, j):
-                wall(y0, x0, y0 + 1, x0)
+                wall(y0, x0, y0 + 1, x0, False)
             if not capped(i + 1, j):
-                wall(y0, x0 + 1, y0 + 1, x0 + 1)
+                wall(y0, x0 + 1, y0 + 1, x0 + 1, True)
     if not vi:
         return None
     return np.array(vp, np.float32), np.array(vi, np.uint32)
@@ -361,25 +374,33 @@ def main():
             if nx < 2 or ny < 2:
                 continue
             pos, col, idx = land_chunk(ix0, iy0, nx, ny)
-            tris["земля"] += add_mesh("land_%d_%d" % (ix0, iy0), pos, idx, 0, col)
-            for c in (1, 2):
-                got = cover_chunk(ix0, iy0, nx, ny, c, keep & (cls == c))
-                if got is None:
-                    continue
-                tris[COVER_NAME[c]] += add_mesh(
-                    "%s_%d_%d" % (COVER_NAME[c], ix0, iy0), got[0], got[1], c)
+            tris["земля"] += len(idx) // 3
+            # ЛЕС ЕДЕТ В ТОТ ЖЕ БУФЕР, ЧТО И ЗЕМЛЯ. Кадр упирается в число
+            # объектов, а не в геометрию (см. заголовок), — значит каждый
+            # сэкономленный узел дороже сэкономленного треугольника. Материал у
+            # них теперь общий: цвет леса кладётся в вершины, как и цвет земли.
+            got = cover_chunk(ix0, iy0, nx, ny, keep & (cls == 1))
+            if got is not None:
+                tris["лес"] += len(got[1]) // 3
+                idx = np.concatenate([idx, got[1] + len(pos)])
+                pos = np.concatenate([pos, got[0]])
+                col = np.concatenate([
+                    col, np.repeat(srgb_to_linear(hex_rgb(COVER_COLOUR[1]))[None],
+                                   len(got[0]), 0).astype(np.float32)])
+            add_mesh("land_%d_%d" % (ix0, iy0), pos, idx, 0, col)
+            # Застройка остаётся своим узлом: у неё свой цвет, и на неё есть
+            # виды — её ещё предстоит заменить настоящими зданиями.
+            got = cover_chunk(ix0, iy0, nx, ny, keep & (cls == 2))
+            if got is not None:
+                tris["застройка"] += add_mesh(
+                    "застройка_%d_%d" % (ix0, iy0), got[0], got[1], 1)
 
     mats = [{"name": "земля", "pbrMetallicRoughness": {
-                "metallicFactor": 0.0, "roughnessFactor": 0.95}}]
-    for c in (1, 2):
-        rgb = srgb_to_linear(hex_rgb(COVER_COLOUR[c])).tolist()
-        # doubleSided намеренно: намотка стенок зависит от того, с какой стороны
-        # ячейки они выросли, и разбираться с восемью случаями ради отбраковки,
-        # которая тут ничего не экономит, — не та цена.
-        mats.append({"name": COVER_NAME[c], "doubleSided": True,
-                     "pbrMetallicRoughness": {
-                         "baseColorFactor": rgb + [1.0],
-                         "metallicFactor": 0.0, "roughnessFactor": 0.92}})
+                "metallicFactor": 0.0, "roughnessFactor": 0.95}},
+            {"name": "застройка", "pbrMetallicRoughness": {
+                "baseColorFactor": srgb_to_linear(
+                    hex_rgb(COVER_COLOUR[2])).tolist() + [1.0],
+                "metallicFactor": 0.0, "roughnessFactor": 0.92}}]
 
     out = {
         "asset": {"version": "2.0", "generator": "sv20 build_terrain_glb.py"},

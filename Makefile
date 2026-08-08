@@ -104,7 +104,7 @@ serve: viewer/terrain.html $(TERRAIN_PACK)
 #
 # Правило простое: правил модель — гони `test`, собрался коммитить — `all-tests`.
 # Отдельную батарею можно позвать по имени: `make t-wind`, `make t-upwind`.
-FAST := axes buoyancy membrane vlm waves ocean wind terrain replay physics
+FAST := axes buoyancy membrane vlm waves ocean wind terrain replay physics sailcoeffs
 SLOW := upwind
 
 # Батареи на питоне стоят особняком: они проверяют не симулятор, а то, что

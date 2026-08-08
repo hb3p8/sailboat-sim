@@ -404,6 +404,10 @@ export class Boat {
       const dSide = this.rigTarget - this.rigSide;
       this.rigSide += Math.max(-swing, Math.min(swing, dSide));
     }
+    // Поле порывов в точке лодки — не для сил, а для приборов: силы берут его
+    // по каждой полоске отдельно. Одна лишняя выборка на шаг, зато на экране
+    // есть число, с которым можно сверить картинку.
+    this.gustG = this.wind.gust(this.x, this.y, this.t);
     const sail = this.rig.forces(this, aw, dt);
     const wind = windage(P, this.o, aw);
 

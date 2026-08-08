@@ -1253,11 +1253,50 @@ function telltaleMesh() {
 const telltales = [telltaleMesh(), telltaleMesh()];
 boatGroup.add(telltales[0], telltales[1]);
 
+// Колдунчики на ЗАДНЕЙ ШКАТОРИНЕ грота.
+//
+// Показывают другое, чем передние, и потому висят отдельно. Передние говорят,
+// как поток ПРИХОДИТ на парус: наветренный поднялся — приведено, подветренный
+// повис — увалено или перебрано. Задние говорят, как он с паруса СХОДИТ:
+// пока кромка держит поток, ленточка вытянута в корму; оторвался — она
+// заворачивается за парус и мечется.
+//
+// Ценность их в том, что кромка сдаёт РАНЬШЕ передней шкаторины. Перебрал
+// шкот — задний завернулся, а передние ещё стелются, и парус вроде бы везёт;
+// на этом и держат грот. В модели этот порядок не назначен, а получается: см.
+// leechSeparation в aero.js и замер в комментарии там же.
+//
+// Их три, по числу лат, и цвет у них свой — они ни наветренные, ни
+// подветренные.
+const LEECH_ROWS = [3, 6, 9];
+const LEECH_LEN = 0.30;           // ленты по 25–30 см, как их и режут
+const LEECH_COLOUR = [0.96, 0.84, 0.42];
+
+function leechMesh() {
+  const n = LEECH_ROWS.length * TELL_VERT;
+  const g = new BufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute(new Float32Array(n * 3), 3));
+  const col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    col[i * 3] = LEECH_COLOUR[0];
+    col[i * 3 + 1] = LEECH_COLOUR[1];
+    col[i * 3 + 2] = LEECH_COLOUR[2];
+  }
+  g.setAttribute('color', new Float32BufferAttribute(col, 3));
+  const m = new Mesh(g, new MeshBasicMaterial({
+    vertexColors: true, depthTest: false, side: DoubleSide }));
+  m.renderOrder = 3;
+  m.frustumCulled = false;
+  return m;
+}
+const leechTells = leechMesh();
+boatGroup.add(leechTells);
+
 // Одна ленточка: от точки на полотне по потоку, с изломом и трепетом.
 // `bend` — насколько её задирает или роняет, `wob` — насколько мечется.
-function drawTelltale(arr, at, px, py, pz, ux, uz, bend, wob, phase) {
+function drawTelltale(arr, at, px, py, pz, ux, uz, bend, wob, phase, length) {
   let x = px, y = py, z = pz, i = at;
-  const step = TELL_LEN / TELL_SEG;
+  const step = (length || TELL_LEN) / TELL_SEG;
   for (let s = 0; s < TELL_SEG; s++) {
     const f = (s + 1) / TELL_SEG;
     const a = bend * f + wob * Math.sin(phase + 3 * f);
@@ -1444,6 +1483,39 @@ function shapeSails(side) {
     }
     telltales[k].geometry.attributes.position.needsUpdate = true;
     telltales[k].geometry.computeBoundingSphere();
+
+    // Задняя шкаторина — только у грота.
+    if (k !== 0) return;
+    const lt = leechTells.geometry.attributes.position.array;
+    let ie = 0;
+    for (const r of LEECH_ROWS) {
+      const si = base + Math.min(5, Math.round((r / (SAIL_ROWS - 1)) * 5));
+      const g = strips[si] || {};
+      const d = (tele && tele[si]) || {};
+      // Узел на самой кромке и направление хорды у неё: от предпоследнего
+      // столбца к последнему. Ленточка продолжает хорду в корму — так она и
+      // стоит, когда поток держится.
+      const at = (r * SAIL_COLS + SAIL_COLS - 1) * 3;
+      const ax = a[at], ay = a[at + 1], az = a[at + 2];
+      const dx = ax - a[at - 3], dz = az - a[at - 1];
+      const len = Math.hypot(dx, dz) || 1;
+      const ux = dx / len, uz = dz / len;
+      // В штиль ленточка просто висит: это не отрыв, а отсутствие потока, и
+      // путать их нельзя — иначе на стоянке грот выглядит перебранным.
+      const calm = Math.min(1, Math.max(0, 1 - (g.ve || 0) / 1.5));
+      const sep = d.sep || 0;
+      // Оторвавшаяся кромка заворачивает ленточку ЗА парус: угол за прямой, и
+      // звенья идут уже вперёд по хорде. Это и есть та самая картинка, по
+      // которой на воде видно, что шкот перебран.
+      const bend = -0.12 - 1.9 * sep - 1.3 * calm;
+      const wob = (0.05 + 0.55 * sep) * (1 - calm);
+      const hz = Math.min(FLAP_MAX_HZ,
+                          FLAP_ST * Math.max(1, g.ve || 1) / LEECH_LEN);
+      ie = drawTelltale(lt, ie, ax, ay, az, ux, uz, bend, wob,
+                        2 * Math.PI * hz * boat.t + r, LEECH_LEN);
+    }
+    leechTells.geometry.attributes.position.needsUpdate = true;
+    leechTells.geometry.computeBoundingSphere();
   });
 
   // Шкот от шкотового угла стакселя к каретке. Шкотовый угол здесь — нижняя

@@ -599,5 +599,52 @@ console.log('\nПарусность в потоке\n');
   }
 }
 
+
+// --- колдунчики на задней шкаторине -------------------------------------------
+//
+// Проверяется не картинка, а ПОРЯДОК СОБЫТИЙ — то единственное, что в отрыве с
+// кромки можно утверждать твёрдо. Перебрал шкот: первой сдаёт задняя шкаторина,
+// потом виснет подветренный у передней, потом наступает срыв. Если этот порядок
+// сломается, колдунчик перестанет быть предупреждением и станет подтверждением
+// уже случившегося — то есть бесполезным.
+{
+  const hold = (sheet) => {
+    const b = new Boat(PACK);
+    b.o.windSpeed = 6; b.o.windDir = 45 * D; b.o.sheet = sheet * D;
+    b.o.twist = 8 * D; b.o.crewHike = 1; b.o.crewMass = 219.9;
+    b.u = 3; b.phi = 18 * D;
+    for (let i = 0; i < 70 * 30; i++) {
+      b.o.rudder = Math.max(-25 * D, Math.min(25 * D, -(2.5 * (0 - b.psi) - 0.9 * b.r)));
+      b.step(1 / 30);
+    }
+    const st = b.telemetry.strips[3];
+    return {
+      speed: b.telemetry.speedKn, alpha: Math.abs(st.alphaDeg),
+      sep: st.sep,
+      // тот же порог, по которому виснет подветренный колдунчик у передней
+      droop: Math.max(0, Math.min(1, (3 - (13 - Math.abs(st.alphaDeg))) / 4)),
+    };
+  };
+  const tight = hold(12), good = hold(16), eased = hold(24);
+  console.log('\nПеребранный грот: что показывают колдунчики\n');
+  console.log('  шкот   ход     α    отрыв кромки   подветренный у передней');
+  for (const [n, r] of [['12°', tight], ['16°', good], ['24°', eased]]) {
+    console.log('  ' + n + '   ' + r.speed.toFixed(2) + ' уз  ' +
+      r.alpha.toFixed(1).padStart(4) + '°      ' + r.sep.toFixed(2) +
+      '           ' + r.droop.toFixed(2));
+  }
+  console.log('');
+  check('перебранный шкот виден по задней шкаторине раньше, чем по передней',
+    tight.sep > 0.2 && tight.droop < 0.05,
+    'на 12° кромка ' + tight.sep.toFixed(2) + ', передняя ' + tight.droop.toFixed(2));
+  check('на правильной настройке стелется всё',
+    good.sep < 0.05 && good.droop < 0.05 && good.speed > tight.speed,
+    'на 16° ход ' + good.speed.toFixed(2) + ' против ' + tight.speed.toFixed(2) +
+    ' на перебранном');
+  check('потравленный шкот кромку не срывает',
+    eased.sep < 0.05, 'на 24° отрыв ' + eased.sep.toFixed(2));
+}
+
+
 console.log('\n' + (failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');
 process.exit(failures ? 1 : 0);

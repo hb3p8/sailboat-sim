@@ -810,7 +810,7 @@ function renderOrtho(bx, bz, fx, fz, sx, sz) {
     // шести над ней, и в чертёжном кадре занимает половину картинки, споря со
     // стрелками сил. Направление ветра и так на розе.
     orthoOff = [mainSail, jibSail, telltales[0], telltales[1], battens, arrow,
-                sea, grid, wake, track, mark, streakMesh, field, curField,
+                sea, grid, track, mark, streakMesh, field, curField,
                 flow, flowGhost].filter(Boolean);
     orthoWas = new Array(orthoOff.length);
   }

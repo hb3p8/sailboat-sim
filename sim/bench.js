@@ -18,6 +18,29 @@
 // от того, сколько воды в кадре и подо что уходит луч, — то есть ровно от того,
 // что на живой сцене меняется каждый миг.
 
+// --- посмотреть сгенерированный шейдер -----------------------------------------
+//
+// `?wgsl=<подстрока>` печатает в консоль код каждого шейдера, в котором эта
+// подстрока встретилась. Пустая подстрока — все.
+//
+// Заведено не про запас. Вода собирается из узлов TSL, и когда она ведёт себя
+// не так, вопрос всегда один: это выражение собралось не в то, что задумано,
+// или задумано было неверно? Отладочные виды на него не отвечают — они
+// показывают итог, а не путь к нему. Первый же случай применения снял подозрение
+// с шейдера следа за одну попытку: код оказался ровно тем, что написано, и
+// искать пришлось совсем в другом месте — в остановленном цикле кадров.
+//
+// Перехват ставится на прототип, а не на устройство: устройство появляется
+// только после инициализации рендерера, то есть уже после первых шейдеров.
+if (typeof GPUDevice !== 'undefined' && location.search.includes('wgsl')) {
+  const want = new URLSearchParams(location.search).get('wgsl') || '';
+  const orig = GPUDevice.prototype.createShaderModule;
+  GPUDevice.prototype.createShaderModule = function (desc) {
+    if (!want || (desc.code && desc.code.includes(want))) console.log('WGSL:', desc.code);
+    return orig.call(this, desc);
+  };
+}
+
 // Случаи подобраны так, чтобы бить в разные слабости. Камера задаётся в осях
 // ЛОДКИ — вперёд, вверх, вправо, — и точка, куда она смотрит, тоже. Начало этих
 // осей у лодки на транце, а корпус тянется вперёд метров на шесть: середина
@@ -77,7 +100,7 @@ function benchPose(boat, prev) {
 // чашах весов, а на снимке — шум, по которому потом не отличить правку от
 // стрелки, проехавшей на полпикселя.
 function benchQuiet() {
-  for (const o of [arrow, wake, track, grid, mark, streakMesh, seaProbeMarks,
+  for (const o of [arrow, track, grid, mark, streakMesh, seaProbeMarks,
                    curField, flowGroup]) {
     if (o) o.visible = false;
   }
@@ -109,8 +132,19 @@ function benchAim(camera) {
 // кадра под нагрузкой — уже без развёртки. Осушение обязательно: renderAsync
 // возвращается, отдав команды, а не дождавшись их выполнения, и без него замер
 // показал бы скорость записи команд.
-const BENCH_WARM = 12;    // кадров на разогрев, в зачёт не идут
-const BENCH_RUN = 60;     // кадров в зачёт
+// РЕЖИМЫ ЧЕРЕДУЮТСЯ, а не меряются подряд блоками, и это не педантизм. Блоками
+// вышло так: небо 2.78, марш 3.15, зеркало 2.29 — то есть зеркало со вторым
+// проходом по всей сцене оказалось дешевле воды, отражающей одно небо. Свидетель
+// (число вызовов отрисовки, 196 против 100) говорил, что проход идёт. Врал не
+// он, а порядок: вкладка предпросмотра почти всё время стоит, видеокарта уходит
+// на низкие частоты, и первый же измеряемый режим платит за разгон, а последний
+// достаётся разогнанной. Двенадцати кадров разогрева на это не хватало.
+//
+// По кругу разгон ложится на все режимы поровну. Заодно и любой снос — нагрев,
+// чужая работа на машине — размазывается, а не достаётся одному режиму целиком.
+const BENCH_WARM = 3;     // кругов разогрева, в зачёт не идут
+const BENCH_ROUNDS = 10;  // кругов в зачёт
+const BENCH_BLOCK = 6;    // кадров на режим в круге
 
 // Осушение очереди. Если до неё не дотянуться — замер меряет запись команд, а
 // не работу, и об этом надо СКАЗАТЬ, а не показать красивое число. Прошлый заход
@@ -125,26 +159,29 @@ async function benchDrain() {
   if (benchDrained) await q.onSubmittedWorkDone();
 }
 
-async function benchOne(ssr, planar) {
-  seaRefSsr.value = ssr;
-  seaRefPlanar.value = planar;
-  for (let i = 0; i < BENCH_WARM; i++) renderer.render(scene, camera);
+// Один блок кадров в выбранном режиме. Возвращает время на кадр.
+async function benchBlock(mode) {
+  seaRefSsr.value = mode[1];
+  seaRefPlanar.value = mode[2];
   await benchDrain();
-  // Число вызовов отрисовки за кадр — свидетель того, что проход вообще был.
-  // Без него «зеркало дешевле неба» пришлось бы разгадывать: то ли замер врёт,
-  // то ли второй проход не запускался. Оказалось второе, и разгадка нашлась
-  // именно этим счётчиком: у обоих способов выходило поровну.
-  //
-  // Считается РАЗНОСТЬЮ на одном кадре: сбрасывает счётчики внутренний цикл
-  // three по кадру развёртки, а не каждый render, — то есть само по себе
-  // значение здесь накопленное и ничего не значит.
+  const t0 = performance.now();
+  for (let i = 0; i < BENCH_BLOCK; i++) renderer.render(scene, camera);
+  await benchDrain();
+  return (performance.now() - t0) / BENCH_BLOCK;
+}
+
+// Число вызовов отрисовки за кадр — свидетель того, что проход вообще был. Без
+// него «зеркало дешевле неба» пришлось бы разгадывать: то ли замер врёт, то ли
+// второй проход не запускался. Первый раз оказалось второе, и разгадка нашлась
+// именно этим счётчиком: у обоих способов выходило поровну.
+//
+// Считается РАЗНОСТЬЮ на одном кадре: счётчики сбрасывает внутренний цикл three
+// по кадру развёртки, а не каждый render, — то есть само по себе значение здесь
+// накопленное и ничего не значит.
+function benchDraws() {
   const d0 = renderer.info.render.drawCalls;
   renderer.render(scene, camera);
-  const draws = renderer.info.render.drawCalls - d0;
-  const t0 = performance.now();
-  for (let i = 0; i < BENCH_RUN; i++) renderer.render(scene, camera);
-  await benchDrain();
-  return { ms: (performance.now() - t0) / BENCH_RUN, draws };
+  return renderer.info.render.drawCalls - d0;
 }
 
 let benchBusy = false;
@@ -161,23 +198,32 @@ async function benchRun() {
   const out = document.getElementById('v-bench');
   const keep = [seaRefSsr.value, seaRefPlanar.value];
   try {
-    const res = [];
-    for (const [name, ssr, planar] of [['небо', 0, 0], ['SSR', 1, 0],
-                                       ['зеркало', 0, 1]]) {
-      if (out) out.textContent = name + '…';
-      res.push([name, await benchOne(ssr, planar)]);
+    const modes = [['небо', 0, 0], ['SSR', 1, 0], ['зеркало', 0, 1]];
+    const ms = modes.map(() => 0);
+    const draws = [];
+    for (let w = 0; w < BENCH_WARM; w++) {
+      for (const m of modes) await benchBlock(m);
     }
+    for (const m of modes) {
+      seaRefSsr.value = m[1]; seaRefPlanar.value = m[2];
+      draws.push(benchDraws());
+    }
+    for (let r = 0; r < BENCH_ROUNDS; r++) {
+      if (out) out.textContent = 'круг ' + (r + 1) + '/' + BENCH_ROUNDS + '…';
+      for (let i = 0; i < modes.length; i++) ms[i] += await benchBlock(modes[i]);
+    }
+    const res = modes.map((m, i) => [m[0], ms[i] / BENCH_ROUNDS, draws[i]]);
     // Показывается не только время, но и НАДБАВКА над голым небом: полное время
     // кадра почти целиком состоит из всего остального, и по нему одному разницу
     // между способами не видно.
-    const base = res[0][1].ms;
-    const txt = res.map(([n, r], i) => i === 0
-      ? n + ' ' + r.ms.toFixed(2)
-      : n + ' ' + r.ms.toFixed(2) + ' (+' + (r.ms - base).toFixed(2) + ')').join(', ');
+    const base = res[0][1];
+    const txt = res.map(([n, t], i) => i === 0
+      ? n + ' ' + t.toFixed(2)
+      : n + ' ' + t.toFixed(2) + ' (+' + (t - base).toFixed(2) + ')').join(', ');
     if (out) out.textContent = benchDrained ? txt + ' мс' : txt + ' мс — БЕЗ ОСУШЕНИЯ';
     console.log('замер отражений:',
-                Object.fromEntries(res.map(([n, r]) =>
-                  [n, r.ms.toFixed(3) + ' мс, ' + r.draws + ' вызовов'])),
+                Object.fromEntries(res.map(([n, t, d]) =>
+                  [n, t.toFixed(3) + ' мс, ' + d + ' вызовов'])),
                 'случай:', benchFrozen() ? BENCH_CASES[BENCH_N].name : 'живая сцена',
                 'очередь осушалась:', benchDrained);
     if (!benchDrained) {

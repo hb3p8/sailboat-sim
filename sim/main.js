@@ -194,6 +194,13 @@ const SEA_PROBE = {
 };
 const seaPlane = { z: 0, se: 0, sn: 0 };
 
+// След за кормой — поле, а не геометрия; читает его сама вода. Ширина берётся
+// по ватерлинии из того же пакета, что и пробы, а точка впрыска — транец, то
+// есть кормовой конец ватерлинии.
+const wake = new Wake(renderer);
+wakeSetBeam(SEA_PROBE.b);
+const SEA_WAKE_X = PACK.hydrostatics.lwl_aft_x_m;
+
 // Разложить пробы под корпусом: их читает СЛЕДУЮЩИЙ кадр.
 //
 // Раскладка берётся из ocean.js — оттуда же, откуда её берёт подгонка плоскости.
@@ -516,13 +523,30 @@ const seaDbgField = uniform(0);    // 1 — поле порывов цветом
 const seaDbgSsr = uniform(0);      // 1 — что нашло отражение
 const seaDbgSteps = uniform(0);    // 1 — сколько шагов на это ушло
 const seaDbgOut = uniform(0);      // 1 — чем кончился марш
+const seaDbgWake = uniform(0);     // 1 — поле следа цветом
 // Доля ряби в отладке: от нуля вне языка до единицы в его сердцевине. Величина
 // уже прошла кривую края и ходит от −1 до 1, так что растягивать нечего.
 const dbgOnlyVert = seaGustRawVert.max(0.0);
 
-// Множитель амплитуды каскада по ветру: длинным — только берег, мелкому ещё и
-// порыв.
-function seaWindOn(i, steady, gust) {
+// --- след за кормой ------------------------------------------------------------
+//
+// Поле считает wake.js; здесь оно только читается — двумя выборками, как и всё
+// остальное на этой воде: в вершинной стадии из опорной точки, в пиксельной из
+// интерполированной. Смешивать нельзя, varying в вершинном шейдере ещё нет.
+const seaWakeVert = wake.sample(seaRefXY);
+const seaWakeFrag = wake.sample(seaWorldXY);
+// Насколько гладкая дорожка гасит рябь. Не в ноль: за кормой вода взбита, а не
+// залита маслом, и совсем зеркальная полоса читается прорехой в воде.
+const SEA_WAKE_SMOOTH = 0.85;
+// Пена следа входит в общую пену воды, и оттого сама собой делается и белой, и
+// шершавой, и неотражающей: на этом узле уже висят цвет, шероховатость и
+// Френель. Отдельного «цвета следа» нет нарочно — он разошёлся бы с пеной
+// гребня, и на одной воде оказались бы две разные белизны.
+const SEA_WAKE_FOAM = 0.75;
+
+// Множитель амплитуды каскада по ветру и следу: длинным — только берег, мелкому
+// ещё порыв и след.
+function seaWindOn(i, steady, gust, slick) {
   // Берег входит КВАДРАТОМ — как энергия волны от ветра.
   const s2 = steady.mul(steady);
   if (i < OCEAN_TILES.length - 1) return s2;
@@ -531,7 +555,13 @@ function seaWindOn(i, steady, gust) {
   // ещё быстрее, и потому затишье на воде выглядит зеркалом, а не «чуть глаже».
   // Квадрат такой несимметрии не даёт: при типичном порыве он менял рябь на
   // треть, а видно её становится примерно с двух раз.
-  return s2.mul(gust).mul(gust).mul(gust);
+  //
+  // След гасит тот же самый каскад и по той же причине, только в другую
+  // сторону: корпус сбивает капиллярную рябь, и дорожка за кормой остаётся
+  // зеркальнее воды вокруг. Механизм один — амплитуда мелкой волны; поэтому
+  // след и порыв не спорят друг с другом, а перемножаются.
+  return s2.mul(gust).mul(gust).mul(gust)
+    .mul(slick.mul(SEA_WAKE_SMOOTH).oneMinus());
 }
 
 // Мелкий каскад — последний в списке; в отладке «только порывы» живёт он один.
@@ -545,14 +575,14 @@ function seaGeomWeight(i) {
   const tile = OCEAN_TILES[i];
   const res = seaCellAttr.smoothstep(tile / 12, tile / 3).oneMinus();
   const only = i === seaFine ? res.mul(dbgOnlyVert) : float(0);
-  const norm = res.mul(seaWindOn(i, seaSteadyVert, seaGustVert));
+  const norm = res.mul(seaWindOn(i, seaSteadyVert, seaGustVert, seaWakeVert.y));
   return mix(mix(norm, only, seaDbgOnly), float(0), seaDbgField);
 }
 function seaShadeWeight(i) {
   const t = OCEAN_TILES[i] / 16;
   const res = seaFootprint.smoothstep(t, t * 2.5).oneMinus();
   const only = i === seaFine ? res.mul(seaGustRaw.max(0.0)) : float(0);
-  const norm = res.mul(seaWindOn(i, seaSteadyFrag, seaGustFrag));
+  const norm = res.mul(seaWindOn(i, seaSteadyFrag, seaGustFrag, seaWakeFrag.y));
   return mix(mix(norm, only, seaDbgOnly), float(0), seaDbgField);
 }
 
@@ -576,7 +606,9 @@ seaMat.normalNode = transformNormalToView(
 // свежий ветер, и это правильно: барашки на реке при пяти метрах в секунду не
 // бывают. Оттого она и не подкрашена «в белое» жёстко, а осветляет воду:
 // зачаток барашка — это ещё не барашек, а взбитая вода.
-const seaFoam = seaSurf.w.clamp(0, 1);
+// Пена гребня и пена следа — одна и та же пена, и берётся МАКСИМУМ, а не сумма:
+// вода за кормой белее не становится оттого, что там же завернулся гребень.
+const seaFoam = seaSurf.w.max(seaWakeFrag.x.mul(SEA_WAKE_FOAM)).clamp(0, 1);
 // Свечение гребня.
 //
 // Мерится оно не в метрах, а в долях СВОЕЙ волны: на штилевой ряби в сантиметр
@@ -958,10 +990,16 @@ const seaMirror = seaMirrorTex ? Fn(() => {
     vec3(0.20, 0.85, 0.95), isCode(SEA_OUT_BACK)),      // за камеру — голубое
     vec3(0.95, 0.20, 0.15), isCode(SEA_OUT_SPENT)),     // впустую — красное
     vec3(0.95, 0.80, 0.15), isCode(SEA_OUT_UNDER));     // дно — жёлтое
-  const dbgAny = seaDbgField.max(seaDbgSsr).max(seaDbgSteps).max(seaDbgOut).toVar();
-  const dbgView = mix(mix(mix(seaDbgColour, dbgSsrView, seaDbgSsr),
-                          dbgStepView, seaDbgSteps),
-                      dbgOutView, seaDbgOut);
+  // Поле следа прямо цветом: зелёное — пена, красное — гладкость. Два канала
+  // порознь и в разные стороны видно только так; в самой воде они уже смешаны
+  // с пеной гребня и с рябью, и «след не тот» никуда бы не вело.
+  const dbgWakeView = vec3(seaWakeFrag.y, seaWakeFrag.x, seaWakeFrag.x.mul(0.4));
+  const dbgAny = seaDbgField.max(seaDbgSsr).max(seaDbgSteps)
+    .max(seaDbgOut).max(seaDbgWake).toVar();
+  const dbgView = mix(mix(mix(mix(seaDbgColour, dbgSsrView, seaDbgSsr),
+                              dbgStepView, seaDbgSteps),
+                          dbgOutView, seaDbgOut),
+                      dbgWakeView, seaDbgWake);
   seaMat.emissiveNode = mix(lit, dbgView, dbgAny);
   seaMat.colorNode = mix(seaMat.colorNode, vec3(0.0), dbgAny);
 }
@@ -1392,25 +1430,13 @@ function shapeSails(side) {
 // Без них ход и снос не читаются: вода однородная, глазу не за что зацепиться.
 // Бурун показывает скорость, дорожка — куда лодку на самом деле несёт.
 
-const WAKE = 150;
-const wakeGeo = new BufferGeometry();
-wakeGeo.setAttribute('position',
-  new Float32BufferAttribute(new Float32Array(WAKE * 2 * 3), 3));
-wakeGeo.setAttribute('color',
-  new Float32BufferAttribute(new Float32Array(WAKE * 2 * 3), 3));
-const wakeIdx = [];
-for (let i = 0; i < WAKE - 1; i++) {
-  const a = i * 2;
-  wakeIdx.push(a, a + 1, a + 3, a, a + 3, a + 2);
-}
-wakeGeo.setIndex(wakeIdx);
-const wake = new Mesh(wakeGeo, new MeshBasicMaterial({
-  vertexColors: true, transparent: true, opacity: 0.5, depthWrite: false,
-}));
-wake.frustumCulled = false;
-scene.add(wake);
-const wakePts = [];
-
+// Ленты следа здесь больше нет. Была полоса белых четырёхугольников на высоте
+// пять сантиметров — и на волне БПФ она то ныряла под воду, то висела над ней.
+// След переехал в поле, которое читает сама вода: sim/wake.js.
+//
+// Жёлтая дорожка пути осталась и остаётся впредь: это другой прибор. След
+// показывает, ЧТО лодка сделала с водой, дорожка — где она прошла; разница
+// между дорожкой и направлением носа и есть дрейф, и её видно прямо.
 const TRACK = 1200;
 const trackGeo = new BufferGeometry();
 trackGeo.setAttribute('position',
@@ -2318,7 +2344,7 @@ const capSeaNow = document.getElementById('v-seanow');
   // Отладка воды: показать порыв отдельно от всего остального. Смысл режимов —
   // у объявления seaDbg.
   const SEA_DBG = ['как есть', 'только порывы', 'поле порывов',
-                   'отражение', 'шаги SSR', 'исход SSR'];
+                   'отражение', 'шаги SSR', 'исход SSR', 'поле следа'];
   const sel = document.getElementById('seadbg');
   for (let i = 0; i < SEA_DBG.length; i++) {
     const o = document.createElement('option');
@@ -2331,6 +2357,7 @@ const capSeaNow = document.getElementById('v-seanow');
     seaDbgSsr.value = sel.value === '3' ? 1 : 0;
     seaDbgSteps.value = sel.value === '4' ? 1 : 0;
     seaDbgOut.value = sel.value === '5' ? 1 : 0;
+    seaDbgWake.value = sel.value === '6' ? 1 : 0;
   });
 }
 {
@@ -2414,7 +2441,7 @@ if (!STARTS.length) {
     startPt = i < 0 ? null : STARTS[i];
     startAt();
     apHeading = boat.psi;
-    wakePts.length = 0;
+    wake.clear();
     trackN = 0;
   });
   startPt = STARTS[0];
@@ -2608,6 +2635,14 @@ function frame() {
     // обязана стоять и отматываться вместе с лодкой.
     ocean.step(boat.t);
   }
+  // След. Впрыск идёт в ТРАНЕЦ, а не в начало координат лодки: ноль модели
+  // стоит у кормового конца ватерлинии, и разница тут в полметра — на глаз она
+  // читается как оторвавшийся от кормы след.
+  //
+  // Ход берётся по воде (`speed`), а не над грунтом: след оставляет корпус,
+  // разгоняющий воду, и на течении стоящая на месте лодка всё равно пашет.
+  wake.step(dt, ix + SEA_WAKE_X * Math.cos(ipsi), iy + SEA_WAKE_X * Math.sin(ipsi),
+            t.speed || 0);
   seaGust.value = boat.wind.o.gust;
   seaShadeGust.value = boat.o.shadeGust;
   // Направление СВОБОДНОГО ветра, без поворота к оси долины. Поворот сюда
@@ -2643,33 +2678,6 @@ function frame() {
     flowGroup.rotation.y = headingRotY(ipsi);
     if ((tick % 12) === 0) updateFlow();
   }
-
-  const spd = t.speed || 0;
-  if ((tick % 2) === 0) {
-    wakePts.unshift({
-      x: toSceneX(ix - 2.9 * Math.cos(ipsi)),
-      z: toSceneZ(iy - 2.9 * Math.sin(ipsi)),
-      psi: ipsi, w: 0.30 + 0.07 * spd });
-    if (wakePts.length > WAKE) wakePts.length = WAKE;
-  }
-  const wp = wakeGeo.attributes.position.array;
-  const wc = wakeGeo.attributes.color.array;
-  for (let i = 0; i < wakePts.length; i++) {
-    const p = wakePts[i];
-    const f = 1 - i / WAKE;
-    const w = p.w * (0.8 + 0.9 * (1 - f));
-    const nx = stbdSceneX(p.psi), nz = stbdSceneZ(p.psi);
-    wp[i * 6] = p.x + nx * w; wp[i * 6 + 1] = 0.05; wp[i * 6 + 2] = p.z + nz * w;
-    wp[i * 6 + 3] = p.x - nx * w; wp[i * 6 + 4] = 0.05; wp[i * 6 + 5] = p.z - nz * w;
-    const b = f * f * Math.min(1, spd / 3);
-    for (let k = 0; k < 6; k++) wc[i * 6 + k] = 0.75 + 0.25 * b;
-  }
-  // Рисуем только накопленные звенья: иначе хвост схлопывается в одну точку
-  // и получается веер поперёк всей акватории.
-  wakeGeo.setDrawRange(0, Math.max(0, (wakePts.length - 1) * 6));
-  wakeGeo.attributes.position.needsUpdate = true;
-  wakeGeo.attributes.color.needsUpdate = true;
-  wake.material.opacity = 0.12 + 0.45 * Math.min(1, spd / 4);
 
   if ((tick % 6) === 0 && trackN < TRACK) {
     const tp = trackGeo.attributes.position.array;

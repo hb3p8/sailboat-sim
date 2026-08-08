@@ -22,7 +22,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyX') {
     startAt();
     apHeading = boat.psi;
-    wakePts.length = 0;
+    wake.clear();
     trackN = 0;
   }
   if (e.code === 'KeyH') { autopilot = !autopilot; apHeading = boat.psi; }

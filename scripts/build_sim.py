@@ -141,9 +141,16 @@ def main():
     # см. docs/terrain-in-sim.md.
     terr_path = os.path.join(exp, "terrain_pack.json")
     if os.path.exists(terr_path):
+        terr = json.load(open(terr_path))
+        # Покров в страницу не вклеивается: он нужен был рисованию, а рисование
+        # переехало в запечённую карту assets/terrain.glb. Полтораста тысяч
+        # клеток base64 — это полмегабайта в файле, который открывается с
+        # file:// и потому несёт всё на себе. В самом пакете поле остаётся:
+        # из него карту и пекут.
+        terr.pop("cover_b64", None)
         html = html.replace(
             "/*__TERRAIN_PACK__*/ null",
-            json.dumps(json.load(open(terr_path)), separators=(",", ":")))
+            json.dumps(terr, separators=(",", ":")))
     # Разметка акватории — стартовые точки, буи, судовой ход. Ставится она
     # руками в просмотрщике (`make serve`) и лежит в репозитории, а не в пакете:
     # пакет пересобирается из открытых источников, разметка нет, и мешать их

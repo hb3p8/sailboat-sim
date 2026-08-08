@@ -1,7 +1,7 @@
 PY ?= python3
 VENV := .venv/bin/python
 
-.PHONY: all extract hull viewer export physics sim terrain terrain-pack crew serve test slow all-tests fit clean
+.PHONY: all extract hull viewer export physics sim terrain terrain-pack terrain-glb crew serve test slow all-tests fit clean
 
 all: viewer export sim
 
@@ -33,6 +33,17 @@ $(TERRAIN_PACK): scripts/build_terrain_pack.py out/terrain.json
 	$(VENV) scripts/build_terrain_pack.py
 
 terrain-pack: $(TERRAIN_PACK)
+
+# Карта для отрисовки — отдельным жатым файлом, а не вклейкой в страницу: она
+# одна и та же от запуска к запуску, и строить её каждый раз в браузере значит
+# платить за это и весом, и паузой на открытии. Заодно из неё выброшен покров,
+# которого с воды не видно, — подробности в заголовке скрипта.
+TERRAIN_GLB := assets/terrain.glb
+
+$(TERRAIN_GLB): scripts/build_terrain_glb.py $(TERRAIN_PACK)
+	$(VENV) scripts/build_terrain_glb.py
+
+terrain-glb: $(TERRAIN_GLB)
 
 sim/index.html: scripts/build_sim.py $(PACK) $(MESH) $(wildcard sim/*.js) \
                 sim/template.html $(wildcard $(TERRAIN_PACK))

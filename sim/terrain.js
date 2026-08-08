@@ -113,7 +113,9 @@ export class Terrain {
     const p = this.p;
     const raw = bytes(p.height_dm_b64);
     this.height = new Int16Array(raw.buffer, raw.byteOffset, p.nx * p.ny);
-    this.cover = bytes(p.cover_b64);
+    // Покрова здесь нет: он нужен был только рисованию, а рисование переехало
+    // в запечённую карту (scripts/build_terrain_glb.py). Из пакета, вклеенного
+    // в страницу, поле выброшено сборщиком — см. build_sim.py.
     this.sdf = bytes(p.sdf_b64);
     this.fetchRaw = bytes(p.fetch_b64);
     this.skyRaw = bytes(p.sky_b64);
@@ -187,21 +189,6 @@ export class Terrain {
     if (!this.p) return NO_DATA;
     const h = this._fine(this.height, x, y, 0.1, 0);
     return h === h ? h : NO_DATA;
-  }
-
-  // Верх покрова: земля плюс лес или застройка.
-  top(x, y) {
-    if (!this.p) return NO_DATA;
-    const g = this._fine(this.height, x, y, 0.1, 0);
-    if (g !== g) return NO_DATA;
-    const c = this._fine(this.cover, x, y, 1, 0);
-    // Класс в двух старших битах, высота в шести младших. Интерполировать
-    // упакованный байт нельзя — на границе классов вылезет мусор, — поэтому
-    // высота берётся у ближайшего узла, а не сглаживается.
-    const p = this.p;
-    const i = Math.round((x - p.x0) / p.step), j = Math.round((y - p.y0) / p.step);
-    const cell = this.cover[j * p.nx + i];
-    return g + (cell & 0x3F);
   }
 
   // Расстояние до берега, м. Положительное на воде, отрицательное на суше.

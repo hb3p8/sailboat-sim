@@ -2304,150 +2304,52 @@ function saveDump() {
 // оно проверкой в tests/terrain.test.mjs и одним взглядом на то, какой берег
 // высокий, — правый, южный.
 
-// Гипсометрическая шкала земли: от поймы к плато, отсчёт от УРЕЗА, а не от
-// нуля высот. На реке значение имеет высота над водой, а не над Балтикой.
-// Та же, что в просмотрщике акватории, — одна картина местности на оба.
-const LAND_RAMP = [
-  [0.0, 0x4d6b4a], [6.0, 0x6f8352], [18.0, 0x8b9159],
-  [40.0, 0xa89a6c], [80.0, 0xc0b189], [140.0, 0xdcd5c0],
-];
-
-// Ячеек в куске сетки. Двести с лишним кусков со своими габаритами: камера
-// стоит в полутора метрах над водой, и половина участка либо за горизонтом,
-// либо за ближним берегом. Отбраковку по пирамиде видимости делает сам three,
-// от нас требуется только не отдавать ему всё одним объектом.
-const CHUNK = 48;
-
-function buildTerrainScene() {
-  const P = TERRAIN_PACK;
-  const NX = P.nx, NY = P.ny, STEP = P.step, LEVEL = P.level;
-  const H = terrain.height, COVER = terrain.cover, SDF = terrain.sdf;
-  const group = new Group();
-  const ca = new Color(), cb = new Color(), cc = new Color();
-
-  const tint = dh => {
-    let i = 0;
-    while (i < LAND_RAMP.length - 2 && dh > LAND_RAMP[i + 1][0]) i++;
-    const [a, hexA] = LAND_RAMP[i], [b, hexB] = LAND_RAMP[i + 1];
-    const t = Math.max(0, Math.min(1, (dh - a) / (b - a)));
-    return ca.setHex(hexA).lerp(cb.setHex(hexB), t);
-  };
-
-  const gx = k => P.x0 + (k % NX) * STEP;
-  const gy = k => P.y0 + ((k / NX) | 0) * STEP;
-
-  // Земля куском. Дно под водой красится своим цветом: иначе мель читается как
-  // суша, и вся береговая черта теряет смысл.
-  const landChunk = (ix0, iy0, nx, ny) => {
-    const pos = new Float32Array(nx * ny * 3);
-    const col = new Float32Array(nx * ny * 3);
-    for (let j = 0, v = 0; j < ny; j++)
-      for (let i = 0; i < nx; i++, v++) {
-        const k = (iy0 + j) * NX + ix0 + i;
-        pos[v * 3] = toSceneX(gx(k)); pos[v * 3 + 1] = H[k] / 10;
-        pos[v * 3 + 2] = toSceneZ(gy(k));
-        const t = SDF[k] > 128 ? cc.setHex(0x2f4a52) : tint(H[k] / 10 - LEVEL);
-        col[v * 3] = t.r; col[v * 3 + 1] = t.g; col[v * 3 + 2] = t.b;
-      }
-    const idx = [];
-    for (let j = 0; j < ny - 1; j++)
-      for (let i = 0; i < nx - 1; i++) {
-        const a = j * nx + i, b = a + 1, d = a + nx, e = d + 1;
-        // Намотка против часовой при взгляде сверху. Проверять это надо на
-        // бумаге, а не на глаз: «очевидный» порядок обхода даёт нормали вниз,
-        // вся суша уходит в отбраковку задних граней, и экран показывает
-        // пустую воду, а не вывернутый рельеф.
-        idx.push(a, b, d, b, e, d);
-      }
-    const g = new BufferGeometry();
-    g.setAttribute('position', new Float32BufferAttribute(pos, 3));
-    g.setAttribute('color', new Float32BufferAttribute(col, 3));
-    g.setIndex(idx);
-    g.computeVertexNormals();
-    return new Mesh(g, new MeshStandardMaterial({
-      vertexColors: true, roughness: 0.95, metalness: 0.0 }));
-  };
-
-  // Лес и застройка — отдельной геометрией, а не вмятые в рельеф высотами.
-  // Крышка по верху слоя и вертикальные стенки там, где массив кончается: с
-  // воды квартал и опушка читаются сплошной стеной, а не набором коробок.
-  const coverChunk = (ix0, iy0, nx, ny, cls, colour) => {
-    const vp = [], vi = [], node = new Map();
-    const capped = (i, j) => {
-      if (i < 0 || j < 0 || i >= nx - 1 || j >= ny - 1) return false;
-      const k = (iy0 + j) * NX + ix0 + i;
-      return (COVER[k] >> 6) === cls && (COVER[k + 1] >> 6) === cls &&
-             (COVER[k + NX] >> 6) === cls && (COVER[k + NX + 1] >> 6) === cls;
-    };
-    const ytop = k => H[k] / 10 + (COVER[k] & 0x3F);
-    const put = k => {
-      let n = node.get(k);
-      if (n === undefined) {
-        n = vp.length / 3; node.set(k, n);
-        vp.push(toSceneX(gx(k)), ytop(k), toSceneZ(gy(k)));
-      }
-      return n;
-    };
-    const wall = (k1, k2) => {
-      const n = vp.length / 3;
-      const x1 = toSceneX(gx(k1)), z1 = toSceneZ(gy(k1));
-      const x2 = toSceneX(gx(k2)), z2 = toSceneZ(gy(k2));
-      vp.push(x1, H[k1] / 10, z1, x2, H[k2] / 10, z2,
-              x2, ytop(k2), z2, x1, ytop(k1), z1);
-      vi.push(n, n + 2, n + 1, n, n + 3, n + 2);
-    };
-    for (let j = 0; j < ny - 1; j++)
-      for (let i = 0; i < nx - 1; i++) {
-        if (!capped(i, j)) continue;
-        const k = (iy0 + j) * NX + ix0 + i;
-        const p0 = put(k), p1 = put(k + 1), p2 = put(k + NX + 1), p3 = put(k + NX);
-        vi.push(p0, p1, p3, p1, p2, p3);
-        if (!capped(i, j - 1)) wall(k, k + 1);
-        if (!capped(i, j + 1)) wall(k + NX, k + NX + 1);
-        if (!capped(i - 1, j)) wall(k, k + NX);
-        if (!capped(i + 1, j)) wall(k + 1, k + NX + 1);
-      }
-    if (!vi.length) return null;
-    const g = new BufferGeometry();
-    g.setAttribute('position', new Float32BufferAttribute(new Float32Array(vp), 3));
-    g.setIndex(vi);
-    g.computeVertexNormals();
-    // DoubleSide намеренно: намотка стенок зависит от того, с какой стороны
-    // ячейки они выросли, и разбираться с восемью случаями ради отбраковки,
-    // которая тут ничего не экономит, — не та цена.
-    return new Mesh(g, new MeshStandardMaterial({
-      color: colour, roughness: 0.92, metalness: 0.0, side: DoubleSide }));
-  };
-
-  let tris = 0;
-  for (let iy0 = 0; iy0 < NY - 1; iy0 += CHUNK)
-    for (let ix0 = 0; ix0 < NX - 1; ix0 += CHUNK) {
-      const nx = Math.min(CHUNK + 1, NX - ix0), ny = Math.min(CHUNK + 1, NY - iy0);
-      if (nx < 2 || ny < 2) continue;
-      for (const m of [landChunk(ix0, iy0, nx, ny),
-                       coverChunk(ix0, iy0, nx, ny, 1, 0x2f4a26),
-                       coverChunk(ix0, iy0, nx, ny, 2, 0x8c8377)]) {
-        if (!m) continue;
-        tris += m.geometry.index.count / 3;
-        group.add(m);
-      }
-    }
-
-  scene.add(group);
-  return { group: group, triangles: tris };
+// Карта акватории приходит готовой: рельеф, лес и застройка запечены в жатый
+// Draco файл scripts/build_terrain_glb.py и грузятся оттуда, как грузятся
+// фигурки экипажа.
+//
+// Раньше эта геометрия строилась ЗДЕСЬ, из полей, вклеенных в страницу base64.
+// Стоило это дважды — весом самого файла и паузой на постройку семисот буферов
+// при каждом открытии, — а между запусками не менялось ничего: карта одна и та
+// же. Заодно при запекании из неё выброшен покров, которого с воды не видно, —
+// а его девять десятых. Почему столько и чем за это плачено, написано в
+// заголовке того скрипта.
+//
+// Без сервера карты не будет, и это тот же уговор, что с экипажем: страница
+// открывается двойным кликом и работает, просто без берега. Физика от этого не
+// зависит вовсе — поля разгона, укрытия и глубин приходят пакетом и вклеены
+// по-прежнему.
+if (terrain.ready) {
+  new GLTFLoader()
+    .setDRACOLoader(new DRACOLoader().setDecoderPath('../viewer/vendor/draco/'))
+    .load('../assets/terrain.glb', gltf => {
+      // Материалы приходят из файла, но туман — свойство сцены, а не карты, и
+      // three включает его только тем материалам, у которых поднят fog. У
+      // импортированных он поднят по умолчанию, так что трогать нечего; а вот
+      // тени карта не отбрасывает и не принимает нарочно: солнце здесь одно на
+      // всю акваторию, и карта в пятнадцать километров в его карту теней не
+      // влезет ничем полезным.
+      let tris = 0;
+      gltf.scene.traverse(o => {
+        if (!o.isMesh) return;
+        o.castShadow = false;
+        o.receiveShadow = false;
+        tris += o.geometry.index ? o.geometry.index.count / 3
+                                 : o.geometry.attributes.position.count / 3;
+      });
+      // Акватория стоит на настоящих высотах над эллипсоидом, а лодка — на
+      // нуле. Проще опустить участок к нулю, чем поднимать лодку: у лодки в нуле
+      // сидят и волны, и след, и знаки.
+      gltf.scene.position.y = -TERRAIN_PACK.level;
+      scene.add(gltf.scene);
+      console.log('акватория: %d кусков, %s тыс. треугольников',
+                  gltf.scene.children.length, (tris / 1000).toFixed(0));
+    }, undefined, () => {
+      console.warn('assets/terrain.glb не открылся — берега не будет. ' +
+                   'Страница без сервера так и работает; с сервером — ' +
+                   'проверьте `make terrain-glb`.');
+    });
 }
-
-const terrainScene = terrain.ready ? buildTerrainScene() : null;
-if (terrainScene) {
-  console.log('акватория: %d кусков, %s тыс. треугольников',
-              terrainScene.group.children.length,
-              (terrainScene.triangles / 1000).toFixed(0));
-}
-
-// Акватория стоит на настоящих высотах над эллипсоидом, а лодка — на нуле.
-// Проще опустить участок к нулю, чем поднимать лодку: у лодки в нуле сидят и
-// волны, и след, и знаки.
-if (terrainScene) terrainScene.group.position.y = -TERRAIN_PACK.level;
 
 // ---------------------------------------------------------------- ввод
 

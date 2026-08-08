@@ -438,6 +438,13 @@ def main():
         "hmin": t["hmin"], "hmax": t["hmax"], "top_max": t["top_max"],
         "open_water": t["open_water"], "widest_m": t["widest_m"],
         "high_point": t["high_point"],
+        # Земля под высшей точкой. Нужна проверке осей: сама высшая точка задана
+        # по ВЕРХУ покрова, а покров в страницу больше не вклеивается — рисование
+        # переехало в запечённую карту. Без этого числа проверять ориентацию в
+        # высшей точке было бы нечем.
+        "high_ground_m": float(height[
+            int(round((t["high_point"][1] - ys[0]) / step)),
+            int(round((t["high_point"][0] - xs[0]) / step))]),
         "sky_scale": SKY_SCALE,
         "cur_max": CUR_MAX,
         # Дно течения и дно мели — одно и то же условное дно. Числа в пакете,

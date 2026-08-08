@@ -624,7 +624,7 @@ console.log('\nБесконечная вода: акватория выключ�
   {
     const e = new Terrain(null);
     check('выборки без данных отвечают «не знаю»',
-      [e.ground(0, 0), e.top(0, 0), e.shore(0, 0),
+      [e.ground(0, 0), e.shore(0, 0),
        e.fetch(0, 0, 0), e.skyline(0, 0, 0)].every(v => v === null));
   }
 }

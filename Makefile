@@ -99,7 +99,7 @@ SLOW := upwind
 # Батареи на питоне стоят особняком: они проверяют не симулятор, а то, что
 # считается ДО него и уезжает в пакет. Поэтому и запускаются интерпретатором из
 # .venv — им нужен numpy, которого системному питону никто не обещал.
-PYTESTS := section bl
+PYTESTS := section bl panel
 
 .PHONY: $(addprefix t-,$(FAST) $(SLOW) $(PYTESTS)) slow all-tests
 

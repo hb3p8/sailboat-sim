@@ -2787,6 +2787,8 @@ function frame() {
     flowGroup.position.set(toSceneX(ix), 0, toSceneZ(iy));
     flowGroup.rotation.y = headingRotY(ipsi);
     if ((tick % 12) === 0) updateFlow();
+    // Полосу отрыва — каждый кадр: она следует за парусом, а не за потоком.
+    updateSepVeil();
   }
 
   if ((tick % 6) === 0 && trackN < TRACK) {

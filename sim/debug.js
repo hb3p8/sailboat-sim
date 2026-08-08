@@ -643,6 +643,74 @@ flowGhost.renderOrder = 6;
 flowGroup.add(flowGhost);
 const flowV = [0, 0, 0];
 
+// --- где модель считает поток оторвавшимся ------------------------------------
+//
+// Линии тока этого показать не могут, и это не недоделка, а устройство модели.
+// Решётка вихрей — потенциальное течение: вне самих нитей оно безвихревое,
+// условие Кутты сажает поток на заднюю кромку гладко, вязкости нет вовсе.
+// Отрыва в таком поле не существует, и линии будут послушно облегать парус на
+// любом угле атаки — в том числе на том, где он давно сорван.
+//
+// Срыв в модели живёт не в поле, а в полоске: коэффициенты сечения переходят к
+// пластине за тринадцатью градусами, а кромка отрывается раньше (leechSeparation
+// в aero.js). Значит и показывать надо это — не выдуманные завитки, а то, во что
+// модель верит: полосу вдоль подветренной стороны у задней шкаторины, тем шире,
+// чем сильнее отрыв.
+//
+// Ширина полосы — чтение величины, а не расчёт точки отрыва: точки у модели нет.
+// Так и сказано в подсказке.
+const SEP_ROWS = SAIL_ROWS;
+const sepGeo = new BufferGeometry();
+sepGeo.setAttribute('position',
+  new Float32BufferAttribute(new Float32Array((SEP_ROWS - 1) * 6 * 3), 3));
+const sepVeil = new Mesh(sepGeo, new MeshBasicMaterial({
+  color: 0xff5a3c, transparent: true, opacity: 0.3,
+  depthWrite: false, side: DoubleSide }));
+sepVeil.frustumCulled = false;
+sepVeil.renderOrder = 4;
+boatGroup.add(sepVeil);
+
+// Обратное к chordAt: какой столбец сетки отвечает доле хорды от передней
+// шкаторины. Нужен, чтобы внутренний край полосы стоял на своей доле, а не на
+// глазок: столбцы у паруса сгущены к передней кромке.
+const sepCol = t => Math.pow(Math.max(0, Math.min(1, t)), 1 / 1.6) * (SAIL_COLS - 1);
+
+function updateSepVeil() {
+  const tele = boat.telemetry && boat.telemetry.strips;
+  const a = mainSail.geometry.attributes.position.array;
+  const p = sepGeo.attributes.position.array;
+  let worst = 0;
+  const edge = [];
+  for (let r = 0; r < SEP_ROWS; r++) {
+    const si = Math.min(5, Math.round((r / (SAIL_ROWS - 1)) * 5));
+    const sep = (tele && tele[si] && tele[si].sep) || 0;
+    worst = Math.max(worst, sep);
+    // Внутренний край: от кромки вперёд на треть хорды при полном отрыве.
+    const c = sepCol(1 - 0.35 * sep);
+    const c0 = Math.min(SAIL_COLS - 2, Math.floor(c)), f = c - c0;
+    const iL = (r * SAIL_COLS + SAIL_COLS - 1) * 3;
+    const iA = (r * SAIL_COLS + c0) * 3, iB = iA + 3;
+    edge.push([
+      a[iA] + (a[iB] - a[iA]) * f, a[iA + 1] + (a[iB + 1] - a[iA + 1]) * f,
+      a[iA + 2] + (a[iB + 2] - a[iA + 2]) * f,
+      a[iL], a[iL + 1], a[iL + 2], sep,
+    ]);
+  }
+  sepVeil.visible = worst > 0.02;
+  if (!sepVeil.visible) return;
+  let k = 0;
+  const put = v => { p[k++] = v[0]; p[k++] = v[1]; p[k++] = v[2]; };
+  for (let r = 0; r < SEP_ROWS - 1; r++) {
+    const lo = edge[r], hi = edge[r + 1];
+    const l0 = [lo[0], lo[1], lo[2]], l1 = [lo[3], lo[4], lo[5]];
+    const h0 = [hi[0], hi[1], hi[2]], h1 = [hi[3], hi[4], hi[5]];
+    put(l0); put(l1); put(h1);
+    put(l0); put(h1); put(h0);
+  }
+  sepGeo.attributes.position.needsUpdate = true;
+  sepGeo.computeBoundingSphere();
+}
+
 function updateFlow() {
   const lat = boat.rig.lattice;
   const aw = boat.apparentWind();
@@ -747,6 +815,7 @@ function setDebug(on) {
   battens.visible = isFlow;
   flow.visible = isFlow;
   flowGhost.visible = isFlow;
+  sepVeil.visible = sepVeil.visible && isFlow;
   balGroup.visible = isBal;
   document.getElementById('rigcard').hidden = !isFlow;
   document.getElementById('balcard').hidden = !isBal;

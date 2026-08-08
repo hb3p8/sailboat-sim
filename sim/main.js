@@ -939,10 +939,24 @@ if (seaMirrorTex) {
 // стоит десятки метров, и там же смещение размазало бы берег в кашу.
 const SEA_MIRROR_WOBBLE = 0.055;
 const seaMirror = seaMirrorTex ? Fn(() => {
-  const tilt = normalWorld.xz.toVar();
+  // Наклон поверхности в МИРОВОЙ горизонтали: насколько нормаль волны отклонилась
+  // от вертикали и куда.
+  const tiltWorld = vec3(normalWorld.x, 0.0, normalWorld.z).toVar();
+  // ...и он же в осях КАМЕРЫ: x вправо по экрану, y вверх. Без этого поворота
+  // смещение было бы в мировых осях, а прибавлялось бы к экранным, и ошибка шла
+  // бы ровно на угол рыскания камеры: та же волна, снятая с востока и с севера,
+  // гнула бы отражение в направлениях, различающихся на прямой угол. Смотрелось
+  // это правдоподобно только потому, что дрожание мелкое, а при какой-то одной
+  // ориентации оси случайно совпадают.
+  const tiltView = cameraViewMatrix.mul(vec4(tiltWorld, 0.0)).xy.toVar();
   const k = float(SEA_MIRROR_WOBBLE)
     .div(positionView.length().mul(0.06).add(1.0)).toVar();
-  return seaMirrorTex.sample(screenUV.flipX().add(tilt.mul(k))).xyz;
+  // Горизонтальная составляющая идёт со ЗНАКОМ МИНУС. Выборка зеркала берётся
+  // по flipX(screenUV), то есть горизонтальная ось у неё перевёрнута: сдвинуть
+  // отражение вправо по экрану значит взять из текстуры левее. Пока базис был
+  // перепутан, знак ничего не значил.
+  const off = vec2(tiltView.x.negate(), tiltView.y).mul(k).toVar();
+  return seaMirrorTex.sample(screenUV.flipX().add(off)).xyz;
 })() : null;
 
 {

@@ -202,10 +202,14 @@
     <input id="chop" type="range" min="0" max="1.6" step="0.05" value="0.85"></label>
   <label><span class="cap"><span>Отражение сцены</span><span id="v-ssr"></span></span>
     <input id="ssr" type="range" min="0" max="1" step="0.05" value="0.85"></label>
+  <label><span class="cap"><span>Способ отражения</span></span>
+    <select id="searef"></select></label>
   <label><span class="cap"><span>Вид воды</span></span>
     <select id="sealook"></select></label>
   <label><span class="cap"><span>Отладка воды</span></span>
     <select id="seadbg"></select></label>
+  <div class="cap"><span>Кадр, замер</span><span id="v-bench">—</span></div>
+  <button id="bench" type="button">Замерить способы отражения</button>
 
   <div id="shade">
     <h2>Ветер над рекой</h2>
@@ -320,6 +324,7 @@ const BUILD = /*__BUILD__*/ null;
 /*__MAIN__*/
 /*__DEBUG__*/
 /*__CONTROLS__*/
+/*__BENCH__*/
 }
 </script>
 <script>

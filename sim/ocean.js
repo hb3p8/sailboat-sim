@@ -308,9 +308,11 @@ class Ocean {
         .mul(spread.add(0.25).sqrt().mul(0.28209479))   // 1/(2√π)
         .toVar();
 
-      // Полоса каскада, со смазанными краями.
+      // Полоса каскада, со смазанными краями. Верхний край — развёрнутый
+      // smoothstep, и разворачивается он через oneMinus, а не перестановкой
+      // концов: у WGSL при low ≥ high результат не определён.
       const band = k.smoothstep(c.kLo / 1.35, c.kLo * 1.35)
-        .mul(k.smoothstep(c.kHi * 1.35, c.kHi / 1.35))
+        .mul(k.smoothstep(c.kHi / 1.35, c.kHi * 1.35).oneMinus())
         .toVar();
 
       const variance = sk.mul(dir).mul(band).mul(c.dk * c.dk).max(0).toVar();
@@ -470,7 +472,10 @@ class Ocean {
       // Якобиан горизонтального смещения: меньше единицы — вода сжимается,
       // гребень заворачивается. Это и есть барашек.
       const jac = de.x.add(1).mul(dn.y.add(1)).sub(de.y.mul(dn.x)).toVar();
-      const foam = jac.smoothstep(OCEAN_FOAM_J, OCEAN_FOAM_J - 0.45).toVar();
+      // Пена тем гуще, чем МЕНЬШЕ якобиан, — а значит smoothstep развёрнутый.
+      // Разворот через oneMinus: концы по возрастанию, см. выше про WGSL.
+      const foam = jac.smoothstep(OCEAN_FOAM_J - 0.45, OCEAN_FOAM_J)
+        .oneMinus().toVar();
 
       textureStore(c.normTex, ivec2(int(ix), int(iy)), vec4(nrm, foam));
     })().compute(N * N);

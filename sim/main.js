@@ -515,6 +515,7 @@ const seaDbgOnly = uniform(0);     // 1 — только порывы
 const seaDbgField = uniform(0);    // 1 — поле порывов цветом
 const seaDbgSsr = uniform(0);      // 1 — что нашло отражение
 const seaDbgSteps = uniform(0);    // 1 — сколько шагов на это ушло
+const seaDbgOut = uniform(0);      // 1 — чем кончился марш
 // Доля ряби в отладке: от нуля вне языка до единицы в его сердцевине. Величина
 // уже прошла кривую края и ходит от −1 до 1, так что растягивать нечего.
 const dbgOnlyVert = seaGustRawVert.max(0.0);
@@ -536,16 +537,20 @@ function seaWindOn(i, steady, gust) {
 // Мелкий каскад — последний в списке; в отладке «только порывы» живёт он один.
 const seaFine = OCEAN_TILES.length - 1;
 
+// Границы у smoothstep всюду идут по возрастанию, а разворот делается oneMinus.
+// Не ради единообразия: у WGSL при low ≥ high результат НЕ ОПРЕДЕЛЁН. То, что
+// сегодняшний компилятор считает его по той же формуле с переставленными
+// концами, — везение, которое незачем закладывать в основание воды.
 function seaGeomWeight(i) {
   const tile = OCEAN_TILES[i];
-  const res = seaCellAttr.smoothstep(tile / 3, tile / 12);
+  const res = seaCellAttr.smoothstep(tile / 12, tile / 3).oneMinus();
   const only = i === seaFine ? res.mul(dbgOnlyVert) : float(0);
   const norm = res.mul(seaWindOn(i, seaSteadyVert, seaGustVert));
   return mix(mix(norm, only, seaDbgOnly), float(0), seaDbgField);
 }
 function seaShadeWeight(i) {
   const t = OCEAN_TILES[i] / 16;
-  const res = seaFootprint.smoothstep(t * 2.5, t);
+  const res = seaFootprint.smoothstep(t, t * 2.5).oneMinus();
   const only = i === seaFine ? res.mul(seaGustRaw.max(0.0)) : float(0);
   const norm = res.mul(seaWindOn(i, seaSteadyFrag, seaGustFrag));
   return mix(mix(norm, only, seaDbgOnly), float(0), seaDbgField);
@@ -646,9 +651,8 @@ seaMat.colorNode = mix(seaBody, color(SEA_FOAM_COLOUR), seaFoam.mul(0.85));
 //     граница читается дырой, плавная — бликом;
 //
 //   * не видно заслонённого. Луч знает только переднюю поверхность того, во что
-//     упёрся, и «толщину» приходится задавать порогом. Порог относительный, от
-//     дальности: у берега в километре абсолютный был бы либо дырявым, либо
-//     ловил бы небо;
+//     упёрся, и «толщину» приходится задавать порогом. Порог — длина шага: см.
+//     ниже, почему не доля дальности;
 //
 //   * шагов конечное число, и между ними тонкое можно проскочить. Обычно это
 //     лечат накоплением по кадрам, TAA. Здесь его нет НАРОЧНО: накопление —
@@ -668,13 +672,29 @@ seaMat.colorNode = mix(seaBody, color(SEA_FOAM_COLOUR), seaFoam.mul(0.85));
 // никогда, и вся вода стоила по четырнадцать выборок глубины при том, что
 // вид «отражение» был при этом почти сплошь пурпурным: луч ничего не находил.
 //
-// Теперь шаг растёт геометрически: у борта полметра, к десятому шагу двести с
-// лишним. Луч, уходящий в небо, вылетает за кадр за три-четыре шага, и марш
-// обрывается — а это и есть самый частый случай.
+// Теперь шаг растёт геометрически: у борта полметра, к восьмому под девять.
+// Луч, уходящий в небо, вылетает за кадр за три-четыре шага, и марш обрывается —
+// а это и есть самый частый случай.
+//
+// ГРАНИЦЫ ИНТЕРВАЛОВ ОДНИ И ТЕ ЖЕ У ВСЕХ ПИКСЕЛЕЙ, и это тоже пришлось узнать
+// на своей шкуре. Дизеринг сдвигал НАЧАЛО луча, а дальше шаг множился, — то есть
+// сдвигал он не точку, а всю лестницу целиком. При размахе множителя от 0.25 до
+// 0.75 соседние пиксели уходили на 80 и на 242 метра: втрое разная дальность
+// поиска на соседних пикселях. Отсюда и рябая сетка на отражении, и дыры в нём —
+// половина пикселей просто не доходила туда, где вторая половина находила.
+// Теперь границы закреплены, а дизеринг двигает пробу ВНУТРИ своего интервала:
+// разброс остаётся там, ради чего он и нужен, — на промахе мимо тонкого, — но
+// дальность поиска у всех одна.
 const SEA_SSR_STEPS = 8;
-const SEA_SSR_NEAR = 0.5;     // м, первый шаг
-const SEA_SSR_GROW = 1.5;     // во сколько раз растёт следующий
-const SEA_SSR_THICK = 0.14;   // толщина в долях дальности
+const SEA_SSR_NEAR = 0.5;     // м, первый интервал
+const SEA_SSR_GROW = 1.5;     // во сколько раз длиннее следующий
+// ТОЛЩИНА. Была долей дальности — 0.14·|z|, то есть четырнадцать сантиметров у
+// борта и четыре метра на тридцати. Луч на тридцати метрах принимал за попадание
+// всё, что оказалось в четырёх метрах за поверхностью, и ловил берег сквозь
+// собственный корпус. Правильная мера здесь не дальность, а СОБСТВЕННЫЙ ШАГ:
+// луч мог проскочить ровно то, что лежит между этой пробой и предыдущей, и
+// глубже уже не мог. Плюс небольшой пол — на точность самого буфера глубины.
+const SEA_SSR_THICK_MIN = 0.03;   // м
 // Дальше этого вода отражение не считает вовсе. На пологой камере далёкая вода
 // занимает полэкрана, отражать ей нечего — луч там уходит в небо, — а стоит она
 // ровно столько же, сколько вода под бортом.
@@ -687,13 +707,39 @@ const seaSceneColour = SEA_SSR_OFF ? null : viewportSharedTexture();
 const seaSceneDepth = SEA_SSR_OFF ? null : viewportDepthTexture();
 // Сила: 0 — только небо, как было; 1 — отражение сцены в полную меру.
 const seaSsr = uniform(1.0);
-// Что вернул марш — наружу, для отладочных видов ниже.
-let seaHitColour = null, seaHitConf = null, seaHitSteps = null;
+
+// --- какой способ отражения работает -------------------------------------------
+//
+// Способа два, и они устроены совсем по-разному: марш по экрану ищет отражение в
+// уже нарисованном кадре, зеркало рисует сцену второй раз из-под воды. Сравнить
+// их можно только на одной сцене и по одной мерке, поэтому оба собраны в
+// материал сразу, а переключаются числом.
+//
+// ЧИСЛО ЖЕ И ВЫКЛЮЧАЕТ РАБОТУ, а не только её показ. Иначе сравнение
+// бессмысленно: марш стоял бы в шейдере под нулевым множителем, зеркало рисовало
+// бы свой проход в никуда, и обе цены платились бы всегда. Марш гасится ветвью
+// по uniform — она одинакова на весь кадр, то есть расходимости в варпе не
+// создаёт; проход зеркала снимается ниже, у самого reflector.
+const seaRefSsr = uniform(1.0);      // 1 — марш по экрану работает
+const seaRefPlanar = uniform(0.0);   // 1 — зеркальный проход работает
 
 // Что вернул марш. Не vec4 с упакованными полями, а именно структура: считать
 // количество шагов ради отладки и паковать его в альфу — тот самый способ
 // сэкономить строчку и потерять час.
-const SeaHit = struct({ colour: 'vec3', conf: 'float', steps: 'float' }, 'SeaHit');
+//
+// Поле `code` — ИСХОД марша, и оно отдельно от `steps` не по щедрости. Карта
+// шагов мешает цену с результатом: красное на ней — это и найденное на восьмом
+// шаге, и не найденное вовсе, а синее — и вылет за кадр на втором шаге (дёшево
+// и правильно), и дальняя вода, которую не считали. По такой карте нельзя
+// сказать, чего в кадре больше — работы или промахов.
+const SEA_OUT_SKIP = 0;    // дальше SEA_SSR_FAR, марш не запускался
+const SEA_OUT_HIT = 1;     // попадание
+const SEA_OUT_OFF = 2;     // ушёл за край кадра — обычно в небо
+const SEA_OUT_BACK = 3;    // ушёл за камеру
+const SEA_OUT_SPENT = 4;   // выбрал весь запас шагов и ничего не нашёл
+const SEA_OUT_UNDER = 5;   // пересечение было, но ниже уреза: это дно
+const SeaHit = struct({ colour: 'vec3', conf: 'float',
+                        steps: 'float', code: 'float' }, 'SeaHit');
 
 // Отражённая сцена.
 const seaReflectScene = Fn(() => {
@@ -712,49 +758,141 @@ const seaReflectScene = Fn(() => {
   const uvHit = vec2(0).toVar();
   const found = float(0).toVar();
   const steps = float(0).toVar();
+  const code = float(SEA_OUT_SKIP).toVar();
 
   // Дальнюю воду не трогаем вовсе — см. SEA_SSR_FAR.
-  If(p0.length().lessThan(SEA_SSR_FAR), () => {
-    const t = float(SEA_SSR_NEAR).mul(ign.add(0.5)).toVar();
+  If(p0.length().lessThan(SEA_SSR_FAR).and(seaRefSsr.greaterThan(0.0)), () => {
+    code.assign(SEA_OUT_SPENT);
+    // t0 — ближняя граница интервала, dt — его длина. Обе величины одинаковы у
+    // всех пикселей; сдвигается только проба внутри интервала.
+    const t0 = float(0).toVar();
+    const dt = float(SEA_SSR_NEAR).toVar();
+    const under = float(0).toVar();
     Loop(SEA_SSR_STEPS, () => {
       steps.addAssign(1.0);
-      const p = from.add(dir.mul(t)).toVar();
-      t.mulAssign(SEA_SSR_GROW);
+      // Проба гуляет по средним восьмидесяти процентам интервала. На границу её
+      // не пускают с двух сторон: у нуля первая проба легла бы на саму воду, а у
+      // единицы совпала бы со следующей и разброс потерял бы смысл.
+      const p = from.add(dir.mul(t0.add(dt.mul(ign.mul(0.8).add(0.1))))).toVar();
       const clip = cameraProjectionMatrix.mul(vec4(p, 1.0)).toVar();
       const uv = clip.xy.div(clip.w).mul(vec2(0.5, -0.5)).add(0.5).toVar();
-      // Ушли за кадр или за камеру — дальше искать нечего.
-      If(clip.w.lessThanEqual(0.0)
-         .or(uv.x.lessThan(0.0)).or(uv.x.greaterThan(1.0))
-         .or(uv.y.lessThan(0.0)).or(uv.y.greaterThan(1.0)), () => { Break(); });
+      // Ушли за камеру или за кадр — дальше искать нечего.
+      If(clip.w.lessThanEqual(0.0), () => { code.assign(SEA_OUT_BACK); Break(); });
+      If(uv.x.lessThan(0.0).or(uv.x.greaterThan(1.0))
+         .or(uv.y.lessThan(0.0)).or(uv.y.greaterThan(1.0)), () => {
+        code.assign(SEA_OUT_OFF); Break();
+      });
       // Глубина сцены в этой точке экрана, переведённая в оси вида. Небо стоит
       // на дальней плоскости, и разность выходит огромной отрицательной — то
       // есть небо не ловится само собой, отдельной проверки не нужно.
       const sceneZ = perspectiveDepthToViewZ(
         seaSceneDepth.sample(uv), cameraNear, cameraFar).toVar();
       const behind = sceneZ.sub(p.z).toVar();
+      // Насколько луч мог уйти вглубь за этот интервал — она же и толщина, за
+      // которой пересечение перестаёт быть пересечением.
+      const thick = dt.mul(dir.z.abs()).add(SEA_SSR_THICK_MIN).toVar();
       // Попадание НИЖЕ уровня воды не годится: под водой лежит дно, оно есть в
       // глубине сцены, и полого идущий луч цепляет его метрах в двадцати. В
       // отражении это выходило тёмными кусками дна поверх воды.
+      //
+      // Отвергнутым пересечением марш НЕ обрывается, и это важнее, чем кажется.
+      // Луч уходит от воды вверх, но первая же проба стоит почти на самой
+      // поверхности, а под ней в буфере глубины лежит дно — в полуметре по оси
+      // вида, когда смотришь вдоль воды. Обрыв на этом убивал бы отражение
+      // целиком, на каждом пикселе мелководья.
       const hitY = cameraWorldMatrix.mul(vec4(p, 1.0)).y;
-      If(behind.greaterThan(0.0)
-         .and(behind.lessThan(p.z.abs().mul(SEA_SSR_THICK)))
-         .and(hitY.greaterThan(-0.25)), () => {
-        uvHit.assign(uv);
-        found.assign(1.0);
-        Break();
+      If(behind.greaterThan(0.0).and(behind.lessThan(thick)), () => {
+        If(hitY.greaterThan(-0.25), () => {
+          uvHit.assign(uv);
+          found.assign(1.0);
+          code.assign(SEA_OUT_HIT);
+          Break();
+        }).Else(() => {
+          under.assign(1.0);
+        });
       });
+      t0.addAssign(dt);
+      dt.mulAssign(SEA_SSR_GROW);
     });
+    // Ничего не нашли, но дно по дороге отвергали — исход именно такой: марш
+    // упёрся в то, чего отражать нельзя, а не просто промахнулся мимо всего.
+    If(found.equal(0.0).and(under.greaterThan(0.0)),
+       () => { code.assign(SEA_OUT_UNDER); });
   });
 
   // Гашение: к краям кадра и у лучей, летящих обратно в камеру. У последних
   // отражается то, что само же их и заслоняет, и выходит грязь.
+  //
+  // Границы у smoothstep идут по возрастанию, а разворот делается oneMinus. Не
+  // ради красоты: у WGSL при low ≥ high результат НЕ ОПРЕДЕЛЁН, и то, что
+  // сегодняшний компилятор считает его по формуле, — везение, а не договор.
   const edge = uvHit.sub(0.5).abs().mul(2.0).toVar();
-  const fade = edge.x.max(edge.y).smoothstep(1.0, 0.72)
-    .mul(dir.z.smoothstep(0.35, 0.0)).toVar();
+  const fade = edge.x.max(edge.y).smoothstep(0.72, 1.0).oneMinus()
+    .mul(dir.z.smoothstep(0.0, 0.35).oneMinus()).toVar();
 
   return SeaHit(seaSceneColour.sample(uvHit).xyz,
-                found.mul(fade).clamp(0, 1), steps);
+                found.mul(fade).clamp(0, 1), steps, code);
 });
+
+// --- зеркало: тот же вопрос, решённый вторым проходом --------------------------
+//
+// Марш по экрану не умеет отражать то, чего в кадре нет, и на воде это не
+// мелочь: мачта уходит за верхний край раньше всего остального, а именно её
+// отражение и связывает лодку с водой. Зеркало этой болезни лишено по устройству
+// — сцена рисуется ЗАНОВО, камерой, отражённой в плоскости воды. Что попадёт в
+// отражение, решает не кадр, а сама зеркальная камера.
+//
+// Цена другая по природе: не выборки глубины на пиксель воды, а второй проход по
+// всей сцене. Он идёт в половинном разрешении (четверть пикселей) и без самой
+// воды — материал на время прохода гасится, иначе зеркало отражало бы зеркало.
+//
+// Чем расплачиваемся:
+//
+//   * плоскость одна, y = 0. Волна поднимает поверхность на десятки сантиметров,
+//     и отражение на гребне встаёт не совсем там, где должно. Искажение нормалью
+//     это маскирует, но не исправляет: физически верное отражение волнистой
+//     поверхности зеркалом не считается вовсе;
+//
+//   * отражается ВСЯ сцена, включая отладочные стрелки и сетку. У марша по
+//     экрану они тоже попадают в снимок, так что разницы между способами тут
+//     нет, но на замерах их всё равно надо гасить — см. bench.js;
+//
+//   * проход идёт каждый кадр целиком, независимо от того, сколько воды в кадре.
+//     Марш, наоборот, платит ровно за видимую воду. Где проходит граница выгоды —
+//     вопрос замера, а не рассуждения.
+// bounces: true — не ради отражения в отражении, его тут нет и быть не может
+// (вода на зеркальном проходе погашена). Дело в том, ЧЕМ отмеряется «уже
+// рисовали»: при false проход привязан к номеру кадра, а номер кадра двигает
+// внутренний цикл three по requestAnimationFrame — не наш render. Замер,
+// рисующий кадр шестьдесят раз подряд вне rAF, получал зеркало ОДИН раз и
+// показывал, что оно дешевле неба. При true отметка идёт по номеру отрисовки, и
+// проход честно повторяется столько раз, сколько его попросили.
+const seaMirrorTex = SEA_SSR_OFF ? null
+  : reflector({ resolutionScale: 0.5, bounces: true });
+if (seaMirrorTex) {
+  // Цель задаёт плоскость: её местная ось Z — нормаль зеркала. Вода лежит в
+  // XZ мира, нормаль вверх, значит цель повёрнута на четверть оборота.
+  seaMirrorTex.target.rotateX(-Math.PI / 2);
+  scene.add(seaMirrorTex.target);
+  // Выключатель самого прохода. Без него сравнение способов ничего не значило
+  // бы: зеркало рисовало бы сцену и тогда, когда его никто не смотрит.
+  const base = seaMirrorTex.reflector;
+  const draw = base.updateBefore.bind(base);
+  base.updateBefore = frame => {
+    if (seaRefPlanar.value > 0) return draw(frame);
+  };
+}
+// Искажение волной. Плоское зеркало даёт зеркально гладкую картинку — на воде
+// это читается стеклом; рябь берётся отсюда. Смещение по экрану пропорционально
+// НАКЛОНУ поверхности, а гасится с дальностью: у горизонта пиксель отражения
+// стоит десятки метров, и там же смещение размазало бы берег в кашу.
+const SEA_MIRROR_WOBBLE = 0.055;
+const seaMirror = seaMirrorTex ? Fn(() => {
+  const tilt = normalWorld.xz.toVar();
+  const k = float(SEA_MIRROR_WOBBLE)
+    .div(positionView.length().mul(0.06).add(1.0)).toVar();
+  return seaMirrorTex.sample(screenUV.flipX().add(tilt.mul(k))).xyz;
+})() : null;
 
 {
   const cosView = normalView.dot(positionViewDirection.normalize())
@@ -767,7 +905,13 @@ const seaReflectScene = Fn(() => {
   const hitColour = hit ? hit.get('colour') : vec3(0);
   const hitConf = hit ? hit.get('conf') : float(0);
   const hitSteps = hit ? hit.get('steps') : float(0);
-  const mirror = mix(color(SKY), hitColour, hitConf.mul(seaSsr));
+  const hitCode = hit ? hit.get('code') : float(0);
+  // Подложка — небо, поверх неё то, что нашёл выбранный способ. У марша своя
+  // уверенность на каждый пиксель: он промахивается часто, и без неба вода в
+  // этих местах чернела бы. У зеркала попадание есть везде, поэтому его
+  // уверенность — сам выключатель.
+  const mirror = mix(mix(color(SKY), hitColour, hitConf.mul(seaSsr).mul(seaRefSsr)),
+                     seaMirror || color(SKY), seaRefPlanar.mul(seaSsr));
   // Пена отражает как шершавое, а не как зеркало: на барашке Френеля нет.
   const lit = mirror.mul(fres).mul(seaFoam.oneMinus().mul(0.75));
 
@@ -777,24 +921,47 @@ const seaReflectScene = Fn(() => {
   // небу и разбито волной, и «выглядит неправильно» никуда не ведёт. Поэтому
   // марш показывается сам по себе, двумя видами.
   //
-  //   «отражение» — что марш НАШЁЛ. Пурпурное значит не нашёл ничего или
+  //   «отражение» — что способ НАШЁЛ. Пурпурное значит не нашёл ничего или
   //     погасило к краю кадра; всё остальное — цвет, взятый из снимка сцены.
   //     На этом виде сразу читается и куда луч промахивается, и что он ловит не
-  //     то: ложное попадание выглядит куском чужой картинки не на своём месте;
+  //     то: ложное попадание выглядит куском чужой картинки не на своём месте.
+  //     У зеркала промаха не бывает по устройству, и вид показывает просто
+  //     отражённую сцену — по нему видно, совпадает ли она с настоящей;
   //
   //   «шаги SSR» — во сколько шагов это обошлось: синее дёшево, красное в упор.
-  //     Это карта не только правильности, но и ЦЕНЫ: где красно, там луч идёт
-  //     вдоль экрана и перебирает весь запас.
+  //     Это карта ЦЕНЫ, и только цены;
   //
-  // Оба вида кладутся в СВЕЧЕНИЕ, а альбедо гасится: свечение не освещается
+  //   «исход SSR» — ЧЕМ кончился марш, шестью цветами. Тем и отличается от карты
+  //     шагов, что та отвечает «сколько», а эта «чем»: восемь шагов и попадание
+  //     на восьмом — дорого, но верно, а восемь шагов и пустота — выброшенная
+  //     работа, и на карте шагов они выглядят одинаково.
+  //
+  // Все виды кладутся в СВЕЧЕНИЕ, а альбедо гасится: свечение не освещается
   // лампами и показывает ровно посчитанное число. Через альбедо смотреть на
   // отладку нельзя — оно домножается на свет и врёт.
-  const dbgSsrView = mix(color(0xff00ff), hitColour, hitConf);
+  const dbgSsrView = mix(mix(color(0xff00ff), hitColour, hitConf),
+                         seaMirror || color(0xff00ff), seaRefPlanar);
   const t = hitSteps.div(SEA_SSR_STEPS).clamp(0, 1);
   const dbgStepView = vec3(t, t.mul(2.0).sub(1.0).abs().oneMinus(), t.oneMinus());
-  const dbgAny = seaDbgField.max(seaDbgSsr).max(seaDbgSteps).toVar();
-  const dbgView = mix(mix(seaDbgColour, dbgSsrView, seaDbgSsr),
-                      dbgStepView, seaDbgSteps);
+  // Исходы цветом. Не градиент, а именно набор: величина здесь не мера, а имя,
+  // и соседние коды не значат «похоже».
+  //
+  // Сравнение — арифметикой, а не логическим узлом. Коды целые и отстоят друг от
+  // друга на единицу, поэтому 1 − min(1, |c − k|) даёт ровно ноль или ровно
+  // единицу; ни bool, ни select, ни их приведения в цепочке цвета не участвуют.
+  // Как раз на приведении bool в цветовом выражении вода однажды и почернела.
+  const isCode = k => hitCode.sub(k).abs().min(1.0).oneMinus();
+  const dbgOutView = mix(mix(mix(mix(mix(
+    vec3(0.10, 0.10, 0.12),                             // не считали — тёмно-серое
+    vec3(0.15, 0.90, 0.30), isCode(SEA_OUT_HIT)),       // попал — зелёное
+    vec3(0.15, 0.35, 0.95), isCode(SEA_OUT_OFF)),       // за кадр — синее
+    vec3(0.20, 0.85, 0.95), isCode(SEA_OUT_BACK)),      // за камеру — голубое
+    vec3(0.95, 0.20, 0.15), isCode(SEA_OUT_SPENT)),     // впустую — красное
+    vec3(0.95, 0.80, 0.15), isCode(SEA_OUT_UNDER));     // дно — жёлтое
+  const dbgAny = seaDbgField.max(seaDbgSsr).max(seaDbgSteps).max(seaDbgOut).toVar();
+  const dbgView = mix(mix(mix(seaDbgColour, dbgSsrView, seaDbgSsr),
+                          dbgStepView, seaDbgSteps),
+                      dbgOutView, seaDbgOut);
   seaMat.emissiveNode = mix(lit, dbgView, dbgAny);
   seaMat.colorNode = mix(seaMat.colorNode, vec3(0.0), dbgAny);
 }
@@ -2151,7 +2318,7 @@ const capSeaNow = document.getElementById('v-seanow');
   // Отладка воды: показать порыв отдельно от всего остального. Смысл режимов —
   // у объявления seaDbg.
   const SEA_DBG = ['как есть', 'только порывы', 'поле порывов',
-                   'отражение', 'шаги SSR'];
+                   'отражение', 'шаги SSR', 'исход SSR'];
   const sel = document.getElementById('seadbg');
   for (let i = 0; i < SEA_DBG.length; i++) {
     const o = document.createElement('option');
@@ -2163,7 +2330,31 @@ const capSeaNow = document.getElementById('v-seanow');
     seaDbgField.value = sel.value === '2' ? 1 : 0;
     seaDbgSsr.value = sel.value === '3' ? 1 : 0;
     seaDbgSteps.value = sel.value === '4' ? 1 : 0;
+    seaDbgOut.value = sel.value === '5' ? 1 : 0;
   });
+}
+{
+  // Способ отражения. Ставится и с адреса — `?refl=planar`: замеры и снимки для
+  // сравнения запускаются по ссылке, а не мышью по панели, иначе «на чём это
+  // было снято» приходится вспоминать.
+  const SEA_REF = [['sky', 'только небо', 0, 0],
+                   ['ssr', 'марш по экрану', 1, 0],
+                   ['planar', 'зеркало', 0, 1]];
+  const sel = document.getElementById('searef');
+  for (const [id, name] of SEA_REF) {
+    const o = document.createElement('option');
+    o.value = id; o.textContent = name;
+    sel.appendChild(o);
+  }
+  const apply = () => {
+    const m = SEA_REF.find(r => r[0] === sel.value) || SEA_REF[1];
+    seaRefSsr.value = SEA_SSR_OFF ? 0 : m[2];
+    seaRefPlanar.value = SEA_SSR_OFF ? 0 : m[3];
+  };
+  const want = new URLSearchParams(location.search).get('refl');
+  sel.value = SEA_REF.some(r => r[0] === want) ? want : 'ssr';
+  sel.addEventListener('change', apply);
+  apply();
 }
 {
   const sel = document.getElementById('sealook');
@@ -2307,6 +2498,15 @@ if (typeof ResizeObserver !== 'undefined') new ResizeObserver(resize).observe(st
 resize();
 
 function frame() {
+  // Замер держит кадр за собой целиком — см. benchPaused в bench.js. Часы при
+  // этом переставляются: иначе физика после замера доберёт всё простоявшее время
+  // одним прыжком.
+  if (benchPaused()) {
+    last = performance.now() / 1000;
+    requestAnimationFrame(frame);
+    return;
+  }
+
   const now = performance.now() / 1000;
   const dt = Math.min(0.25, now - last);
   last = now;
@@ -2322,6 +2522,13 @@ function frame() {
   readSeaPlane(boat.psi,
                windMapSample(toSceneX(boat.x), toSceneZ(boat.y)) ** 2);
   boat.setWater(seaPlane.z, seaPlane.se, seaPlane.sn);
+
+  // На скамье физика не шагает вовсе: лодка и вода стоят в известных числах,
+  // чтобы два запуска давали один и тот же кадр. Подробности — в bench.js.
+  // Ползунки при этом читаются: крутизна гребня, вид воды и сила отражения —
+  // это органы ВИДА, и смотреть замороженный кадр без них незачем. Порядок
+  // важен: поза ставится после чтения и перебивает ветер с ползунка.
+  if (benchFrozen()) { readControls(DT); benchPose(boat, prev); acc = 0; }
 
   let steps = 0;
   while (acc >= DT && steps < 8) {
@@ -2514,6 +2721,7 @@ function frame() {
   }
   camera.position.copy(camPos);
   camera.lookAt(camAim);
+  if (benchFrozen()) { benchAim(camera); benchQuiet(); }
 
   updateCrew();
   if (orthoView) renderOrtho(bx, bz, fx, fz, sx, sz);

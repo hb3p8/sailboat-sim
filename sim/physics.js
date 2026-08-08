@@ -28,7 +28,7 @@ import { wrapPi, clamp, DEG } from './util.js';
 import { lerpTable, foilCoeffs, hullResistance, hullLateral, hullHeelYaw,
          foilForce } from './hydro.js';
 import { Rig, windage, sailCoeffs, STRIPS, NCHORD, LATTICE_EVERY,
-         GYBE_MARGIN, GYBE_RATE } from './aero.js';
+         BOOM_INERTIA, BOOM_DAMP } from './aero.js';
 import { telemetryOf } from './telemetry.js';
 import { fetchFactor, shelterFactor, channelTurn,
          WIND_SHORE_A, WIND_SHORE_L } from './terrain.js';
@@ -271,8 +271,8 @@ export class Boat {
     // ходит по гладкой, ровно как до волны.
     this.waveZ = 0; this.waveSE = 0; this.waveSN = 0;
     this.settle();
-    this.rigSide = null;             // борт паруса, от −1 до 1; null — не ставлен
-    this.rigTarget = null;           // куда он переходит
+    this.rigSide = null;             // вынос гика, от −1 до 1; null — не ставлен
+    this.rigRate = 0;                // и его скорость, 1/с
     this.hike = 0;                   // момент откренивания сейчас, Н·м
     if (this.rig && this.rig.alphaLag) this.rig.alphaLag.fill(0);
     this.t = 0;
@@ -387,22 +387,45 @@ export class Boat {
     }
 
     const aw = this.apparentWind();
-    // На каком борту стоит парус — состояние лодки, а не мгновенный отсчёт по
-    // флюгеру: парус вынесен на один борт целиком, от колебания ветра туда-сюда
-    // не прыгает и перекидывается только когда ветер уверенно зашёл на другую
-    // сторону. И перекидывается за конечное время.
-    if (this.rigTarget === null ||
-        Math.abs(aw.y) > Math.sin(GYBE_MARGIN) * Math.max(0.05, aw.speed)) {
-      this.rigTarget = aw.angle > 0 ? 1 : -1;
-    }
+    // --- гик
+    //
+    // Раньше борт паруса переходил к цели с постоянной скоростью, а цель
+    // назначалась по знаку кажущегося ветра с запасом на дребезг. Это работало,
+    // но было назначением: гик перекладывался за одно и то же время в штиль и в
+    // свежий ветер, и ни от чего, кроме знака, не зависел.
+    //
+    // Теперь его перекидывает сам парус. Боковая сила ГРОТА (стаксель к гику
+    // отношения не имеет) приложена позади мачты и потому вращает гик вокруг
+    // неё; шкот работает упором, а не приводом — за него гик не выходит. Отсюда
+    // всё получается само: в свежий ветер переброс резкий, в слабый вялый, а
+    // дребезга нет, потому что у гика есть инерция, и колебание ветра её не
+    // пересиливает.
+    //
+    // Величина `rigSide` остаётся прежней — доля выноса от −1 до +1, ноль это
+    // гик в ДП, — но теперь у неё есть скорость и она набирается силой.
+    const prev = this.rig.sailOut;
     if (this.rigSide === null) {
-      // Парус ставят на нужный борт, а не перекидывают: в начале хода никакого
-      // поворота не было. Иначе лодка первую секунду идёт с гиком в ДП.
-      this.rigSide = this.rigTarget;
+      // В начале хода парус СТАВЯТ на нужный борт, а не перекидывают: никакого
+      // поворота до этого не было.
+      this.rigSide = aw.angle > 0 ? 1 : -1;
+      this.rigRate = 0;
     } else {
-      const swing = GYBE_RATE * dt;
-      const dSide = this.rigTarget - this.rigSide;
-      this.rigSide += Math.max(-swing, Math.min(swing, dSide));
+      const rg = P.rig;
+      // Плечо: центр парусности позади мачты. Оно и превращает боковую силу в
+      // момент вокруг мачты.
+      const arm = Math.abs(rg.mast_x_m - (rg.ce_x_m != null ? rg.ce_x_m
+                                                            : rg.mast_x_m - 0.8));
+      // Угол выноса, на который натянут шкот: им момент переводится в единицы
+      // `rigSide`. Снизу ограничен, иначе на добранном шкоте ускорение уходит в
+      // бесконечность — а физически там просто упор, и он ниже и так стоит.
+      const setM = Math.max(0.15, prev.setMain || 0.5);
+      const acc = (prev.fyMain || 0) * arm / (BOOM_INERTIA * setM);
+      this.rigRate += (acc - BOOM_DAMP * this.rigRate) * dt;
+      this.rigSide += this.rigRate * dt;
+      // Шкот — верёвка, а не пружина: на упоре гик останавливается и не
+      // отскакивает.
+      if (this.rigSide > 1) { this.rigSide = 1; this.rigRate = Math.min(0, this.rigRate); }
+      if (this.rigSide < -1) { this.rigSide = -1; this.rigRate = Math.max(0, this.rigRate); }
     }
     // Поле порывов в точке лодки — не для сил, а для приборов: силы берут его
     // по каждой полоске отдельно. Одна лишняя выборка на шаг, зато на экране

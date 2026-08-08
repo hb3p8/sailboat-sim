@@ -24,9 +24,10 @@ export const TRACE_FIELDS = [
   // новую подъёмную силу не мгновенно. Единственное поле-массив в записи;
   // числом их не сделать, полосок может стать больше или меньше.
   'lag',
-  // Цель перекладки: `rigSide` говорит, где гик сейчас, но не куда идёт. Внутри
-  // зоны гистерезиса этого мало — после восстановления он мог бы пойти обратно.
-  'rigTarget',
+  // Скорость гика: `rigSide` говорит, где он сейчас, но не куда идёт. Посреди
+  // переброса этого мало — без скорости он после восстановления замер бы на
+  // месте и пошёл заново, уже от нуля.
+  'rigRate',
   // органы управления и условия — всё, что можно тронуть на ходу
   'rudder', 'sheet', 'jibTrim', 'twist', 'twistEff', 'draft', 'fetch', 'fetchOverride',
   'windSpeed', 'windDir', 'gust', 'shift', 'crewHike', 'crewMass', 'sailScale',
@@ -72,7 +73,7 @@ export function traceFrame(boat) {
     r9(boat.hike),
     r9(boat.zc), r9(boat.w), r9(boat.th), r9(boat.q),
     boat.rig.alphaLag ? Array.from(boat.rig.alphaLag, r9) : null,
-    boat.rigTarget,
+    r9(boat.rigRate),
     r9(boat.o.rudder), r9(boat.o.sheet), r9(boat.o.jibTrim),
     r9(boat.o.twist), r4(boat.rig.twistEff),
     r9(boat.o.draft), r9(boat.o.fetch), boat.o.fetchOverride ? 1 : 0,
@@ -112,7 +113,7 @@ export function restoreFrom(boat, frame, index) {
   boat.u = g('u'); boat.v = g('v'); boat.r = g('r');
   boat.phi = g('phi'); boat.p_ = g('p_'); boat.t = g('t');
   boat.rigSide = g('rigSide');
-  if (index.rigTarget != null) boat.rigTarget = g('rigTarget');
+  if (index.rigRate != null) boat.rigRate = g('rigRate');
   if (index.hike != null) boat.hike = g('hike');
   // Старые записи этих полей не знают — тогда посадка остаётся как есть.
   if (index.zc != null) {

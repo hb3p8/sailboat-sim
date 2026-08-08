@@ -1214,6 +1214,12 @@ boatGroup.add(mainSail, jibSail);
 // когда лодка приведена или шкот перетравлен. Подветренный виснет и мечется,
 // когда угол атаки подходит к срыву — перебран шкот или лодка увалена. Оба
 // стелются по потоку, когда парус настроен.
+//
+// Цвет держится за БОРТ, а не за роль. Красный на левом, зелёный на правом —
+// как ходовые огни, так их и вяжут. Значит на одном галсе наветренный красный,
+// на другом зелёный, и меняются они ролями сами при перекладке. Пока цвет был
+// привязан к роли, галса по колдунчикам было не отличить — а на воде первое,
+// что по ним читают, это именно галс.
 const TELL_ROWS = [2, 5, 8];      // строки сетки паруса, где висят ленточки
 const TELL_COL = 5;               // столбец: примерно 15% хорды от шкаторины
 const TELL_SEG = 4;               // звеньев в ленточке
@@ -1231,18 +1237,28 @@ const SAIL_STALL = 13;            // градусов, как в physics.sailCoe
 // смотрят сквозь полотно, ради того его и вешают против наветренного.
 const TELL_VERT = TELL_SEG * 6;   // два треугольника на звено
 
+const TELL_PORT = [0.98, 0.36, 0.30];    // левый борт — красный
+const TELL_STBD = [0.35, 0.88, 0.58];    // правый — зелёный
+
+// Перекрасить: `lee` — знак локальной Z подветренной стороны (Z вправо).
+// Первая половина вершин наветренная, вторая подветренная.
+function telltaleColours(mesh, lee) {
+  const col = mesh.geometry.attributes.color.array;
+  const n = col.length / 3;
+  const leeC = lee > 0 ? TELL_STBD : TELL_PORT;
+  const winC = lee > 0 ? TELL_PORT : TELL_STBD;
+  for (let i = 0; i < n; i++) {
+    const c = i >= n / 2 ? leeC : winC;
+    col[i * 3] = c[0]; col[i * 3 + 1] = c[1]; col[i * 3 + 2] = c[2];
+  }
+  mesh.geometry.attributes.color.needsUpdate = true;
+}
+
 function telltaleMesh() {
   const n = TELL_ROWS.length * 2 * TELL_VERT;
   const g = new BufferGeometry();
   g.setAttribute('position', new Float32BufferAttribute(new Float32Array(n * 3), 3));
   const col = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) {
-    // первая половина вершин — наветренные, вторая — подветренные
-    const lee = i >= n / 2;
-    col[i * 3] = lee ? 0.35 : 0.98;
-    col[i * 3 + 1] = lee ? 0.88 : 0.36;
-    col[i * 3 + 2] = lee ? 0.58 : 0.30;
-  }
   g.setAttribute('color', new Float32BufferAttribute(col, 3));
   const m = new Mesh(g, new MeshBasicMaterial({
     vertexColors: true, depthTest: false, side: DoubleSide }));
@@ -1252,6 +1268,16 @@ function telltaleMesh() {
 }
 const telltales = [telltaleMesh(), telltaleMesh()];
 boatGroup.add(telltales[0], telltales[1]);
+// Борт, на котором стоят колдунчики сейчас. Перекрашиваются они не каждый кадр,
+// а когда парус перешёл: буфер цвета мал, но и трогать его без нужды незачем.
+let tellLee = [0, 0];
+
+// Ленточка лёгкая, но не безынерционная: она отзывается за доли секунды, а не
+// мгновенно. Без этого запаздывания колдунчик дёргается на каждом порыве и на
+// каждой качке, чего на воде нет и в помине — там он ведёт себя заметно
+// спокойнее самого потока.
+const TELL_TAU = 0.28;            // с, постоянная времени отклика
+const tellState = [];             // по паре чисел на каждую ленточку
 
 // Колдунчики на ЗАДНЕЙ ШКАТОРИНЕ грота.
 //
@@ -1340,7 +1366,10 @@ boatGroup.add(jibSheet);
 // а твист берётся действующий, вместе с той добавкой, которую даёт провисший
 // шкот. Иначе на потравленных шкотах нарисованный парус стоит колом, а
 // посчитанный полощет.
-function shapeSails(side) {
+// `dt` — шаг кадра: по нему у колдунчиков считается запаздывание. При первом
+// вызове (парус ставится до первого кадра) его нет, и тогда берётся шаг физики.
+function shapeSails(side, dt) {
+  const dtFrame = dt || DT;
   const awa = boat.telemetry ? boat.telemetry.awaDeg * D : Math.PI;
   // Та же формула, что в physics.sailForces: парус держится шкотом до своего
   // предела, дальше сваливается по потоку.
@@ -1461,6 +1490,11 @@ function shapeSails(side) {
       const lee = Math.sign(bodyDirLocalZ(g.camber || 1));
       const offX = -uz * TELL_OFF * lee, offZ = ux * TELL_OFF * lee;
 
+      // Перекрасить, если парус перешёл на другой борт: цвет держится за борт.
+      if (Math.sign(lee) !== tellLee[k]) {
+        tellLee[k] = Math.sign(lee);
+        telltaleColours(telltales[k], lee);
+      }
       const margin = (g.margin || 0) / D;
       // Срыв меряется углом атаки ПОСЛЕ скоса — тем, под которым сечение
       // стоит в потоке. По углу к хорде подветренный колдунчик дёргался почти
@@ -1469,17 +1503,26 @@ function shapeSails(side) {
       // приходит почти по касательной. 13° — тот же угол срыва, по которому
       // считаются коэффициенты паруса.
       const stall = SAIL_STALL - Math.abs(d.alphaDeg || 0);
-      const lift = Math.min(1, Math.max(0, (3 - margin) / 4));
-      const droop = Math.min(1, Math.max(0, (3 - stall) / 4));
+      // Пороги те же, а вот отклик — с запаздыванием: ленточка отзывается за
+      // четверть секунды, а не мгновенно. Иначе она дёргается на каждом порыве
+      // и на каждой качке, а на воде колдунчик спокойнее самого потока.
+      const st = tellState[k * 8 + (r % 8)] ||
+                 (tellState[k * 8 + (r % 8)] = { lift: 0, droop: 0 });
+      const ease = 1 - Math.exp(-dtFrame / TELL_TAU);
+      st.lift += (Math.min(1, Math.max(0, (3 - margin) / 4)) - st.lift) * ease;
+      st.droop += (Math.min(1, Math.max(0, (3 - stall) / 4)) - st.droop) * ease;
+      const lift = st.lift, droop = st.droop;
       // Мечется по тому же закону Струхаля, что и заполоскавшее полотно, только
-      // длина здесь своя — самой ленточки.
+      // длина здесь своя — самой ленточки. Размах вдвое меньше прежнего: на воде
+      // колдунчик именно поднимается и виснет, а бьётся заметно скромнее, чем
+      // получалось.
       const hz = Math.min(FLAP_MAX_HZ, FLAP_ST * Math.max(1, g.ve || 1) / TELL_LEN);
       const ph = 2 * Math.PI * hz * boat.t - r;
 
       iw = drawTelltale(tt, iw, ax - offX, ay, az - offZ, ux, uz,
-                        lift * 1.1, lift * 0.5, ph);
+                        lift * 1.1, lift * 0.24, ph);
       il = drawTelltale(tt, il, ax + offX, ay, az + offZ, ux, uz,
-                        -droop * 0.9, droop * 0.6, ph + 2);
+                        -droop * 0.9, droop * 0.3, ph + 2);
     }
     telltales[k].geometry.attributes.position.needsUpdate = true;
     telltales[k].geometry.computeBoundingSphere();
@@ -2719,7 +2762,7 @@ function frame() {
   // за конечное время, так что гик переходит плавно, а не телепортируется.
   // До первого шага физики он ещё не поставлен.
   const side = rigSideZ(boat.rigSide != null ? boat.rigSide : 1);
-  shapeSails(side);
+  shapeSails(side, dt);
 
   updateWindMap();
   sea.position.set(toSceneX(Math.round(ix / CELL) * CELL), 0,

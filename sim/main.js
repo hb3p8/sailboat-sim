@@ -2337,6 +2337,13 @@ const capSeaNow = document.getElementById('v-seanow');
   // Способ отражения. Ставится и с адреса — `?refl=planar`: замеры и снимки для
   // сравнения запускаются по ссылке, а не мышью по панели, иначе «на чём это
   // было снято» приходится вспоминать.
+  //
+  // По умолчанию зеркало, и это решено замером, а не вкусом. У марша по экрану
+  // на этой сцене изъян не в качестве, а в устройстве: главное, что должна
+  // отражать вода у берега, — сам берег и мачта, — в кадр не попадает, и марш
+  // о них знать не может. Отладочный вид «исход SSR» показывает ту же мысль
+  // прямо: ближняя вода почти сплошь красная, весь запас шагов выбран впустую.
+  const SEA_REF_DEFAULT = 'planar';
   const SEA_REF = [['sky', 'только небо', 0, 0],
                    ['ssr', 'марш по экрану', 1, 0],
                    ['planar', 'зеркало', 0, 1]];
@@ -2347,12 +2354,13 @@ const capSeaNow = document.getElementById('v-seanow');
     sel.appendChild(o);
   }
   const apply = () => {
-    const m = SEA_REF.find(r => r[0] === sel.value) || SEA_REF[1];
+    const m = SEA_REF.find(r => r[0] === sel.value)
+      || SEA_REF.find(r => r[0] === SEA_REF_DEFAULT);
     seaRefSsr.value = SEA_SSR_OFF ? 0 : m[2];
     seaRefPlanar.value = SEA_SSR_OFF ? 0 : m[3];
   };
   const want = new URLSearchParams(location.search).get('refl');
-  sel.value = SEA_REF.some(r => r[0] === want) ? want : 'ssr';
+  sel.value = SEA_REF.some(r => r[0] === want) ? want : SEA_REF_DEFAULT;
   sel.addEventListener('change', apply);
   apply();
 }

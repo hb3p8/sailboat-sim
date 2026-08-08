@@ -188,8 +188,16 @@ class Panels:
         vv = k * (beta * st - lg * ct)
         return us, vs, uv, vv
 
-    def solve(self, alpha):
-        """Решить на угле атаки в радианах."""
+    def solve(self, alpha, blow=None):
+        """Решить на угле атаки в радианах.
+
+        `blow` — скорость выдува сквозь поверхность, по одной величине на панель,
+        положительная наружу. Ею и передаётся вязкость: пограничный слой
+        оттесняет наружный поток на толщину вытеснения, и это в точности
+        равносильно тому, что тело «дышит» со скоростью d(U_e·δ*)/ds. Приём
+        называется транспирацией и лежит в основе всех совместных вязко-невязких
+        расчётов, XFOIL в том числе. Без него условие обычное: непротекание.
+        """
         us, vs, uv, vv = self._influence(self.mx, self.my, own=True)
         n = self.n
         a = np.zeros((n + 1, n + 1))
@@ -198,6 +206,8 @@ class Panels:
         ux, uy = np.cos(alpha), np.sin(alpha)
         rhs = np.zeros(n + 1)
         rhs[:n] = -(ux * self.nx + uy * self.ny)
+        if blow is not None:
+            rhs[:n] += np.asarray(blow, float)
         # Кутта: касательная скорость на первой и последней панели равна по
         # величине и противоположна по направлению обхода. Обе панели лежат у
         # задней кромки по разные стороны от неё.
@@ -257,19 +267,25 @@ class Panels:
         nose = int(np.argmin(self.mx))
         return int(turn[np.argmin(np.abs(turn - nose))])
 
-    def sides(self):
+    def sides(self, with_index=False):
         """Разложить обвод на две стороны от точки торможения.
 
         Возвращает две пары (s, U) — длина дуги от точки торможения и модуль
         скорости вдоль неё, — готовые для марша слоя. Первая идёт по обходу
         назад (наветренная), вторая вперёд (подветренная).
+
+        При `with_index` к каждой паре добавляется третьим номер панели: он нужен,
+        чтобы вернуть посчитанный по стороне выдув обратно на обвод.
         """
         self._need()
         i = self.stagnation()
-        back = slice(i, None, -1)
+        back = np.arange(i, -1, -1)
+        fwd = np.arange(i + 1, self.n)
         s_b = np.concatenate(([0.0], np.cumsum(self.ds[back][:-1])))
-        s_f = np.concatenate(([0.0], np.cumsum(self.ds[i + 1:][:-1])))
-        return (s_b, np.abs(self.vt[back])), (s_f, np.abs(self.vt[i + 1:]))
+        s_f = np.concatenate(([0.0], np.cumsum(self.ds[fwd][:-1])))
+        if with_index:
+            return (s_b, np.abs(self.vt[back]), back), (s_f, np.abs(self.vt[fwd]), fwd)
+        return (s_b, np.abs(self.vt[back])), (s_f, np.abs(self.vt[fwd]))
 
     def _need(self):
         if not self._solved:

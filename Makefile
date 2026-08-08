@@ -106,23 +106,25 @@ serve: viewer/terrain.html $(TERRAIN_PACK)
 # Отдельную батарею можно позвать по имени: `make t-wind`, `make t-upwind`.
 FAST := axes buoyancy membrane vlm waves ocean wind terrain replay physics sailcoeffs
 SLOW := upwind
+# Медленное на питоне: совместный вязко-невязкий расчёт, десятки секунд.
+PYSLOW := coupled
 
 # Батареи на питоне стоят особняком: они проверяют не симулятор, а то, что
 # считается ДО него и уезжает в пакет. Поэтому и запускаются интерпретатором из
 # .venv — им нужен numpy, которого системному питону никто не обещал.
 PYTESTS := section bl panel milgram
 
-.PHONY: $(addprefix t-,$(FAST) $(SLOW) $(PYTESTS)) slow all-tests
+.PHONY: $(addprefix t-,$(FAST) $(SLOW) $(PYTESTS) $(PYSLOW)) slow all-tests
 
 $(addprefix t-,$(FAST) $(SLOW)): t-%:
 	@node tests/$*.test.mjs
 
-$(addprefix t-,$(PYTESTS)): t-%:
+$(addprefix t-,$(PYTESTS) $(PYSLOW)): t-%:
 	@$(VENV) tests/$*.test.py
 
 test: physics $(addprefix t-,$(PYTESTS)) $(addprefix t-,$(FAST))
 
-slow: physics $(addprefix t-,$(SLOW))
+slow: physics $(addprefix t-,$(PYSLOW)) $(addprefix t-,$(SLOW))
 
 all-tests: test slow
 

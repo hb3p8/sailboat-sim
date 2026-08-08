@@ -96,12 +96,20 @@ serve: viewer/terrain.html $(TERRAIN_PACK)
 FAST := axes buoyancy membrane vlm waves ocean wind terrain replay physics
 SLOW := upwind
 
-.PHONY: $(addprefix t-,$(FAST) $(SLOW)) slow all-tests
+# Батареи на питоне стоят особняком: они проверяют не симулятор, а то, что
+# считается ДО него и уезжает в пакет. Поэтому и запускаются интерпретатором из
+# .venv — им нужен numpy, которого системному питону никто не обещал.
+PYTESTS := section
+
+.PHONY: $(addprefix t-,$(FAST) $(SLOW) $(PYTESTS)) slow all-tests
 
 $(addprefix t-,$(FAST) $(SLOW)): t-%:
 	@node tests/$*.test.mjs
 
-test: physics $(addprefix t-,$(FAST))
+$(addprefix t-,$(PYTESTS)): t-%:
+	@$(VENV) tests/$*.test.py
+
+test: physics $(addprefix t-,$(PYTESTS)) $(addprefix t-,$(FAST))
 
 slow: physics $(addprefix t-,$(SLOW))
 

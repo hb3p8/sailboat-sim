@@ -36,6 +36,30 @@ base64. Это стоило дважды: полтора мегабайта в �
 Чего это стоит: массив делается полым. С воды разницы нет по построению, а вот
 вид с высоты — тот, что с километра, — показывает кольцо леса с землёй внутри.
 Это осознанная плата: вид с высоты здесь карта, а не картина.
+
+РАЗМЕР КУСКА, и почему он такой странный
+
+Куски нужны, чтобы three выбрасывал из отрисовки то, что за спиной. Чем они
+мельче, тем точнее отбраковка, — и тем больше объектов, матриц и вызовов
+отрисовки. Оптимум мерен на скамье, случай «у воды», по цене кадра:
+
+    куски по  48 ячеек, 446 штук  — 1.41 мс
+    куски по 144 ячейки,  78 штук — 0.94 мс
+    куски по 288 ячеек,   24 штуки — 1.49 мс
+
+Отсюда 144. Крупнее — отбраковка перестаёт отбраковывать и в кадр лезет вся
+карта; мельче — накладные расходы съедают выигрыш.
+
+ЛОДОВ ЗДЕСЬ НЕТ, И ЭТО ТОЖЕ РЕЗУЛЬТАТ ЗАМЕРА
+
+Уровни детализации были сделаны и померены: каждый кусок в трёх прореживаниях
+(20/40/80 м), швы закрыты юбками, сборка через THREE.LOD. Вышло МЕДЛЕННЕЕ — 1.86
+мс против 1.41 при тех же кусках. Причина простая и на бумаге невидимая: кадр
+упирается не в треугольники, а в число объектов. Восемьсот тысяч треугольников
+эта видеокарта рисует за миллисекунду с небольшим, а вот втрое больше узлов в
+графе сцены — с их матрицами и обходом — обходятся дороже, чем сэкономленная
+геометрия. Отсюда и размер куска выше: единственный работающий рычаг здесь —
+меньше объектов, а не меньше вершин.
 """
 
 import argparse
@@ -53,9 +77,8 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 PACK = os.path.join(ROOT, "out", "export", "terrain_pack.json")
 DST = os.path.join(ROOT, "assets", "terrain.glb")
 
-# Ячеек в куске сетки. То же число, что стояло в браузере: куски нужны не для
-# сжатия, а для того, чтобы three мог выбросить из отрисовки то, что за спиной.
-CHUNK = 48
+# Ячеек в куске сетки. Число мерено, а не взято на глаз, — см. заголовок.
+CHUNK = 144
 
 # Цвета. Земля красится по высоте над урезом, дно под водой — своим цветом:
 # иначе мель читается как суша, и вся береговая черта теряет смысл.
@@ -140,11 +163,10 @@ def viewshed(top, water, level, eye, dirs, far):
 
 def land_chunk(ix0, iy0, nx, ny):
     j, i = np.meshgrid(np.arange(ny), np.arange(nx), indexing="ij")
-    k = (iy0 + j) * NX + ix0 + i
-    x = X0 + (k % NX) * STEP
-    y = Y0 + (k // NX) * STEP
+    x = X0 + (ix0 + i) * STEP
+    y = Y0 + (iy0 + j) * STEP
     z = HEIGHT[iy0:iy0 + ny, ix0:ix0 + nx]
-    pos = np.stack([x, z, -y], -1).reshape(-1, 3).astype(np.float32)
+    pos = np.stack([x, z, -y], -1).reshape(-1, 3)
 
     wet = SDF[iy0:iy0 + ny, ix0:ix0 + nx] > 128
     col = land_tint((z - LEVEL).ravel())
@@ -155,8 +177,9 @@ def land_chunk(ix0, iy0, nx, ny):
     # Намотка против часовой при взгляде сверху. Проверять это надо на бумаге:
     # «очевидный» порядок обхода даёт нормали вниз, вся суша уходит в отбраковку
     # задних граней, и экран показывает пустую воду, а не вывернутый рельеф.
-    idx = np.stack([a, b, d, b, e, d], -1).ravel()
-    return pos, col.astype(np.float32), idx
+    idx = np.stack([a, b, d, b, e, d], -1).ravel().astype(np.uint32)
+    return pos.astype(np.float32), col.astype(np.float32), idx
+
 
 
 def cover_chunk(ix0, iy0, nx, ny, cls, mask):
@@ -242,6 +265,8 @@ def main():
     ap.add_argument("--far", type=float, default=8000.0, help="докуда смотреть, м")
     ap.add_argument("--grow", type=int, default=2,
                     help="на сколько клеток нарастить видимое")
+    ap.add_argument("--chunk", type=int, default=144,
+                    help="ячеек в куске: меньше кусков — меньше вызовов")
     ap.add_argument("--no-cull", action="store_true",
                     help="оставить весь покров (для сравнения)")
     ap.add_argument("--no-draco", action="store_true")
@@ -252,7 +277,8 @@ def main():
                          % os.path.relpath(PACK, ROOT))
     p = json.load(open(PACK))
 
-    global NX, NY, STEP, X0, Y0, LEVEL, HEIGHT, SDF, TOP
+    global NX, NY, STEP, X0, Y0, LEVEL, HEIGHT, SDF, TOP, CHUNK
+    CHUNK = args.chunk
     NX, NY, STEP = p["nx"], p["ny"], p["step"]
     X0, Y0, LEVEL = p["x0"], p["y0"], p["level"]
 
@@ -335,8 +361,7 @@ def main():
             if nx < 2 or ny < 2:
                 continue
             pos, col, idx = land_chunk(ix0, iy0, nx, ny)
-            tris["земля"] += add_mesh("land_%d_%d" % (ix0, iy0), pos,
-                                      idx.astype(np.uint32), 0, col)
+            tris["земля"] += add_mesh("land_%d_%d" % (ix0, iy0), pos, idx, 0, col)
             for c in (1, 2):
                 got = cover_chunk(ix0, iy0, nx, ny, c, keep & (cls == c))
                 if got is None:

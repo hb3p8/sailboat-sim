@@ -363,37 +363,68 @@ export class Lattice {
   // для сил, а для картинки: по ней рисуются линии тока вокруг парусов —
   // ровно то, что показывают в трубе дымом. Считать это каждый кадр незачем,
   // отрисовка обновляет линии в несколько раз реже.
+  // Скорость, наведённая всей решёткой в точке. КАНОНИЧЕСКИЙ КОНТУР панели,
+  // один и тот же здесь и в матрице влияния:
+  //
+  //     из бесконечности в TA → вдоль хорды в A → связанный отрезок A→B →
+  //     обратно по хорде в TB → и оттуда пелена в бесконечность
+  //
+  // У нынешнего рига TA совпадает с A, а TB с B: свободные вихри уходят прямо
+  // от присоединённого, а роль отрезков вдоль хорды играют присоединённые вихри
+  // следующих панелей (см. aero.js, где панели и ставятся). Тогда контур
+  // вырождается в обычную подкову, и отрезки вдоль хорды считать не нужно.
+  //
+  // Но вырождение это — свойство ГЕОМЕТРИИ, а не метода, и держаться на нём
+  // нельзя: стоит пелене стать свободной, и TA разойдётся с A. Поэтому отрезки
+  // считаются, когда они не нулевые, и обе половины кода — эта и матрица —
+  // описывают один контур при любой геометрии. Проверка на совпадение точек
+  // стоит три сравнения на панель и в нынешнем риге отсекает всю добавку.
+  //
+  // Зеркало от воды: тот же контур, отражённый по Z, с обратным знаком.
   induced(px, py, pz, ux, uy, uz, ground, out) {
     const n = this.n, P = this.panels, t = this._t;
     const rc2 = this.core * this.core;
-    out[0] = out[1] = out[2] = 0;
-    const add = (A, B, TA, TB, sign) => {
-      segment(px, py, pz, A[0], A[1], A[2], B[0], B[1], B[2], t, rc2);
-      out[0] += sign * t[0]; out[1] += sign * t[1]; out[2] += sign * t[2];
-      tail(px, py, pz, TB[0], TB[1], TB[2], ux, uy, uz, t, rc2);
-      out[0] += sign * t[0]; out[1] += sign * t[1]; out[2] += sign * t[2];
-      tail(px, py, pz, TA[0], TA[1], TA[2], ux, uy, uz, t, rc2);
-      out[0] -= sign * t[0]; out[1] -= sign * t[1]; out[2] -= sign * t[2];
-    };
-    const m = this._mirTmp || (this._mirTmp = {
-      a: [0, 0, 0], b: [0, 0, 0], ta: [0, 0, 0], tb: [0, 0, 0] });
+    let ox = 0, oy = 0, oz = 0;
     for (let j = 0; j < n; j++) {
       const g = this.gamma[j];
       if (!g) continue;
-      const p = P[j];
-      const before = [out[0], out[1], out[2]];
-      out[0] = out[1] = out[2] = 0;
-      add(p.a, p.b, p.ta, p.tb, 1);
-      if (ground) {
-        for (const k of ['a', 'b', 'ta', 'tb']) {
-          m[k][0] = p[k][0]; m[k][1] = p[k][1]; m[k][2] = -p[k][2];
-        }
-        add(m.a, m.b, m.ta, m.tb, -1);
+      const p = P[j], a = p.a, b = p.b, ta = p.ta, tb = p.tb;
+      const lead = ta[0] !== a[0] || ta[1] !== a[1] || ta[2] !== a[2];
+      const trail = tb[0] !== b[0] || tb[1] !== b[1] || tb[2] !== b[2];
+      let vx = 0, vy = 0, vz = 0;
+      segment(px, py, pz, a[0], a[1], a[2], b[0], b[1], b[2], t, rc2);
+      vx += t[0]; vy += t[1]; vz += t[2];
+      if (lead) {
+        segment(px, py, pz, ta[0], ta[1], ta[2], a[0], a[1], a[2], t, rc2);
+        vx += t[0]; vy += t[1]; vz += t[2];
       }
-      out[0] = before[0] + g * out[0];
-      out[1] = before[1] + g * out[1];
-      out[2] = before[2] + g * out[2];
+      if (trail) {
+        segment(px, py, pz, b[0], b[1], b[2], tb[0], tb[1], tb[2], t, rc2);
+        vx += t[0]; vy += t[1]; vz += t[2];
+      }
+      tail(px, py, pz, tb[0], tb[1], tb[2], ux, uy, uz, t, rc2);
+      vx += t[0]; vy += t[1]; vz += t[2];
+      tail(px, py, pz, ta[0], ta[1], ta[2], ux, uy, uz, t, rc2);
+      vx -= t[0]; vy -= t[1]; vz -= t[2];
+      if (ground) {
+        segment(px, py, pz, a[0], a[1], -a[2], b[0], b[1], -b[2], t, rc2);
+        vx -= t[0]; vy -= t[1]; vz -= t[2];
+        if (lead) {
+          segment(px, py, pz, ta[0], ta[1], -ta[2], a[0], a[1], -a[2], t, rc2);
+          vx -= t[0]; vy -= t[1]; vz -= t[2];
+        }
+        if (trail) {
+          segment(px, py, pz, b[0], b[1], -b[2], tb[0], tb[1], -tb[2], t, rc2);
+          vx -= t[0]; vy -= t[1]; vz -= t[2];
+        }
+        tail(px, py, pz, tb[0], tb[1], -tb[2], ux, uy, uz, t, rc2);
+        vx -= t[0]; vy -= t[1]; vz -= t[2];
+        tail(px, py, pz, ta[0], ta[1], -ta[2], ux, uy, uz, t, rc2);
+        vx += t[0]; vy += t[1]; vz += t[2];
+      }
+      ox += g * vx; oy += g * vy; oz += g * vz;
     }
+    out[0] = ox; out[1] = oy; out[2] = oz;
     return out;
   }
 

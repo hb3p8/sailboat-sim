@@ -1233,8 +1233,11 @@ const SAIL_STALL = 13;            // градусов, как в physics.sailCoe
 // Полосу разворачиваем в плоскости паруса — тогда с наветра, откуда на них и
 // смотрят, она видна плашмя.
 //
-// Рисуем поверх всего (`depthTest: false`), как и латы: подветренный колдунчик
-// смотрят сквозь полотно, ради того его и вешают против наветренного.
+// Тест глубины включён. Раньше ленточки рисовались поверх всего, чтобы
+// подветренный колдунчик было видно сквозь полотно, — но за это платили тем,
+// что они светились и сквозь корпус, и сквозь дальний парус, и с любого ракурса
+// путались между собой. Пусть лучше подветренный прячется за полотном, как и на
+// воде: там его видно, только когда ткань тонкая и солнце сзади.
 const TELL_VERT = TELL_SEG * 6;   // два треугольника на звено
 
 const TELL_PORT = [0.98, 0.36, 0.30];    // левый борт — красный
@@ -1260,8 +1263,12 @@ function telltaleMesh() {
   g.setAttribute('position', new Float32BufferAttribute(new Float32Array(n * 3), 3));
   const col = new Float32Array(n * 3);
   g.setAttribute('color', new Float32BufferAttribute(col, 3));
+  // С тестом глубины: без него ленточки светились сквозь полотно и сквозь
+  // корпус, и на любом ракурсе было не понять, какая из них с этой стороны, а
+  // какая с той. Подветренный на просвет не виден — но и на воде он виден лишь
+  // тогда, когда полотно тонкое и солнце сзади.
   const m = new Mesh(g, new MeshBasicMaterial({
-    vertexColors: true, depthTest: false, side: DoubleSide }));
+    vertexColors: true, side: DoubleSide }));
   m.renderOrder = 3;
   m.frustumCulled = false;
   return m;
@@ -1310,7 +1317,7 @@ function leechMesh() {
   }
   g.setAttribute('color', new Float32BufferAttribute(col, 3));
   const m = new Mesh(g, new MeshBasicMaterial({
-    vertexColors: true, depthTest: false, side: DoubleSide }));
+    vertexColors: true, side: DoubleSide }));
   m.renderOrder = 3;
   m.frustumCulled = false;
   return m;
@@ -1381,6 +1388,11 @@ function shapeSails(side, dt) {
     return held + (awa - held) * over;
   };
   boomPivot.rotation.y = setOf(boat.rig.sails[0]) * side;
+  // Длина гика подгоняется под нижнюю хорду паруса. Шкотовый угол привязан к
+  // ноку и отходить от него не должен ни на сантиметр, а обводы дают хорду по
+  // строке сетки — 3.130 м против 3.116 у спара, полтора сантиметра разницы.
+  // Дешевле подтянуть нарисованный спар, чем спорить с обводами.
+  let bmK = 1;
   const twist = boat.rig.twistEff || boat.o.twist;
   // Пузо и положение горба больше не назначаются: их посчитала мембрана, по
   // полоске на каждую. Раньше здесь стояло 0.10 хорды по синусу — то есть
@@ -1405,6 +1417,7 @@ function shapeSails(side, dt) {
       const f = r / (SAIL_ROWS - 1);
       const h = zLo + f * (zHi - zLo);
       const xLuff = luffAt(h), chord = Math.max(0, xLuff - leechAt(h));
+      if (k === 0 && r === 0) bmK = chord / rig.boom_m;
       const sh = setOf(sail) + twist * Math.pow(f, 1.3);
       // Пузо берётся у ближайшей по высоте полоски: их шесть на парус, строк
       // сетки одиннадцать.
@@ -1440,7 +1453,15 @@ function shapeSails(side, dt) {
       const phase = om * boat.t - h / FLAP_SPAN;
 
       // хорда идёт в корму и под ветер, нормаль к ней смотрит туда же
-      const ux = -Math.cos(sh), uy = Math.sin(sh) * side;
+      // Хорда — НАСТОЯЩИЙ поворот на угол выноса, а не косинус со скруткой по
+      // борту отдельно. Разница видна ровно там, где гик и переходит: посреди
+      // переброса `side` дробный, и прежняя пара (−cos sh, sin sh · side)
+      // переставала быть единичной — хорда съёживалась к диаметральной, пока
+      // гик поворачивался как положено. Оттого парус и отходил от гика.
+      // На упоре, где |side| = 1, обе записи совпадают до последнего разряда:
+      // косинус чётный, синус нечётный.
+      const ang = sh * side;
+      const ux = -Math.cos(ang), uy = Math.sin(ang);
       const nx = -uy, ny = ux;
       for (let c = 0; c < SAIL_COLS; c++) {
         const t = chordAt(c);
@@ -1466,6 +1487,10 @@ function shapeSails(side, dt) {
     mesh.geometry.attributes.position.needsUpdate = true;
     mesh.geometry.attributes.color.needsUpdate = true;
     mesh.geometry.computeVertexNormals();
+    if (k === 0 && boom.scale.y !== bmK) {
+      boom.scale.y = bmK;
+      boom.position.x = -bmK * rig.boom_m / 2;
+    }
 
     // Колдунчики: по три пары на парус, на тех же строках сетки.
     //

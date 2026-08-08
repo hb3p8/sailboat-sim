@@ -1,0 +1,42 @@
+{
+  "источник": {
+    "отчёт": "NASA CR-1767, Jerome H. Milgram, «Section data for thin, highly cambered airfoils in incompressible flow», MIT, июль 1971",
+    "url": "https://ntrs.nasa.gov/api/citations/19710020417/downloads/19710020417.pdf",
+    "как_сняты": "Оцифровано с фигур отчёта на глаз, по клеткам сетки. Фигуры растровые, таблиц в отчёте нет — числа в этом файле имеют точность порядка ±0.03 по Cl и ±0.005 по Cd, и большего от них требовать нельзя.",
+    "секции": "Средняя линия NACA 65 — это дуга постоянной кривизны, то есть ровно то, что в проекте зовётся пузом посередине (p = 0.5). Толщина 3.4% хорды, параболическая, симметричная и по хорде тоже; кромки ОСТРЫЕ, толщина кромки 0.22% хорды.",
+    "оговорка": "Это модель ПАРУСА БЕЗ МАЧТЫ И БЕЗ ЛИКТРОСА: носок острый. У настоящего грота передняя кромка — мачта в 78 мм, то есть радиус в два-три процента хорды. Сравнивать с этими данными надо, помня разницу."
+  },
+
+  "заявлено_текстом": {
+    "число_Рейнольдса": [600000, 900000, 1200000],
+    "минимальное_сопротивление": 0.06,
+    "минимальное_сопротивление_цитата": "The ever present flow separation causes the minimum section drag coefficient to be about 0.06 which is typically about an order of magnitude larger than the minimum drag coefficient of a thick wing section.",
+    "нет_резкого_срыва": "the lift coefficient of a thin, highly cambered section is always less than the theoretical prediction and a sharp stall is not observed",
+    "отрыв_с_обеих_сторон": "When the angle of attack is less than the ideal angle of attack, there is leading edge separation on the pressure side and when the angle of attack exceeds the ideal angle of attack, there is leading edge separation on the suction side",
+    "наклон_кривой": "lift slope exceeds 2π/radian for angles of attack less than ideal and is less than 2π/radian for angles of attack greater than the ideal angle of attack",
+    "раскамберивание": "the effect of the displacement thickness of the boundary layer on the potential solution was neglected in the theory ... This reduces the effective camber and angle of attack of the section",
+    "предел_Спенса": "The highest lift coefficient for which this theory predicted attached flow was 1.90"
+  },
+
+  "65-12": {
+    "пузо": 0.12,
+    "положение_пуза": 0.5,
+    "толщина": 0.034,
+    "Re": 900000,
+    "фигура_Cl": "14 (и 6a)",
+    "фигура_Cd": "6b",
+    "alpha_deg": [-24, -20, -16, -12, -8, -4, -2, 0, 2, 4, 6, 8, 12, 16, 18, 20, 22, 24],
+    "cl":         [-0.53, -0.36, -0.20, 0.03, 0.10, 0.18, 0.35, 1.00, 1.30, 1.42, 1.45, 1.55, 1.80, 1.97, 2.05, 2.03, 1.92, 1.95],
+    "cd":         [0.47, 0.30, 0.185, 0.135, 0.105, 0.077, 0.065, 0.055, 0.052, 0.055, 0.065, 0.083, 0.135, 0.28, 0.38, 0.50, 0.63, 0.77]
+  },
+
+  "65-18": {
+    "пузо": 0.18,
+    "положение_пуза": 0.5,
+    "толщина": 0.034,
+    "Re": 900000,
+    "фигура_Cl": "8a",
+    "alpha_deg": [-24, -20, -16, -12, -8, -4, -2, 0, 2, 4, 6, 8, 10, 12, 16, 20, 22, 24],
+    "cl":         [0.13, 0.25, 0.33, 0.37, 0.33, 0.28, 0.40, 0.80, 1.35, 1.85, 2.02, 1.90, 1.85, 1.95, 2.20, 2.40, 2.48, 2.42]
+  }
+}

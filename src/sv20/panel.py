@@ -30,8 +30,8 @@
 
 import numpy as np
 
-__all__ = ["naca_thickness", "luff_thickness", "sail_contour", "cylinder_contour",
-           "Panels"]
+__all__ = ["naca_thickness", "luff_thickness", "milgram_thickness", "sail_contour",
+           "cylinder_contour", "Panels"]
 
 
 def naca_thickness(x, t):
@@ -76,7 +76,29 @@ def luff_thickness(x, t, nose=None):
     return y
 
 
-def sail_contour(f=0.10, p=0.5, t=0.03, n=200, nose=None, naca=False):
+def milgram_thickness(x, t=0.034, edge=0.0022):
+    """Толщина опытных сечений Милгрэма (NASA CR-1767), слово в слово по отчёту.
+
+    «Симметрична и по хорде, и по толщине, параболическое распределение с
+    относительной толщиной 0.034 и отношением толщины кромки к хорде 0.0022.»
+    Кромки СХОСТРЕНЫ: на носке остаётся сливер в одну десятую процента хорды.
+
+    Нужна ровно для сверки с опубликованными данными — своей формой паруса это
+    не является. У настоящего паруса носок тупой (мачта, ликтрос), у Милгрэма
+    острый, и разница между ними видна во всём: у него поток оторван при любом
+    угле, минимальное сопротивление 0.06 и срыва как события нет вовсе.
+
+    Задняя кромка у Милгрэма тоже тупая, на те же 0.22% хорды, и обвод из-за
+    этого не замыкается — а условие Кутты ставить некуда. Поэтому толщина
+    сводится к нулю линейной поправкой по хорде: на носке она ничего не меняет
+    (там всё и решается), в середине снимает одну десятую процента, на кромке
+    замыкает обвод.
+    """
+    x = np.clip(np.asarray(x, float), 0.0, 1.0)
+    return edge / 2 * (1 - x) + (t - edge) / 2 * 4 * x * (1 - x)
+
+
+def sail_contour(f=0.10, p=0.5, t=0.03, n=200, nose=None, naca=False, thick=None):
     """Замкнутый обвод сечения паруса: средняя линия плюс толщина по нормали.
 
     Точки идут от задней кромки вперёд по наветренной стороне, огибают носок и
@@ -88,7 +110,10 @@ def sail_contour(f=0.10, p=0.5, t=0.03, n=200, nose=None, naca=False):
     beta = np.linspace(0.0, np.pi, n // 2 + 1)
     xs = (1 - np.cos(beta)) / 2                     # от 0 до 1, гуще по краям
     z, dz = mean_line(xs, f, p)
-    yt = naca_thickness(xs, t) if naca else luff_thickness(xs, t, nose)
+    if thick is not None:
+        yt = thick(xs)
+    else:
+        yt = naca_thickness(xs, t) if naca else luff_thickness(xs, t, nose)
     th = np.arctan(dz)
     # По нормали к средней линии, а не по вертикали: на пузе в 15% разница видна.
     xl, yl = xs + yt * np.sin(th), z - yt * np.cos(th)      # наветренная

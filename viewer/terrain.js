@@ -98,128 +98,45 @@ function tint(dh, banded) {
   return c.setHex(ca).lerp(tmp.setHex(cb), t);
 }
 
-function paint(banded) {
-  for (let iy = 0, k = 0; iy < NY; iy++)
-    for (let ix = 0; ix < NX; ix++, k++) {
-      // Дно под водой — свой цвет: иначе мель читается как суша, и вся маска
-      // берега на просмотре теряет смысл.
-      const t = WET[k] > 127 ? c.setHex(0x2f4a52)
-                             : tint(H[k] / 10 - LEVEL, banded);
-      col[k * 3] = t.r; col[k * 3 + 1] = t.g; col[k * 3 + 2] = t.b;
-    }
-  landGeo.attributes.color.needsUpdate = true;
-}
+// ---------------------------------------------------------------- карта
+//
+// Геометрия не строится здесь, а грузится готовой: assets/terrain.glb, тот же
+// файл, что уходит в симулятор. Раньше просмотрщик рисовал участок сам, по тем
+// же полям, и это было верно ровно до тех пор, пока карта в симуляторе не стала
+// печься отдельно. С этого мгновения две картины местности разошлись: здесь
+// покров кварталами и полтора миллиона треугольников, там — отбраковка по виду
+// с воды и настоящие здания из OSM. Просмотрщик, показывающий не то, что
+// показывает симулятор, хуже, чем бесполезен: по нему принимают решения.
+//
+// Что от этого потеряно, стоит назвать вслух. Раскраска ступенями по десять
+// метров ушла: цвет запечён в вершины, и перекрашивать чужую геометрию нечем.
+// Выключить отдельно лес тоже нельзя — он лежит в одном буфере с землёй.
+// Осталась застройка: она своим узлом, её галка и гасит.
+//
+// Вода строится по-прежнему здесь, из маски: она и есть то, что проверяют.
 
-for (let iy = 0, k = 0; iy < NY; iy++)
-  for (let ix = 0; ix < NX; ix++, k++) {
-    pos[k * 3] = ix * STEP - WIDTH / 2;
-    pos[k * 3 + 1] = H[k] / 10;
-    pos[k * 3 + 2] = -(iy * STEP - DEPTH / 2);
-  }
-
-// Намотка против часовой при взгляде сверху. Проверять это надо на бумаге, а
-// не на глаз: ось Z смотрит на юг (север у нас в −Z), от этого «очевидный»
-// порядок обхода даёт нормали вниз — и вся суша уходит в отбраковку задних
-// граней. Экран при этом показывает пустую воду, а не вывернутый рельеф, и
-// искать причину приходится там, где её нет.
-const idx = new Uint32Array((NX - 1) * (NY - 1) * 6);
-for (let iy = 0, t = 0; iy < NY - 1; iy++)
-  for (let ix = 0; ix < NX - 1; ix++) {
-    const a = iy * NX + ix, b = a + 1, d = a + NX, e = d + 1;
-    idx[t++] = a; idx[t++] = b; idx[t++] = d;
-    idx[t++] = b; idx[t++] = e; idx[t++] = d;
-  }
-
-const landGeo = new BufferGeometry();
-landGeo.setAttribute('position', new BufferAttribute(pos, 3));
-landGeo.setAttribute('color', new BufferAttribute(col, 3));
-landGeo.setIndex(new BufferAttribute(idx, 1));
-paint(false);
-landGeo.computeVertexNormals();
-
-const land = new Mesh(landGeo, new MeshStandardMaterial({
-  vertexColors: true, roughness: 0.95, metalness: 0.0 }));
-
-// Земля и слой едут вместе: подъём высот обязан растягивать их одинаково,
-// иначе лес при первом же движении ползунка отрывается от берега.
 const relief = new Group();
-relief.add(land);
 scene.add(relief);
 
-// ------------------------------------------------------- лес и застройка
-//
-// Отдельной геометрией на каждый класс, а не вмятые в рельеф высотами. Так
-// рельеф остаётся рельефом — по нему можно считать уклон и ветровую тень, не
-// гадая, где холм, а где сосняк на холме, — а слой можно выключить, погасить
-// или заменить чем угодно, не пересобирая выгрузку.
-//
-// Геометрия нарочно простая: крышка по верху слоя и вертикальные стенки там,
-// где массив кончается. Ни отдельных деревьев, ни отдельных домов — с воды
-// квартал и опушка читаются сплошной стеной, а не набором коробок, и ставить
-// туда что-то подробнее значит платить миллионами треугольников за то, чего
-// не видно.
-//
-// Ячейка попадает в слой, только если её класса все четыре узла. Иначе край
-// массива съезжал бы на полклетки наружу и обрастал зубцами по диагоналям.
-
-function coverMesh(cls, colour) {
-  const cw = NX - 1, chh = NY - 1;
-  const capped = new Uint8Array(cw * chh);
-  for (let iy = 0; iy < chh; iy++)
-    for (let ix = 0; ix < cw; ix++) {
-      const a = iy * NX + ix;
-      capped[iy * cw + ix] = (CLS[a] === cls && CLS[a + 1] === cls &&
-                              CLS[a + NX] === cls && CLS[a + NX + 1] === cls)
-                             ? 1 : 0;
-    }
-
-  const vp = [], vi = [];
-  const gx = k => (k % NX) * STEP - WIDTH / 2;
-  const gz = k => -(((k / NX) | 0) * STEP - DEPTH / 2);
-  const ytop = k => H[k] / 10 + CH[k];
-
-  const node = new Int32Array(NX * NY).fill(-1);
-  const put = k => {
-    if (node[k] < 0) { node[k] = vp.length / 3; vp.push(gx(k), ytop(k), gz(k)); }
-    return node[k];
-  };
-  // Стенка своими вершинами: у крышки они на верху слоя, у подошвы на земле,
-  // общих между ними нет.
-  const wall = (k1, k2) => {
-    const n = vp.length / 3;
-    vp.push(gx(k1), H[k1] / 10, gz(k1), gx(k2), H[k2] / 10, gz(k2),
-            gx(k2), ytop(k2), gz(k2), gx(k1), ytop(k1), gz(k1));
-    vi.push(n, n + 1, n + 2, n, n + 2, n + 3);
-  };
-  const nb = (ix, iy) => (ix < 0 || iy < 0 || ix >= cw || iy >= chh)
-                         ? 0 : capped[iy * cw + ix];
-
-  for (let iy = 0; iy < chh; iy++)
-    for (let ix = 0; ix < cw; ix++) {
-      if (!capped[iy * cw + ix]) continue;
-      const a = iy * NX + ix, b = a + 1, d = a + NX, e = d + 1;
-      const p0 = put(a), p1 = put(b), p2 = put(e), p3 = put(d);
-      vi.push(p0, p1, p3, p1, p2, p3);
-      if (!nb(ix, iy - 1)) wall(a, b);
-      if (!nb(ix, iy + 1)) wall(d, e);
-      if (!nb(ix - 1, iy)) wall(a, d);
-      if (!nb(ix + 1, iy)) wall(b, e);
-    }
-
-  const g = new BufferGeometry();
-  g.setAttribute('position', new BufferAttribute(new Float32Array(vp), 3));
-  g.setIndex(vi);
-  g.computeVertexNormals();
-  // DoubleSide намеренно: намотка стенок зависит от того, с какой стороны
-  // ячейки они выросли, и разбираться с восемью случаями ради отбраковки,
-  // которая тут ничего не экономит, — не та цена.
-  return new Mesh(g, new MeshStandardMaterial({
-    color: colour, roughness: 0.92, metalness: 0.0, side: DoubleSide }));
-}
-
-const forest = coverMesh(1, 0x2f4a26);
-const urban = coverMesh(2, 0x8c8377);
-relief.add(forest, urban);
+let mapTris = 0;
+new GLTFLoader()
+  .setDRACOLoader(new DRACOLoader().setDecoderPath('vendor/draco/'))
+  .load('../assets/terrain.glb', gltf => {
+    gltf.scene.traverse(o => {
+      if (!o.isMesh) return;
+      mapTris += o.geometry.index ? o.geometry.index.count / 3
+                                  : o.geometry.attributes.position.count / 3;
+      if ((o.name || '').startsWith('застройка')) urban.push(o);
+    });
+    relief.add(gltf.scene);
+    facts();
+    needsDraw = true;
+  }, undefined, () => {
+    document.getElementById('crash').textContent =
+      'assets/terrain.glb не открылся — соберите `make terrain-glb`';
+    document.getElementById('crash').style.display = 'block';
+  });
+const urban = [];
 
 // -------------------------------------------------------------------- вода
 //
@@ -446,34 +363,37 @@ bind('sunaz', v => {
   sunAz = v; placeSun();
   document.getElementById('v-sunaz').textContent = v.toFixed(0) + '°';
 });
-document.getElementById('banded').addEventListener('change', e => {
-  paint(e.target.checked); needsDraw = true;
-});
 document.getElementById('grid').addEventListener('change', e => {
   grid.visible = e.target.checked; needsDraw = true;
 });
 document.getElementById('cover').addEventListener('change', e => {
-  forest.visible = urban.visible = e.target.checked; needsDraw = true;
+  for (const o of urban) o.visible = e.target.checked;
+  needsDraw = true;
 });
 for (const b of document.querySelectorAll('#modes button'))
   b.addEventListener('click', () => setMode(b.dataset.mode));
 
 // ------------------------------------------------------------------- сводка
 
-document.getElementById('facts').innerHTML = [
+function facts() {
+  document.getElementById('facts').innerHTML = [
   ['Участок', (T.size[0] / 1000).toFixed(2) + ' × ' + (T.size[1] / 1000).toFixed(2) + ' км'],
   ['Сетка', T.nx + ' × ' + T.ny + ', шаг ' + T.step + ' м'],
   ['Урез', T.level.toFixed(1) + ' м'],
   ['Высоты', T.hmin.toFixed(0) + '…' + T.hmax.toFixed(0) + ' м'],
-  ['Над водой', (T.top_max - T.level).toFixed(0) + ' м с покровом'],
   ['Воды', (100 * T.water_fraction).toFixed(1) + '%'],
-  ['Леса', (100 * T.forest_fraction).toFixed(1) + '%, от '
+  ['Леса на участке', (100 * T.forest_fraction).toFixed(1) + '%, от '
            + T.cover_min_m.forest.toFixed(0) + ' м'],
-  ['Застройки', (100 * T.urban_fraction).toFixed(1) + '%, от '
+  ['Застройки на участке', (100 * T.urban_fraction).toFixed(1) + '%, от '
                 + T.cover_min_m.urban.toFixed(0) + ' м'],
-  ['Треугольников', ((landGeo.index.count + forest.geometry.index.count
-                      + urban.geometry.index.count) / 3e6).toFixed(2) + ' млн'],
-].map(([k, v]) => '<tr><td>' + k + '</td><td class="v">' + v + '</td></tr>').join('');
+  // Треугольники берутся у ЗАГРУЖЕННОЙ карты, а не считаются по полям: в ней
+  // покрова уже вдесятеро меньше — то, чего не видно с воды, при запекании
+  // выброшено, — и число по полям врало бы втрое.
+  ['Треугольников в карте', (mapTris / 1e6).toFixed(2) + ' млн'],
+  ].map(([k, v]) => '<tr><td>' + k + '</td><td class="v">' + v + '</td></tr>')
+   .join('');
+}
+facts();
 
 // ------------------------------------------------------------------- кадр
 

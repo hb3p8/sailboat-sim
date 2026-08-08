@@ -65,10 +65,14 @@ base64. Это стоило дважды: полтора мегабайта в �
 import argparse
 import base64
 import json
+import math
 import os
 import struct
 import subprocess
 import sys
+import time
+import urllib.parse
+import urllib.request
 
 import numpy as np
 from scipy import ndimage
@@ -153,6 +157,254 @@ def viewshed(top, water, level, eye, dirs, far):
             vis[iy[seen], ix[seen]] = True
             horiz = np.where(live, np.maximum(horiz, ang), horiz)
     return vis
+
+
+# --- настоящие здания -----------------------------------------------------------
+#
+# Кубики по клеткам двадцать на двадцать метров — это гребёнка, а не город.
+# Настоящие контуры лежат в OSM, и в видимой с воды полосе их около трёх с
+# половиной тысяч: примерно восемьдесят тысяч треугольников, то есть пять
+# процентов к бюджету карты. За эти пять процентов берег перестаёт быть
+# гребёнкой.
+#
+# ВЫСОТЫ, и это главная морока. У Яндекса они наверняка есть, но данные там
+# проприетарные и брать их нельзя. Свой Copernicus DSM тоже не выручил: он
+# поверхность отражения, крыши в нём есть, — но подстановка земли под массивом
+# настроена на кварталы целиком, и на отдельных домах разность вырождается.
+# Померено: 98.8 % клеток застройки стоят ровно на минимуме в десять метров.
+#
+# Остаётся OSM, и там картина неровная. По всему квадрату `height` проставлен у
+# сорока зданий из тридцати двух тысяч. Зато `building:levels` в полосе
+# набережной есть почти у половины — 579 из 1200, — а нам нужна ровно она.
+# Остальным этажность берётся у соседей: застройка идёт кварталами одной эпохи,
+# и медиана по округе предсказывает лучше любой константы.
+OVERPASS = ("https://overpass-api.de/api/interpreter",
+            "https://overpass.private.coffee/api/interpreter",
+            "https://overpass.kumi.systems/api/interpreter")
+CACHE = os.path.join(ROOT, "data", "terrain")
+STOREY_M = 3.0            # высота этажа, м
+HOUSE_M = 10.0            # если и у соседей ничего нет
+# Радиусы, которыми спрашиваем соседей, — ступенями. Первый заход брал один
+# радиус в полтораста метров, и высота по умолчанию досталась 57 % домов: на
+# плотной набережной сосед с тегом всегда рядом, а на выселках его нет ни
+# одного. Ступени решают это, не размывая плотную застройку: там ответ находится
+# на первом же радиусе, и до следующих дело не доходит.
+NEAR_M = (150.0, 400.0, 1200.0)
+TILE_DEG = 0.02           # шаг сетки запросов, ~1.2 x 2.2 км
+
+
+def osm_buildings(bbox):
+    """Контуры зданий с тегами. Качается плитками и кэшируется на диск.
+
+    Плитками — потому что запрос на весь квадрат Overpass не отдаёт: тридцать
+    пять тысяч контуров с геометрией это десятки мегабайт, и зеркала отвечают
+    на это пятьсот четвёртой. Плитка кэшируется своим файлом, так что повторная
+    сборка сети не трогает вовсе.
+    """
+    out = []
+    lat0, lat1 = bbox[0], bbox[2]
+    lon0, lon1 = bbox[1], bbox[3]
+    ny = int(math.ceil((lat1 - lat0) / TILE_DEG))
+    nx = int(math.ceil((lon1 - lon0) / TILE_DEG))
+    for jy in range(ny):
+        for jx in range(nx):
+            s0 = lat0 + jy * TILE_DEG
+            w0 = lon0 + jx * TILE_DEG
+            box = (s0, w0, min(s0 + TILE_DEG, lat1), min(w0 + TILE_DEG, lon1))
+            name = "buildings_%.4f_%.4f.json" % (s0, w0)
+            path = os.path.join(CACHE, name)
+            if not os.path.exists(path):
+                q = ('[out:json][timeout:300];\n(way["building"](%f,%f,%f,%f);'
+                     'relation["building"](%f,%f,%f,%f););\nout geom;'
+                     % (box + box))
+                blob = None
+                for url in OVERPASS:
+                    try:
+                        req = urllib.request.Request(
+                            url, data=urllib.parse.urlencode({"data": q}).encode(),
+                            headers={"User-Agent": "sv20-terrain/1.0"})
+                        with urllib.request.urlopen(req, timeout=300) as r:
+                            blob = r.read()
+                        json.loads(blob)   # обрыв на середине выглядит успехом
+                        break
+                    except Exception:      # noqa: BLE001 — важен факт, не вид
+                        blob = None
+                        time.sleep(3)
+                if blob is None:
+                    print("плитка %.3f,%.3f не скачалась — пропущена"
+                          % (s0, w0), file=sys.stderr)
+                    continue
+                os.makedirs(CACHE, exist_ok=True)
+                open(path + ".part", "wb").write(blob)
+                os.replace(path + ".part", path)
+            for e in json.load(open(path))["elements"]:
+                tags = e.get("tags", {})
+                if e["type"] == "way" and e.get("geometry"):
+                    out.append(([(g["lat"], g["lon"]) for g in e["geometry"]], tags))
+                elif e["type"] == "relation":
+                    # Дырки не берём: это дворы, и с воды в них не заглянуть.
+                    for m in e.get("members", []):
+                        if m.get("role") == "outer" and m.get("geometry"):
+                            out.append(([(g["lat"], g["lon"])
+                                         for g in m["geometry"]], tags))
+    return out
+
+
+def levels_of(tags):
+    """Этажность из тегов: сперва высота в метрах, потом этажи."""
+    h = tags.get("height")
+    if h:
+        try:
+            return float(str(h).split()[0]) / STOREY_M
+        except ValueError:
+            pass
+    lv = tags.get("building:levels")
+    if lv:
+        try:
+            return float(str(lv).split(";")[0])
+        except ValueError:
+            pass
+    return None
+
+
+def earclip(ring):
+    """Треугольники простого многоугольника отсечением ушей.
+
+    Библиотеки под рукой нет, а нужен здесь самый простой случай: контур без
+    самопересечений и без дырок. Сорок строк дешевле зависимости.
+    """
+    n = len(ring)
+    if n < 3:
+        return []
+    idx = list(range(n))
+    tri = []
+    guard = 0
+    while len(idx) > 3 and guard < 4 * n:
+        guard += 1
+        for k in range(len(idx)):
+            a, b, c = idx[k - 2], idx[k - 1], idx[k]
+            ax, az = ring[a]; bx, bz = ring[b]; cx, cz = ring[c]
+            cross = (bx - ax) * (cz - az) - (bz - az) * (cx - ax)
+            if cross >= 0:            # не выпуклый угол при нашей ориентации
+                continue
+            bad = False
+            for m in idx:
+                if m in (a, b, c):
+                    continue
+                px, pz = ring[m]
+                d1 = (bx - ax) * (pz - az) - (bz - az) * (px - ax)
+                d2 = (cx - bx) * (pz - bz) - (cz - bz) * (px - bx)
+                d3 = (ax - cx) * (pz - cz) - (az - cz) * (px - cx)
+                if (d1 <= 0) == (d2 <= 0) and (d2 <= 0) == (d3 <= 0):
+                    bad = True
+                    break
+            if bad:
+                continue
+            tri.append((a, b, c))
+            idx.pop(k - 1)
+            guard = 0
+            break
+        else:
+            break
+    if len(idx) == 3:
+        tri.append(tuple(idx))
+    return tri
+
+
+
+def building_meshes(pack, keep_urban):
+    """Здания в осях сцены, разложенные по кускам карты.
+
+    Возвращает {(ix0, iy0): (позиции, индексы)} и сводку по источникам высоты.
+    """
+    o, mpd = pack["origin"], pack["meters_per_deg"]
+    hx = (NX - 1) * STEP / 2.0
+    hy = (NY - 1) * STEP / 2.0
+    bbox = (o["lat"] - hy / mpd["lat"], o["lon"] - hx / mpd["lon"],
+            o["lat"] + hy / mpd["lat"], o["lon"] + hx / mpd["lon"])
+    raw = osm_buildings(bbox)
+
+    # Контуры в метры участка и отсев по видимости: держим только то, что стоит
+    # на клетках, доживших до отбраковки по виду с воды.
+    rings, lv = [], []
+    for pts, tags in raw:
+        xy = [((lon - o["lon"]) * mpd["lon"], (lat - o["lat"]) * mpd["lat"])
+              for lat, lon in pts]
+        if len(xy) > 2 and xy[0] == xy[-1]:
+            xy.pop()
+        if len(xy) < 3:
+            continue
+        cx = sum(p[0] for p in xy) / len(xy)
+        cy = sum(p[1] for p in xy) / len(xy)
+        ix = int(round((cx - X0) / STEP))
+        iy = int(round((cy - Y0) / STEP))
+        if not (0 <= ix < NX and 0 <= iy < NY) or not keep_urban[iy, ix]:
+            continue
+        rings.append((xy, cx, cy, ix, iy))
+        lv.append(levels_of(tags))
+
+    # Этажность у тех, кому её не проставили, берётся у соседей: застройка идёт
+    # кварталами одной эпохи, и медиана по округе честнее любой константы.
+    known = [i for i, v in enumerate(lv) if v]
+    kx = np.array([rings[i][1] for i in known])
+    ky = np.array([rings[i][2] for i in known])
+    kv = np.array([lv[i] for i in known], float)
+    src = {"свой тег": len(known), "по соседям": 0, "по умолчанию": 0}
+    heights = []
+    for i, (xy, cx, cy, ix, iy) in enumerate(rings):
+        if lv[i]:
+            heights.append(lv[i] * STOREY_M)
+            continue
+        for r in NEAR_M:
+            near = (np.abs(kx - cx) < r) & (np.abs(ky - cy) < r)
+            if near.any():
+                heights.append(float(np.median(kv[near])) * STOREY_M)
+                src["по соседям"] += 1
+                break
+        else:
+            heights.append(HOUSE_M)
+            src["по умолчанию"] += 1
+
+    out = {}
+    for (xy, cx, cy, ix, iy), h in zip(rings, heights):
+        # Земля под пятном: подошва по самой низкой точке, крыша от медианы.
+        # Иначе дом на склоне либо висит углом, либо тонет в бугре.
+        gx = np.clip([int(round((p[0] - X0) / STEP)) for p in xy], 0, NX - 1)
+        gy = np.clip([int(round((p[1] - Y0) / STEP)) for p in xy], 0, NY - 1)
+        g = HEIGHT[gy, gx]
+        base, roof = float(g.min()) - 1.0, float(np.median(g)) + h
+
+        ring = [(x, -y) for x, y in xy]        # мир -> оси сцены
+        a2 = sum(ring[k][0] * ring[(k + 1) % len(ring)][1]
+                 - ring[(k + 1) % len(ring)][0] * ring[k][1]
+                 for k in range(len(ring)))
+        # Ориентация закрепляется знаком площади: при a2 < 0 крыша смотрит
+        # вверх, а стенки, намотанные в том же порядке, — наружу. Знак выведен
+        # на бумаге и совпадает с намоткой земли.
+        if a2 > 0:
+            ring.reverse()
+        tri = earclip(ring)
+        if not tri:
+            continue
+
+        key = (min((ix // CHUNK) * CHUNK, NX - 2), min((iy // CHUNK) * CHUNK, NY - 2))
+        vp, vi = out.setdefault(key, ([], []))
+        n0 = len(vp)
+        for x, z in ring:
+            vp.append((x, roof, z))
+        for a, b, c in tri:
+            vi.extend([n0 + a, n0 + b, n0 + c])
+        m = len(ring)
+        for k in range(m):
+            x1, z1 = ring[k]
+            x2, z2 = ring[(k + 1) % m]
+            n = len(vp)
+            vp.extend([(x1, base, z1), (x2, base, z2), (x2, roof, z2), (x1, roof, z1)])
+            vi.extend([n, n + 1, n + 2, n, n + 2, n + 3])
+
+    return {k: (np.array(v[0], np.float32), np.array(v[1], np.uint32))
+            for k, v in out.items()}, src, len(rings)
+
 
 
 # --- геометрия ----------------------------------------------------------------
@@ -280,6 +532,8 @@ def main():
                     help="на сколько клеток нарастить видимое")
     ap.add_argument("--chunk", type=int, default=144,
                     help="ячеек в куске: меньше кусков — меньше вызовов")
+    ap.add_argument("--no-buildings", action="store_true",
+                    help="оставить кубики вместо контуров из OSM")
     ap.add_argument("--no-cull", action="store_true",
                     help="оставить весь покров (для сравнения)")
     ap.add_argument("--no-draco", action="store_true")
@@ -366,6 +620,13 @@ def main():
         nodes.append({"mesh": len(meshes) - 1, "name": name})
         return len(idx) // 3
 
+    houses = None
+    if not args.no_buildings:
+        houses, src, n = building_meshes(p, keep & (cls == 2))
+        print("зданий из OSM в видимой полосе: %d; высота — %s"
+              % (n, ", ".join("%s %d (%.0f %%)" % (k, v, 100 * v / max(n, 1))
+                              for k, v in src.items())))
+
     tris = {"земля": 0, "лес": 0, "застройка": 0}
     for iy0 in range(0, NY - 1, CHUNK):
         for ix0 in range(0, NX - 1, CHUNK):
@@ -388,9 +649,11 @@ def main():
                     col, np.repeat(srgb_to_linear(hex_rgb(COVER_COLOUR[1]))[None],
                                    len(got[0]), 0).astype(np.float32)])
             add_mesh("land_%d_%d" % (ix0, iy0), pos, idx, 0, col)
-            # Застройка остаётся своим узлом: у неё свой цвет, и на неё есть
-            # виды — её ещё предстоит заменить настоящими зданиями.
-            got = cover_chunk(ix0, iy0, nx, ny, keep & (cls == 2))
+            # Застройка своим узлом: у неё свой цвет и своя геометрия.
+            if houses is not None:
+                got = houses.get((ix0, iy0))
+            else:
+                got = cover_chunk(ix0, iy0, nx, ny, keep & (cls == 2))
             if got is not None:
                 tris["застройка"] += add_mesh(
                     "застройка_%d_%d" % (ix0, iy0), got[0], got[1], 1)

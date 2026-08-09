@@ -31,7 +31,7 @@ GLTF_BUNDLE = "three.gltf.js"
 
 # Всё, что вклеивается в страницу, в порядке объявления.
 MODULES = ["util.js", "terrain.js", "axes.js", "wind.js", "vlm.js",
-           "membrane.js", "waves.js", "buoyancy.js", "ocean.js", "wake.js",
+           "membrane.js", "polar.js", "waves.js", "buoyancy.js", "ocean.js", "wake.js",
            "aero.js", "hydro.js", "telemetry.js", "trace.js", "physics.js",
            "main.js", "debug.js", "controls.js", "bench.js"]
 

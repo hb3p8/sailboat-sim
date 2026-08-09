@@ -76,9 +76,15 @@ let CEIL = null;
 export function polarCeiling(camber) {
   if (!CEIL) {
     CEIL = TABLE.camber.map((c, k) => {
+      // Ищется только В РАБОЧЕЙ ЧЕТВЕРТИ, от нуля до четырнадцати градусов.
+      // Таблица идёт на весь круг, и за срывом все сечения переходят к плоской
+      // пластине, у которой на −135° своя вершина в единицу; она перебивала
+      // вершину плоского паруса (0.83) и делала потолок неверным при малом пузе.
       let m = 0;
       for (let i = 0; i < TABLE.alpha_deg.length; i++) {
-        if (TABLE.alpha_deg[i] > 14) break;
+        const a = TABLE.alpha_deg[i];
+        if (a < 0) continue;
+        if (a > 14) break;
         m = Math.max(m, TABLE.cl[k][i]);
       }
       return m;
@@ -88,8 +94,32 @@ export function polarCeiling(camber) {
   return CEIL[ic] + (CEIL[ic + 1] - CEIL[ic]) * tc;
 }
 
+// Угол срыва по пузу, градусы: там, где таблица берёт наибольшую подъёмную силу.
+// Раньше он был назначен — тринадцать градусов при любом пузе. Измерено: 9.5° у
+// плоской пластины, 13° при восьми процентах, 12.5° при десяти. То есть плоский
+// парус сдаёт заметно раньше пузатого, чего назначенное число не знало вовсе.
+let STALL = null;
+
+export function polarStallDeg(camber) {
+  if (!STALL) {
+    STALL = TABLE.camber.map((c, k) => {
+      let m = 0, at = 0;
+      for (let i = 0; i < TABLE.alpha_deg.length; i++) {
+        const a = TABLE.alpha_deg[i];
+        if (a < 0) continue;                 // см. оговорку у потолка
+        if (a > 20) break;
+        if (TABLE.cl[k][i] > m) { m = TABLE.cl[k][i]; at = a; }
+      }
+      return at;
+    });
+  }
+  const [ic, tc] = slot(TABLE.camber, Math.abs(camber));
+  return STALL[ic] + (STALL[ic + 1] - STALL[ic]) * tc;
+}
+
 // Сброс памяти о потолке — нужен только тем, кто подменяет таблицу на ходу
 // (батареи).
 export function resetSailPolar() {
   CEIL = null;
+  STALL = null;
 }

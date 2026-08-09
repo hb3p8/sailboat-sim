@@ -112,7 +112,7 @@ PYSLOW := coupled
 # Батареи на питоне стоят особняком: они проверяют не симулятор, а то, что
 # считается ДО него и уезжает в пакет. Поэтому и запускаются интерпретатором из
 # .venv — им нужен numpy, которого системному питону никто не обещал.
-PYTESTS := section bl panel milgram
+PYTESTS := section bl panel milgram polar
 
 .PHONY: $(addprefix t-,$(FAST) $(SLOW) $(PYTESTS) $(PYSLOW)) slow all-tests
 

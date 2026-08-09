@@ -25,7 +25,7 @@ import sys
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from sv20 import (appendages, calibrate, hullmodel, hydro, meshops,  # noqa: E402
+from sv20 import (appendages, calibrate, hullmodel, hydro, meshops, polar,  # noqa: E402
                   righting, sailplan, stability, wavemaking)
 
 RHO_WATER = 1025.0
@@ -390,6 +390,11 @@ def main():
                             rudder["x_stock_mm"] / 1000.0),
         },
         "rig": _rig(feats["sail_plan"], hull),
+        # Поляра сечения паруса — из опыта, а не из формулы. Собирается в
+        # sv20/polar.py; что там измерено, а что достроено, написано в самом
+        # модуле. Кладётся рядом с ригом, а не внутрь: она про СЕЧЕНИЕ и от
+        # обмера конкретной лодки не зависит.
+        "sail_polar": polar.build_table(),
     }
 
     with open(os.path.join(dst, "physics.json"), "w") as f:

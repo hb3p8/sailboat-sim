@@ -16,7 +16,21 @@ import { Lattice } from './vlm.js';
 import { membraneCamber, slackOf, luffFraction, luffFactor, sectionLift,
          capLift, liftCeiling } from './membrane.js';
 import { setSailPolar, hasSailPolar, polarCoeffs, polarCeiling,
-         polarStallDeg } from './polar.js';
+         polarStallDeg, resetSailPolar } from './polar.js';
+
+// Таблица поляры, приехавшая в пакете. Держится здесь, чтобы можно было
+// переключаться между измеренной поляной и прежними формулами на ходу и
+// смотреть их один к одному, не пересобирая страницу.
+let SAIL_POLAR = null;
+
+export function setSailPhysics(old) {
+  setSailPolar(old ? null : SAIL_POLAR);
+  resetSailPolar();
+}
+
+export function sailPhysicsIsOld() {
+  return !hasSailPolar();
+}
 
 // Полосок на парус. Шесть хватает: профиль ветра по высоте гладкий, и на
 // восьми ответ отличается меньше чем на процент, а считать нужно каждый кадр.
@@ -391,7 +405,8 @@ export class Rig {
     // тащить её сквозь каждый вызов коэффициентов сечения незачем. Пакета без
     // неё быть не должно, но если он старый — модель откатится на прежние
     // формулы, а не упадёт.
-    setSailPolar(pack.sail_polar);
+    SAIL_POLAR = pack.sail_polar || null;
+    setSailPolar(SAIL_POLAR);
     const rig = this.p.rig;
     // Обводы сняты с плана парусности 610.pdf (src/sv20/sailplan.py) и лежат
     // в пакете: передняя шкаторина от галсового угла к фаловому, задняя от
@@ -595,7 +610,7 @@ export class Rig {
       const ve = Math.hypot(w1, w2);
       d.h = st.h; d.z = zi; d.area = area; d.ws = a.ws;
       g.xi = xi; g.yi = yi; g.zi = zi; g.area = area; g.ve = ve; g.chord = chord;
-      g.live = ve >= 0.05;
+      g.live = ve >= 0.05 && (st.jib ? b.o.jibUp !== false : b.o.mainUp !== false);
       if (!g.live) {
         d.awaDeg = 0; d.alphaDeg = 0; d.indDeg = 0; d.cl = 0; d.drive = 0; d.side = 0;
         for (let k = 0; k < NCHORD; k++) lat.panels[i * NCHORD + k].speed = 0;
@@ -819,6 +834,14 @@ export class Rig {
           // таблицы с небольшим запасом: он обязан молчать на рабочих полосках
           // и включаться только там, где решётка выходит за всё измеренное.
           const camL = g.camPanel * camS[i];
+          // На прежней физике всё как было: сечение считалось той же формулой с
+          // тем же потолком, и достаточно потолка.
+          if (!hasSailPolar()) {
+            const w0 = (capLift(clRaw, liftCeiling(camL)) - clRaw) / (2 * Math.PI);
+            const g0 = Math.max(-NLIN_MAX, Math.min(NLIN_MAX, w0 * fadeOf(g.alpha)));
+            dA[i] += NLIN_RELAX * (g0 - dA[i]);
+            continue;
+          }
           const aRef = g.alpha + dA[i];
           const clThin = 2 * Math.PI * Math.sin(aRef + 2 * camL);
           // У самого нуля подъёмной силы отношение теряет смысл: обе величины

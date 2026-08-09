@@ -20,7 +20,6 @@ const DT = 1 / HZ;
 
 const stage = document.getElementById('stage');
 const hud = document.getElementById('hud');
-const rose = document.getElementById('rose');
 
 const scene = new Scene();
 const SKY = new Color(0xa8c4d8);
@@ -1401,6 +1400,10 @@ function shapeSails(side, dt) {
   // спереди паруса горб уезжает назад ровно так, как получилось в расчёте.
   const strips = boat.rig.stripCalc;
   const tele = boat.telemetry && boat.telemetry.strips;
+  // Убранный парус не рисуется. Полоски его физика уже не считает (aero.js),
+  // и оставить полотно на картинке значило бы показывать то, чего в силах нет.
+  mainSail.visible = boat.o.mainUp !== false;
+  jibSail.visible = boat.o.jibUp !== false;
   boat.rig.sails.forEach((sail, k) => {
     const mesh = k === 0 ? mainSail : jibSail;
     const a = mesh.geometry.attributes.position.array;
@@ -2400,7 +2403,8 @@ function startAt() {
 
 const ui = {};
 for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draft',
-                  'fetch', 'fetchover', 'cur', 'shd0', 'shk', 'shg', 'chan', 'chop', 'ssr'])
+                  'fetch', 'fetchover', 'cur', 'shd0', 'shk', 'shg', 'chan', 'chop', 'ssr',
+                  'mainsheet', 'jibsheet', 'mainup', 'jibup', 'oldsail'])
   ui[id] = document.getElementById(id);
 
 // --- вода на панели -----------------------------------------------------------
@@ -2838,7 +2842,7 @@ function frame() {
   updateCrew();
   if (orthoView) renderOrtho(bx, bz, fx, fz, sx, sz);
   else renderer.render(scene, camera);
-  if ((tick % 3) === 0) { updateHud(t); updateRose(t); if (debugMode === 1) updateRig(t);
+  if ((tick % 3) === 0) { updateHud(t); if (debugMode === 1) updateRig(t);
     if (debugMode === 2) updateBalCard();
     if (topShown) updateTop(); }
   tick++;
@@ -2905,34 +2909,6 @@ function updateHud(t) {
       ? '&nbsp;&nbsp;стаксель ' + (boat.o.jibTrim > 0 ? '+' : '') +
         (boat.o.jibTrim / D).toFixed(0) + '°' : '') + luff +
     (autopilot ? '&nbsp;&nbsp;<b>авторулевой</b>' : '') + '</div>';
-}
-
-// Роза: лодка всегда носом вверх, стрелки показывают, откуда дует истинный и
-// кажущийся ветер, серая линия — положение паруса. По ней видно, добран шкот
-// или вынесен, не заглядывая в цифры.
-function updateRose(t) {
-  if (!t) return;
-  const R = 46;
-  // Ноль наверху — нос, положительный угол вправо, то есть на правый борт.
-  const pt = (ang, r) => [56 + r * Math.sin(ang), 56 - r * Math.cos(ang)];
-  // Ветер справа — вектор кажущегося дует на левый борт, то есть ay < 0.
-  const stbd = roseSide(boat.apparentWind().angle);
-  const tw = (t.twaAbsDeg || 0) * D * stbd;
-  const aw = (t.awaDeg || 0) * D * stbd;
-  const [tx, ty] = pt(tw, R - 3);
-  const [ax, ay] = pt(aw, R - 3);
-  // Парус вынесен под ветер, то есть на борт, противоположный ветру.
-  const [sx, sy] = pt(Math.PI + boat.o.sheet * stbd, R - 16);
-  rose.innerHTML =
-    '<circle cx="56" cy="56" r="46" class="ring"/>' +
-    '<circle cx="56" cy="56" r="30" class="ring2"/>' +
-    '<path d="M56 20 L67 76 L56 68 L45 76 Z" class="boat"/>' +
-    '<line x1="56" y1="56" x2="' + sx.toFixed(1) + '" y2="' + sy.toFixed(1) +
-      '" class="sail"/>' +
-    '<line x1="' + tx.toFixed(1) + '" y1="' + ty.toFixed(1) +
-      '" x2="56" y2="56" class="tw"/>' +
-    '<line x1="' + ax.toFixed(1) + '" y1="' + ay.toFixed(1) +
-      '" x2="56" y2="56" class="aw"/>';
 }
 
 document.getElementById('cammode').textContent = CAMS[camMode];

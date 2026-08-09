@@ -39,18 +39,6 @@
     color: var(--dim); font-variant-numeric: tabular-nums;
   }
   #hud .ctl em { color: var(--accent); font-style: normal; }
-  #rosecard { top: 14px; left: 262px; padding: 8px; }
-  #rose { display: block; width: 112px; height: 112px; }
-  #rose .ring { fill: rgba(255,255,255,.05); stroke: rgba(255,255,255,.22); }
-  #rose .ring2 { fill: none; stroke: rgba(255,255,255,.10); }
-  #rose .boat { fill: rgba(255,255,255,.30); stroke: rgba(255,255,255,.5); }
-  #rose .sail { stroke: #cfd9e3; stroke-width: 3; stroke-linecap: round; }
-  #rose .tw { stroke: #6ee7a8; stroke-width: 3; stroke-linecap: round; }
-  #rose .aw { stroke: var(--accent); stroke-width: 3; stroke-linecap: round; }
-  #rosecard .legend {
-    margin-top: 4px; font-size: 10.5px; color: var(--dim); line-height: 1.5;
-  }
-  #rosecard .legend i { font-style: normal; font-weight: 700; }
   /* Ползунков больше, чем помещается в невысокое окно, — панель
      прокручивается, а не залезает под соседнюю карточку. Пока подсказки
      спрятаны, правый край её и есть, и панели достаётся вся высота. */
@@ -59,6 +47,7 @@
            overflow-y: auto; }
   body.hints #panel { max-height: calc(100vh - 360px); }
   #panel h2:not(:first-child) { margin-top: 14px; }
+  #panel label.flat { margin-bottom: 2px; }
   #panel h2 {
     font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
     color: var(--dim); margin: 0 0 8px; font-weight: 600;
@@ -161,14 +150,6 @@
 <div id="crash" hidden></div>
 <div id="stage"></div>
 <div id="hud" class="card"></div>
-<div id="rosecard" class="card">
-  <svg id="rose" viewBox="0 0 112 112"></svg>
-  <div class="legend">
-    <i style="color:#6ee7a8">—</i> истинный &nbsp;
-    <i style="color:#ffcf5a">—</i> кажущийся<br>
-    <i style="color:#cfd9e3">—</i> парус
-  </div>
-</div>
 <div id="panel" class="card">
   <h2>Условия</h2>
   <label><span class="cap"><span>Истинный ветер</span><span id="v-wind"></span></span>
@@ -193,6 +174,19 @@
     <input id="fetch" type="range" min="0" max="30" step="0.5" value="3"></label>
   <label id="curbox"><span class="cap"><span>Течение на стрежне</span><span id="v-cur"></span></span>
     <input id="cur" type="range" min="0" max="1.5" step="0.05" value="0.55"></label>
+
+  <h2>Паруса</h2>
+  <label><span class="cap">
+      <span><input id="mainup" type="checkbox" checked> Грот</span>
+      <span id="v-mainsheet"></span></span>
+    <input id="mainsheet" type="range" min="7" max="90" step="1" value="25"></label>
+  <label><span class="cap">
+      <span><input id="jibup" type="checkbox" checked> Стаксель</span>
+      <span id="v-jibsheet"></span></span>
+    <input id="jibsheet" type="range" min="0" max="90" step="1" value="25"></label>
+  <label class="flat"><span class="cap">
+      <span><input id="oldsail" type="checkbox"> Прежняя физика паруса</span>
+      <span id="v-oldsail"></span></span></label>
 
   <h2>Волна</h2>
   <div class="cap"><span>Высота значительная</span><span id="v-seahs"></span></div>
@@ -346,6 +340,8 @@ const BUILD = /*__BUILD__*/ null;
     sailscale: v => '×' + (+v).toFixed(2),
     gust: v => (+v === 0 ? 'ровный' : '±' + (+v * 100).toFixed(0) + '%'),
     twist: v => (+v).toFixed(0) + '°',
+    mainsheet: v => (+v).toFixed(0) + '°',
+    jibsheet: v => (+v).toFixed(0) + '°',
     draft: v => (+v).toFixed(0) + '%',
     fetch: v => (+v === 0 ? 'гладкая вода' : (+v).toFixed(1) + ' км'),
     cur: v => (+v === 0 ? 'стоячая вода' : (+v).toFixed(2) + ' м/с (' +

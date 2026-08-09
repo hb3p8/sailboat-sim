@@ -64,17 +64,42 @@ function readControls(dt) {
   // свойство, а не интерфейса.
   o.rudderTarget = (!target && !autopilot) ? 0 : target;
 
+  // Шкоты: клавиши и ползунки — одно и то же, и ползунок всегда показывает
+  // настоящее положение. Клавиши двигают величину, а ползунок за ней следует;
+  // потянули ползунок — величина берётся с него. Кто последний тронул, тот и
+  // прав, и никакой борьбы двух источников за одно число не выходит.
   const sr = 32 * D;
-  if (keys.ArrowUp || keys.KeyW) o.sheet -= sr * dt;
-  if (keys.ArrowDown || keys.KeyS) o.sheet += sr * dt;
+  let byKey = false;
+  if (keys.ArrowUp || keys.KeyW) { o.sheet -= sr * dt; byKey = true; }
+  if (keys.ArrowDown || keys.KeyS) { o.sheet += sr * dt; byKey = true; }
+  // Стаксель-шкот в физике живёт поправкой к общему, а на панели — своим
+  // углом: два независимых органа понятнее, чем «общий и добавка к нему».
+  // Перевод одной строкой, и он же держит связь: потравил грот — стаксель
+  // остался там, где стоял.
+  if (keys.KeyR) { o.jibTrim -= sr * dt; byKey = true; }
+  if (keys.KeyF) { o.jibTrim += sr * dt; byKey = true; }
+  if (!byKey && ui.mainsheet) {
+    o.sheet = parseFloat(ui.mainsheet.value) * D;
+    o.jibTrim = parseFloat(ui.jibsheet.value) * D - o.sheet;
+  }
   // Ближе семи градусов шкот не выбирается: мешают ванты и погон.
   o.sheet = Math.max(7 * D, Math.min(90 * D, o.sheet));
-  // Стаксель-шкот отдельно, поправкой к общему: R добрать, F потравить. Свой
-  // упор острее диаметральной у стакселя всё равно остаётся — его ставит
-  // каретка на погоне (physics.js), — так что дальше него не добрать.
-  if (keys.KeyR) o.jibTrim -= sr * dt;
-  if (keys.KeyF) o.jibTrim += sr * dt;
   o.jibTrim = Math.max(-30 * D, Math.min(55 * D, o.jibTrim));
+  if (ui.mainsheet) {
+    ui.mainsheet.value = (o.sheet / D).toFixed(0);
+    ui.jibsheet.value = ((o.sheet + o.jibTrim) / D).toFixed(0);
+    // Подпись ползунка обновляется его же событием `input`, а клавиши такого
+    // события не порождают. Поэтому при работе клавишами показ двигаем руками —
+    // иначе ползунок едет, а число рядом с ним стоит.
+    if (byKey) for (const el of [ui.mainsheet, ui.jibsheet])
+      el.dispatchEvent(new Event('input'));
+    o.mainUp = ui.mainup.checked;
+    o.jibUp = ui.jibup.checked;
+    // Переключатель физики паруса живёт не в состоянии лодки, а рядом с
+    // моделью: он про то, ЧЕМ считать, а не про то, как лодку ведут. Оттого его
+    // нет и в записи прогона.
+    if (ui.oldsail.checked !== sailPhysicsIsOld()) setSailPhysics(ui.oldsail.checked);
+  }
 
   o.windSpeed = parseFloat(ui.wind.value);
   const wd = parseFloat(ui.winddir.value) * D;

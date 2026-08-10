@@ -540,10 +540,40 @@ export class FreeWake {
     this.x = new Float64Array(fil * len);
     this.y = new Float64Array(fil * len);
     this.z = new Float64Array(fil * len);
-    this.g = new Float64Array(fil);        // сила нити
-    this.rc = new Float64Array(fil * len); // радиус ядра В КАЖДОМ узле
-    this.n = 0;                            // сколько узлов уже сошло
-    this.core = 0.05;                      // ядро свежесошедшего узла
+    // Состояние пелены — циркуляции КОЛЕЦ, а не нитей.
+    //
+    // Кольцо `f`, ряд `i` — это четырёхугольник между нитями f и f+1 и рядами
+    // узлов i и i+1, то есть кусок вихревого листа, сошедший с одной полоски за
+    // один шаг. Его циркуляция равна связанной циркуляции той полоски в момент
+    // схода и БОЛЬШЕ НЕ МЕНЯЕТСЯ: сошедший вихрь живёт своей жизнью, что бы
+    // дальше ни делал парус. В этом вся разница между следом и мгновенным
+    // снимком, и ради этого маршевая схема и берётся.
+    //
+    // Раньше у нити была одна сила на всю длину, и она переписывалась каждый
+    // шаг. Такая пелена не помнила ничего: потрави шкот — и весь след, включая
+    // сошедший секунду назад, мгновенно менял силу. Для картинки сходило, для
+    // сил не годится вовсе.
+    this.gr = new Float64Array(fil * len);  // циркуляция кольца [нить, ряд]
+    this.ring = new Int8Array(fil);         // есть ли за этой парой нитей парус
+    // Силы РЁБЕР — то, чем induced и пользуется. Собираются из колец раз в шаг:
+    // ребро общее у двух соседних колец и несёт их разность, поэтому считать его
+    // на каждой точке заново вчетверо дороже.
+    this.et = new Float64Array(fil * len);  // вдоль нити: узел (f,i) -> (f,i+1)
+    this.es = new Float64Array(fil * len);  // поперёк:    узел (f,i) -> (f+1,i)
+    // Куда уходит полубесконечный хвост — единичный вектор, ОДИН на всю пелену.
+    //
+    // Направление берётся по набегающему потоку, а не по последнему звену нити.
+    // Разница видна только на полном курсе, зато там она решает всё: пелена там
+    // сворачивается в клубок, направление последнего звена случайно, и луч в
+    // бесконечность бьёт сквозь собственную пелену. Излом нити от этого 29° на
+    // узел вместо 3.7 — то есть по картинке не отличить от прежнего разноса, а
+    // причина совсем другая. Далеко за кормой пелена всё равно вытягивается
+    // вдоль потока, так что честнее сразу туда её и продолжать.
+    this.tx = 1; this.ty = 0; this.tz = 0;
+    this.g = new Float64Array(fil);         // сила нити у кромки — только для цвета
+    this.rc = new Float64Array(fil * len);  // радиус ядра В КАЖДОМ узле
+    this.n = 0;                             // сколько узлов уже сошло
+    this.core = 0.05;                       // ядро свежесошедшего узла
   }
 
   clear() { this.n = 0; }
@@ -559,29 +589,85 @@ export class FreeWake {
   // и узел ехал со скоростью 2000 м/с при кажущемся ветре 4.5. Ядро на звено
   // берётся как средний квадрат по его концам.
   induced(px, py, pz, ground, out) {
-    const L = this.len, t = [0, 0, 0];
+    const L = this.len, N = this.n, t = [0, 0, 0];
     let ox = 0, oy = 0, oz = 0;
+    if (N < 2) { out[0] = out[1] = out[2] = 0; return out; }
     for (let f = 0; f < this.fil; f++) {
-      const g = this.g[f];
-      if (!g) continue;
-      let vx = 0, vy = 0, vz = 0;
       const b = f * L;
-      for (let i = 0; i + 1 < this.n; i++) {
+      // Рёбра вдоль нити.
+      for (let i = 0; i + 1 < N; i++) {
+        const g = this.et[b + i];
+        if (!g) continue;
         const p = b + i, q = p + 1;
         const rc2 = 0.5 * (this.rc[p] * this.rc[p] + this.rc[q] * this.rc[q]);
         segment(px, py, pz, this.x[p], this.y[p], this.z[p],
                 this.x[q], this.y[q], this.z[q], t, rc2);
-        vx += t[0]; vy += t[1]; vz += t[2];
+        ox += g * t[0]; oy += g * t[1]; oz += g * t[2];
         if (ground) {
           segment(px, py, pz, this.x[p], this.y[p], -this.z[p],
                   this.x[q], this.y[q], -this.z[q], t, rc2);
-          vx -= t[0]; vy -= t[1]; vz -= t[2];
+          ox -= g * t[0]; oy -= g * t[1]; oz -= g * t[2];
         }
       }
-      ox += g * vx; oy += g * vy; oz += g * vz;
+      // Рёбра поперёк — сошедшая завихренность. Ряд 0 пропускается: свежий ряд
+      // сошёл с той же циркуляцией, что стоит на парусе сейчас, и разность там
+      // тождественный ноль.
+      if (f + 1 < this.fil) {
+        for (let i = 1; i < N; i++) {
+          const g = this.es[b + i];
+          if (!g) continue;
+          const p = b + i, q = p + L;
+          const rc2 = 0.5 * (this.rc[p] * this.rc[p] + this.rc[q] * this.rc[q]);
+          segment(px, py, pz, this.x[p], this.y[p], this.z[p],
+                  this.x[q], this.y[q], this.z[q], t, rc2);
+          ox += g * t[0]; oy += g * t[1]; oz += g * t[2];
+          if (ground) {
+            segment(px, py, pz, this.x[p], this.y[p], -this.z[p],
+                    this.x[q], this.y[q], -this.z[q], t, rc2);
+            ox -= g * t[0]; oy -= g * t[1]; oz -= g * t[2];
+          }
+        }
+      }
+      // Хвост: дальний ряд не обрывается, а уходит по своему же направлению в
+      // бесконечность. Оборванная нить наводит НЕ ТО, что тянущаяся до конца, —
+      // у неё на конце берётся ниоткуда источник завихренности, которого в
+      // природе нет (Гельмгольц: вихревая нить не может кончиться в жидкости).
+      const g = this.et[b + N - 1];
+      if (g) {
+        const p = b + N - 1;
+        const rc2 = this.rc[p] * this.rc[p];
+        tail(px, py, pz, this.x[p], this.y[p], this.z[p],
+             this.tx, this.ty, this.tz, t, rc2);
+        ox += g * t[0]; oy += g * t[1]; oz += g * t[2];
+        if (ground) {
+          tail(px, py, pz, this.x[p], this.y[p], -this.z[p],
+               this.tx, this.ty, -this.tz, t, rc2);
+          ox -= g * t[0]; oy -= g * t[1]; oz -= g * t[2];
+        }
+      }
     }
     out[0] = ox; out[1] = oy; out[2] = oz;
     return out;
+  }
+
+  // Силы рёбер из циркуляций колец. Раз в шаг, а не на каждой точке запроса.
+  //
+  // Ребро вдоль нити общее у колец f-1 и f и несёт их разность; ребро поперёк
+  // общее у соседних по возрасту рядов одного кольца и несёт разность по
+  // времени. Собранная так пелена замкнута по Гельмгольцу сама собой: в каждом
+  // узле сколько завихренности втекло, столько и вытекло, и проверять это можно
+  // числом (tests/wake.test.mjs).
+  edges() {
+    const L = this.len, F = this.fil, N = this.n;
+    for (let f = 0; f < F; f++) {
+      const b = f * L;
+      for (let i = 0; i < N; i++) {
+        const lo = f > 0 ? this.gr[b - L + i] : 0;
+        this.et[b + i] = lo - this.gr[b + i];
+        this.es[b + i] = i > 0 ? this.gr[b + i] - this.gr[b + i - 1] : 0;
+      }
+      this.g[f] = this.et[b];
+    }
   }
 
   // Шаг: сперва сносим то, что есть, потом сажаем на кромку новый узел.
@@ -598,10 +684,10 @@ export class FreeWake {
   // старых узлов, и только потом все узлы переезжают.
   //
   // `seed(f, out)` даёт точку схода нити, `vel(x, y, z, out)` — местную
-  // скорость, `gam` — силы нитей.
-  step(dt, seed, vel, gam) {
+  // скорость, `gring` — связанные циркуляции полосок (нулевые там, где между
+  // соседними нитями паруса нет).
+  step(dt, seed, vel, gring) {
     const L = this.len, N = this.fil * L, v = [0, 0, 0], p = [0, 0, 0];
-    for (let f = 0; f < this.fil; f++) this.g[f] = gam[f];
     if (!this.vx || this.vx.length !== N) {
       this.vx = new Float64Array(N);
       this.vy = new Float64Array(N);
@@ -629,12 +715,20 @@ export class FreeWake {
           this.rc[k + 1] = Math.sqrt(this.rc[k] * this.rc[k] + CORE_GROW * dt);
         }
       }
+      // Кольца стареют вместе с узлами. Сдвиг идёт с конца, чтобы не затереть
+      // ещё не переехавшее.
+      for (let i = Math.min(this.n, L - 2); i >= 0; i--) {
+        this.gr[b + i + 1] = this.gr[b + i];
+      }
       seed(f, p);
       this.x[b] = p[0]; this.y[b] = p[1]; this.z[b] = p[2];
       this.rc[b] = this.core;
+      this.gr[b] = gring[f];
+      this.ring[f] = gring[f] !== 0 ? 1 : this.ring[f];
     }
     if (this.n < L) this.n++;
     this.spaceCore();
+    this.edges();
   }
 
   // Ядро не может быть меньше половины расстояния до соседней нити.

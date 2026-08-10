@@ -775,13 +775,15 @@ function updateWake() {
   if (wakeMade !== w.fil) wakeGeometry(w.fil, L);
   const p = wakeGeo.attributes.position.array;
   const c = wakeGeo.attributes.color.array;
+  // Сила у КАЖДОГО звена своя, а не одна на нить. Теперь это не придирка:
+  // кольцо помнит циркуляцию момента схода, и по цвету с толщиной читается
+  // история — рванули шкот, и по пелене от паруса вглубь побежала перетяжка.
   let peak = 1e-6;
-  for (let f = 0; f < w.fil; f++) peak = Math.max(peak, Math.abs(w.g[f]));
+  for (let f = 0; f < w.fil; f++)
+    for (let i = 0; i < w.n; i++) peak = Math.max(peak, Math.abs(w.et[f * L + i]));
 
   for (let f = 0; f < w.fil; f++) {
-    const g = w.g[f], b = f * L;
-    const col = g >= 0 ? WAKE_POS : WAKE_NEG;
-    const rel = Math.min(1, Math.abs(g) / peak);
+    const b = f * L;
     // Яркость и толщина обе по силе, но по-разному: яркость с высоким полом,
     // чтобы слабая нить не пропала на тёмной воде, толщина от нуля — чтобы
     // сильную было видно сразу.
@@ -792,11 +794,14 @@ function updateWake() {
     // это неотличимо от фона. Из четырнадцати нитей было видно две. Поэтому
     // здесь яркость полная у всех, а сила остаётся только в толщине, и у той
     // поднят пол.
-    const relD = wakeDark ? 0.3 + 0.7 * rel : rel;
-    const a = wakeDark ? 1 : 0.55 + 0.45 * rel;
-    const R = (WAKE_R0 + WAKE_R1 * relD) * (wakeDark ? WAKE_BOLD : 1);
     for (let i = 0; i < L; i++) {
       const k = b + Math.min(i, w.n - 1);
+      const g = w.et[k];
+      const col = g >= 0 ? WAKE_POS : WAKE_NEG;
+      const rel = Math.min(1, Math.abs(g) / peak);
+      const relD = wakeDark ? 0.3 + 0.7 * rel : rel;
+      const a = wakeDark ? 1 : 0.55 + 0.45 * rel;
+      const R = (WAKE_R0 + WAKE_R1 * relD) * (wakeDark ? WAKE_BOLD : 1);
       // Касательная — на следующий узел, у последнего на предыдущий.
       const k2 = b + Math.min(i + 1, w.n - 1), k0 = b + Math.max(0, Math.min(i, w.n - 1) - 1);
       const ax0 = w.x[k2] - w.x[k0], ay0 = w.y[k2] - w.y[k0], az0 = w.z[k2] - w.z[k0];
@@ -856,7 +861,7 @@ function updateWake() {
     q[o] = toSceneX(w.x[k]);
     q[o + 1] = w.z[k];
     q[o + 2] = toSceneZ(w.y[k]);
-    const col = w.g[f] >= 0 ? WAKE_POS : WAKE_NEG;
+    const col = w.et[k] >= 0 ? WAKE_POS : WAKE_NEG;
     qc[o] = col[0]; qc[o + 1] = col[1]; qc[o + 2] = col[2];
     m++;
   };

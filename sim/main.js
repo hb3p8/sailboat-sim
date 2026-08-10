@@ -52,6 +52,14 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 // Фон задаётся сценой, а не setClearColor: у WebGPU-рендерера очистка цветом
 // до неба не доходит, и небо остаётся чёрным.
 scene.background = SKY;
+
+// Контрастный вид пелены: сцена снята, нити жирные. Переключает его debug.js, а
+// объявлено здесь нарочно. Сборка вклеивает файлы в общую область в порядке
+// main, debug, controls, и `let` из debug.js для main.js — временная мёртвая
+// зона: паруса прячутся в `updateSails`, а она успевает отработать при постройке
+// сцены, до того как debug.js вообще будет прочитан. Читалось это как
+// «Cannot access 'wakeDark' before initialization» и клало всю страницу.
+let wakeDark = false;
 stage.appendChild(renderer.domElement);
 
 scene.add(new HemisphereLight(0xe8f4ff, 0x2b4a63, 2.4));
@@ -1406,8 +1414,11 @@ function shapeSails(side, dt) {
   const tele = boat.telemetry && boat.telemetry.strips;
   // Убранный парус не рисуется. Полоски его физика уже не считает (aero.js),
   // и оставить полотно на картинке значило бы показывать то, чего в силах нет.
-  mainSail.visible = boat.o.mainUp !== false;
-  jibSail.visible = boat.o.jibUp !== false;
+  // На чёрном паруса сняты: полупрозрачное полотно съедает нити, ради которых
+  // вид и включён. Условие тут, а не в setDebug, потому что видимость паруса
+  // переставляется каждый кадр — по тому, поставлен он или убран.
+  mainSail.visible = !wakeDark && boat.o.mainUp !== false;
+  jibSail.visible = !wakeDark && boat.o.jibUp !== false;
   boat.rig.sails.forEach((sail, k) => {
     const mesh = k === 0 ? mainSail : jibSail;
     const a = mesh.geometry.attributes.position.array;
@@ -2144,7 +2155,7 @@ function updateStreaks(ix, iy, dt) {
   // мир, а уже потом в сцену.
   const aw = aw0;
   const V = Math.hypot(aw.x, aw.y);
-  streakMesh.visible = amp > 0.01 && V > 0.3;
+  streakMesh.visible = !wakeDark && amp > 0.01 && V > 0.3;
   topView.on = streakMesh.visible;
   if (!streakMesh.visible) return;
   const awDir = Math.atan2(aw.y, aw.x) + boat.psi;       // куда дует, в мире
@@ -2451,6 +2462,9 @@ function saveDump() {
 // открывается двойным кликом и работает, просто без берега. Физика от этого не
 // зависит вовсе — поля разгона, укрытия и глубин приходят пакетом и вклеены
 // по-прежнему.
+// Ручка на загруженный берег: контрастный вид пелены его снимает, а достать
+// его больше неоткуда — он приходит в сцену изнутри загрузчика.
+let terrainScene = null;
 if (terrain.ready) {
   new GLTFLoader()
     .setDRACOLoader(new DRACOLoader().setDecoderPath('../viewer/vendor/draco/'))
@@ -2473,6 +2487,7 @@ if (terrain.ready) {
       // нуле. Проще опустить участок к нулю, чем поднимать лодку: у лодки в нуле
       // сидят и волны, и след, и знаки.
       gltf.scene.position.y = -TERRAIN_PACK.level;
+      terrainScene = gltf.scene;
       scene.add(gltf.scene);
       console.log('акватория: %d кусков, %s тыс. треугольников',
                   gltf.scene.children.length, (tris / 1000).toFixed(0));
@@ -2877,22 +2892,22 @@ function frame() {
   seaWindDir.value = boat.wind.o.dir;
   seaWindSpeed.value = boat.wind.o.speed;
   seaTime.value = boat.t;
-  if (debugOn) updateGrid(toSceneX(ix), toSceneZ(iy));
-  seaProbeMarks.visible = debugOn && camMode !== HIGH_CAM;
+  if (debugOn && !wakeDark) updateGrid(toSceneX(ix), toSceneZ(iy));
+  seaProbeMarks.visible = debugOn && !wakeDark && camMode !== HIGH_CAM;
   if (seaProbeMarks.visible) updateSeaProbes(ix, iy, ipsi);
   updateStreaks(toSceneX(ix), toSceneZ(iy), dt);
-  // Свободная пелена считается только в виде потока: она стоит около девяти
-  // миллисекунд на шаг физики, а в силы (пока) не входит вовсе. Включать её
-  // всегда значило бы платить треть кадра за то, чего не видно.
-  boat.o.freeWake = debugMode === 2;
+  // Свободная пелена считается только в своих двух видах: она стоит около
+  // девяти миллисекунд на шаг физики, а в силы (пока) не входит вовсе. Включать
+  // её всегда значило бы платить треть кадра за то, чего не видно.
+  boat.o.freeWake = debugMode === 2 || debugMode === 3;
   curField.visible = debugMode === 1 && terrain.ready && boat.o.current > 0;
-  if (debugMode === 2 && (steps || benchFrozen())) updateWake();
-  if (debugMode === 3) updateBalance();
+  if ((debugMode === 2 || debugMode === 3) && (steps || benchFrozen())) updateWake();
+  if (debugMode === 4) updateBalance();
   // Группа отладочной геометрии стоит на лодке и смотрит с ней в одну сторону.
   // Обновляется для ОБОИХ видов, а не только для линий тока: латы показываются и
   // в пелене, а с непереставленной группой они висели бы там, где лодка была в
   // последний раз, когда смотрели поток.
-  if (debugMode === 1 || debugMode === 2) {
+  if (debugMode >= 1 && debugMode <= 3) {
     flowGroup.position.set(toSceneX(ix), 0, toSceneZ(iy));
     flowGroup.rotation.y = headingRotY(ipsi);
     updateBattens(side);
@@ -2955,7 +2970,7 @@ function frame() {
   // на воде, наоборот, гасится: она мерит скорость на глаз, а с двух километров
   // её стометровый лоскут читается заплаткой, а не масштабом.
   grid.visible = camMode !== HIGH_CAM;
-  mark.visible = camMode === HIGH_CAM;
+  mark.visible = !wakeDark && camMode === HIGH_CAM;
   if (mark.visible) {
     mark.position.set(bx, 1.0, bz);
     mark.rotation.y = headingRotY(ipsi);
@@ -2983,8 +2998,8 @@ function frame() {
   updateCrew();
   if (orthoView) renderOrtho(bx, bz, fx, fz, sx, sz);
   else renderer.render(scene, camera);
-  if ((tick % 3) === 0) { updateHud(t); if (debugMode === 1 || debugMode === 2) updateRig(t);
-    if (debugMode === 3) updateBalCard();
+  if ((tick % 3) === 0) { updateHud(t); if (debugMode >= 1 && debugMode <= 3) updateRig(t);
+    if (debugMode === 4) updateBalCard();
     if (topShown) updateTop(); }
   tick++;
   requestAnimationFrame(frame);

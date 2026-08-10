@@ -718,6 +718,12 @@ wakeGroup.add(wakeSheet);
 // Это отладочный вид, читаемость тут важнее буквальности — у настоящей вихревой
 // нити толщины нет вовсе.
 const WAKE_R0 = 0.06, WAKE_R1 = 0.10;
+// На чёрном нити чуть толще: там их не с чем сравнивать — ни воды, ни паруса
+// рядом. Но именно ЧУТЬ. Узлы сходят каждый шаг и лежат в двадцати сантиметрах
+// друг от друга, и труба радиусом в полметра — это уже не трубка, а стопка
+// блинов: соседние кольца перекрывают друг друга целиком, и вместо нити на
+// экране цепочка отдельных плит. Втрое так и выглядело.
+const WAKE_BOLD = 1.2;
 const WAKE_SIDES = 5;
 let wakeMade = 0;                       // на сколько нитей построены индексы
 
@@ -736,8 +742,31 @@ function wakeGeometry(fil, len) {
     }
   }
   wakeGeo.setIndex(idx);
+  // Полотну буферы отводятся здесь же и на всю длину. Отдельная причина ниже:
+  // дорастить их потом уже нельзя.
+  const tris = (fil - 1) * (len - 1) * 2;
+  wakeSheetGeo.setAttribute('position',
+    new Float32BufferAttribute(new Float32Array(tris * 3 * 3), 3));
+  wakeSheetGeo.setAttribute('color',
+    new Float32BufferAttribute(new Float32Array(tris * 3 * 3), 3));
+  wakeSheetGeo.setDrawRange(0, 0);
   wakeMade = fil;
 }
+
+// Буферы заводятся СРАЗУ, а не при первом сошедшем узле.
+//
+// WebGPU собирает конвейер отрисовки под конкретный набор атрибутов геометрии и
+// держит его в кэше. Пустая геометрия в первом же кадре — а до первого узла она
+// пуста — собирает конвейер БЕЗ `position`, и дальше он таким и остаётся: узлы
+// считаются, буфер заполняется, `visible` поднят, а на экране ничего. В консоли
+// при этом ровно одна строчка: «Vertex attribute "position" not found». В WebGL
+// такого не бывает, там атрибуты перечитываются каждый кадр, — и потому эта
+// ошибка вылезает только на настоящей странице и только в трубках: у полотна
+// буфер заводился раньше, и оно рисовалось.
+//
+// Число нитей то же, что в aero.js: границы полосок плюс лишняя на стыке
+// парусов. Разойдётся — `wakeGeometry` пересоберёт по месту.
+wakeGeometry(boat.rig.strips.length + 2, 40);
 
 function updateWake() {
   const w = boat.rig.wake;
@@ -756,8 +785,16 @@ function updateWake() {
     // Яркость и толщина обе по силе, но по-разному: яркость с высоким полом,
     // чтобы слабая нить не пропала на тёмной воде, толщина от нуля — чтобы
     // сильную было видно сразу.
-    const a = 0.55 + 0.45 * rel;
-    const R = WAKE_R0 + WAKE_R1 * rel;
+    //
+    // На чёрном оба закона другие, и это не вкусовщина. Сила у корневой нити
+    // семь, у остальных полторы: доля от наибольшей выходит 0.05, и слабая нить
+    // получала яркость 0.57 от и без того приглушённого цвета — на чёрном фоне
+    // это неотличимо от фона. Из четырнадцати нитей было видно две. Поэтому
+    // здесь яркость полная у всех, а сила остаётся только в толщине, и у той
+    // поднят пол.
+    const relD = wakeDark ? 0.3 + 0.7 * rel : rel;
+    const a = wakeDark ? 1 : 0.55 + 0.45 * rel;
+    const R = (WAKE_R0 + WAKE_R1 * relD) * (wakeDark ? WAKE_BOLD : 1);
     for (let i = 0; i < L; i++) {
       const k = b + Math.min(i, w.n - 1);
       // Касательная — на следующий узел, у последнего на предыдущий.
@@ -782,7 +819,9 @@ function updateWake() {
         // Тот же кант по нормали, что и у линий тока: сверху светлее, снизу
         // темнее, и трубка читается на любом фоне.
         const d = nx * FLOW_LIGHT[0] + ny * FLOW_LIGHT[1] + nz * FLOW_LIGHT[2];
-        const sh = a * (0.55 + 0.45 * (0.5 + 0.5 * d));
+        // Кант по нормали на чёрном мельче: там он не помогает читать форму, а
+        // только гасит половину трубки до фона.
+        const sh = a * ((wakeDark ? 0.75 : 0.55) + (wakeDark ? 0.25 : 0.45) * (0.5 + 0.5 * d));
         c[o] = col[0] * sh; c[o + 1] = col[1] * sh; c[o + 2] = col[2] * sh;
       }
     }
@@ -792,7 +831,14 @@ function updateWake() {
   // начало каждой. Так и вышло — из четырнадцати рисовались пять, остальных на
   // картинке не было вовсе. Несошедшие узлы при этом сидят копией последнего,
   // треугольники между ними вырождены и в кадр не попадают сами.
-  wakeGeo.setDrawRange(0, Infinity);
+  //
+  // Длина именно числом, а не `Infinity`. Бесконечность здесь читается как «весь
+  // буфер» только в WebGL, где счётчик потом обрезается по длине индекса; в
+  // WebGPU она уезжает в `drawIndexed` как есть, и не рисуется НИЧЕГО. Стоило
+  // это половины дня: пелена считалась, буфер заполнялся, `visible` был поднят,
+  // а на экране не было ни одной нити — видно было только полотно между ними,
+  // у которого длина конечная.
+  wakeGeo.setDrawRange(0, wakeGeo.index.count);
   wakeGeo.attributes.position.needsUpdate = true;
   wakeGeo.attributes.color.needsUpdate = true;
   wakeGeo.computeBoundingSphere();
@@ -802,15 +848,7 @@ function updateWake() {
   // ними натянуто.
   const quads = [];
   for (let f = 0; f + 1 < w.fil; f++) if (wakeSameSail(f)) quads.push(f);
-  const tris = quads.length * (w.n - 1) * 2;
-  let sp = wakeSheetGeo.attributes.position;
-  if (!sp || sp.count < tris * 3) {
-    wakeSheetGeo.setAttribute('position',
-      new Float32BufferAttribute(new Float32Array(tris * 3 * 3), 3));
-    wakeSheetGeo.setAttribute('color',
-      new Float32BufferAttribute(new Float32Array(tris * 3 * 3), 3));
-    sp = wakeSheetGeo.attributes.position;
-  }
+  const sp = wakeSheetGeo.attributes.position;
   const q = sp.array, qc = wakeSheetGeo.attributes.color.array;
   let m = 0;
   const put = (f, i) => {
@@ -1007,20 +1045,53 @@ function updateFlow() {
 // Отладочных видов теперь два, и клавиша одна: G крутит их по кругу — выключено,
 // поток, баланс. Держать под каждый свою клавишу дороже, чем нажать дважды, а
 // одновременно они и не нужны: стрелки поля ветра спорят со стрелками сил.
-// Четыре вида по кругу: выключено, поток, пелена, баланс. Пелена вынесена
-// отдельно от потока нарочно — вместе они не читаются: шестьдесят трубок линий
-// тока закрывают четырнадцать тонких нитей, ради которых всё и затевалось.
-const DEBUG_MODES = 4;
+// Пять видов по кругу: выключено, поток, пелена, пелена на чёрном, баланс.
+// Пелена вынесена отдельно от потока нарочно — вместе они не читаются:
+// шестьдесят трубок линий тока закрывают четырнадцать тонких нитей, ради
+// которых всё и затевалось.
+//
+// А «на чёрном» — потому что и без линий тока их не видно. Нить в шесть
+// сантиметров толщиной на фоне бликующей воды, за полупрозрачным парусом, в
+// сорока метрах от камеры — это один-два пикселя серого по серому. Уходит вода,
+// берег, небо, паруса, сетка и след; остаётся корпус для привязки и сама
+// пелена, вдвое толще и в полный цвет. Это не украшение вида, а единственный
+// способ увидеть, ЧТО именно посчиталось.
+const DEBUG_MODES = 5;
 let debugMode = 0;
 let debugOn = false;                 // «хоть какой-то» — им гасится общее
+// Что снимается на чёрном и каким оно было. Список строится при первом входе:
+// берег приезжает загрузчиком и на момент вклейки файла его ещё нет.
+let darkOff = null, darkWas = null, darkBg = null, darkFog = null;
+function setWakeDark(on) {
+  if (on === wakeDark) return;
+  wakeDark = on;
+  if (on) {
+    darkOff = [sea, terrainScene, mainSail, jibSail, telltales[0], telltales[1],
+               track, streakMesh, grid, arrow, mark, seaProbeMarks,
+               battens].filter(Boolean);
+    darkWas = darkOff.map(o => o.visible);
+    for (const o of darkOff) o.visible = false;
+    darkBg = scene.background; darkFog = scene.fog;
+    scene.background = new Color(0x05070a);
+    scene.fog = null;                // на чёрном туман только гасит нити
+  } else {
+    for (let i = 0; i < darkOff.length; i++) darkOff[i].visible = darkWas[i];
+    scene.background = darkBg; scene.fog = darkFog;
+    darkOff = null;
+  }
+}
 function setDebug(on) {
   debugMode = on === true ? 1 : on === false ? 0 : (on | 0) % DEBUG_MODES;
   debugOn = debugMode > 0;
   // Имена нарочно не `flow` и не `field`: так зовутся сами объекты сцены, и
   // локальная переменная их перекрывает — картинка при этом не ломается, а
   // падает вся отрисовка.
-  const isFlow = debugMode === 1, isWake = debugMode === 2, isBal = debugMode === 3;
+  const isFlow = debugMode === 1, isBal = debugMode === 4;
+  const isDark = debugMode === 3, isWake = debugMode === 2 || isDark;
   const on_ = debugOn;
+  // Порядок важен: чёрное снимает и ставит обратно видимость половины сцены, и
+  // делать это надо ДО того, как вид расставит свою.
+  setWakeDark(isDark);
   // Паруса приспускаются в прозрачность только в отладочном виде: там сквозь
   // них угадывается и поток, и колдунчик с подветренной стороны. В обычном
   // полотно должно быть полотном.
@@ -1034,14 +1105,20 @@ function setDebug(on) {
     m.opacity = on_ ? 0.9 : 1;
     m.needsUpdate = true;
   }
-  grid.visible = on_;
-  arrow.visible = on_;
+  if (!isDark) {
+    grid.visible = on_;
+    arrow.visible = on_;
+    battens.visible = isFlow || isWake;
+  }
   field.visible = isFlow;
-  battens.visible = isFlow || isWake;
   flow.visible = isFlow;
   flowGhost.visible = isFlow;
   wakeLines.visible = isWake;
-  wakeSheet.visible = isWake;
+  // Полотно — только в обычном виде. На чёрном оно закрывает собой ровно то,
+  // ради чего вид и включён: четырнадцать нитей, каждая по сорок узлов, — и
+  // тринадцать полос плёнки между ними складываются в глухую штору во весь
+  // экран. Нити внутри неё не видно вовсе.
+  wakeSheet.visible = isWake && !isDark;
   sepVeil.visible = sepVeil.visible && isFlow;
   balGroup.visible = isBal;
   document.getElementById('rigcard').hidden = !(isFlow || isWake);

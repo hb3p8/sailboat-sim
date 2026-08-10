@@ -381,7 +381,7 @@ export class Lattice {
   // стоит три сравнения на панель и в нынешнем риге отсекает всю добавку.
   //
   // Зеркало от воды: тот же контур, отражённый по Z, с обратным знаком.
-  induced(px, py, pz, ux, uy, uz, ground, out) {
+  induced(px, py, pz, ux, uy, uz, ground, out, noTail) {
     const n = this.n, P = this.panels, t = this._t;
     const rc2 = this.core * this.core;
     let ox = 0, oy = 0, oz = 0;
@@ -402,10 +402,15 @@ export class Lattice {
         segment(px, py, pz, b[0], b[1], b[2], tb[0], tb[1], tb[2], t, rc2);
         vx += t[0]; vy += t[1]; vz += t[2];
       }
-      tail(px, py, pz, tb[0], tb[1], tb[2], ux, uy, uz, t, rc2);
-      vx += t[0]; vy += t[1]; vz += t[2];
-      tail(px, py, pz, ta[0], ta[1], ta[2], ux, uy, uz, t, rc2);
-      vx -= t[0]; vy -= t[1]; vz -= t[2];
+      // `noTail` — считать без сходящих лучей, одни связанные вихри. Нужно
+      // свободной пелене: она сама и есть эти лучи, только не прямые, и
+      // складывать её с их прямой заменой значит посчитать пелену дважды.
+      if (!noTail) {
+        tail(px, py, pz, tb[0], tb[1], tb[2], ux, uy, uz, t, rc2);
+        vx += t[0]; vy += t[1]; vz += t[2];
+        tail(px, py, pz, ta[0], ta[1], ta[2], ux, uy, uz, t, rc2);
+        vx -= t[0]; vy -= t[1]; vz -= t[2];
+      }
       if (ground) {
         segment(px, py, pz, a[0], a[1], -a[2], b[0], b[1], -b[2], t, rc2);
         vx -= t[0]; vy -= t[1]; vz -= t[2];
@@ -417,10 +422,12 @@ export class Lattice {
           segment(px, py, pz, b[0], b[1], -b[2], tb[0], tb[1], -tb[2], t, rc2);
           vx -= t[0]; vy -= t[1]; vz -= t[2];
         }
-        tail(px, py, pz, tb[0], tb[1], -tb[2], ux, uy, uz, t, rc2);
-        vx -= t[0]; vy -= t[1]; vz -= t[2];
-        tail(px, py, pz, ta[0], ta[1], -ta[2], ux, uy, uz, t, rc2);
-        vx += t[0]; vy += t[1]; vz += t[2];
+        if (!noTail) {
+          tail(px, py, pz, tb[0], tb[1], -tb[2], ux, uy, uz, t, rc2);
+          vx -= t[0]; vy -= t[1]; vz -= t[2];
+          tail(px, py, pz, ta[0], ta[1], -ta[2], ux, uy, uz, t, rc2);
+          vx += t[0]; vy += t[1]; vz += t[2];
+        }
       }
       ox += g * vx; oy += g * vy; oz += g * vz;
     }
@@ -478,5 +485,97 @@ function solveGauss(M, out, n) {
     for (let k = r + 1; k < n; k++) s -= M[r * w + k] * out[k];
     const d = M[r * w + r];
     out[r] = Math.abs(d) > 1e-12 ? s / d : 0;
+  }
+}
+
+// --- свободная пелена ----------------------------------------------------------
+//
+// Сегодня решётка отпускает от каждой панели два ПРЯМЫХ луча в бесконечность
+// вдоль набегающего потока. Настоящая пелена так себя не ведёт: она сходит с
+// задней кромки и дальше плывёт вместе с потоком, сворачиваясь у топа в жгут, а
+// после поворота оставаясь за кормой чужим следом.
+//
+// Здесь она построена цепочками узлов. Схема маршевая по времени: каждый шаг с
+// кромки сходит новый узел, а все прежние сносятся местной скоростью. Так она
+// становится историей, а не мгновенной картинкой, и это честнее для симулятора:
+// след после поворота получается сам, из той же арифметики.
+//
+// ВАЖНО, что она пока НЕ ВХОДИТ В СИЛЫ. Матрица влияния по-прежнему считает
+// прямые лучи, и отпечаток модели обязан совпадать побайтово с тем, что был до
+// пелены. Это первый шаг из трёх (docs/flow-plan.md, III.2.a): сначала показать,
+// потом уже считать. Разделение здесь важнее, чем в прочих частях, потому что
+// отделяет проверяемое от рискованного.
+export class FreeWake {
+  // `fil` — сколько нитей (по числу границ полосок), `len` — сколько узлов в
+  // каждой. Сорок узлов при тридцати герцах это около трёх секунд хода: дальше
+  // пелена уже ни на что не влияет, а считать её стоит денег.
+  constructor(fil, len) {
+    this.fil = fil;
+    this.len = len;
+    this.x = new Float64Array(fil * len);
+    this.y = new Float64Array(fil * len);
+    this.z = new Float64Array(fil * len);
+    this.g = new Float64Array(fil);        // сила нити
+    this.n = 0;                            // сколько узлов уже сошло
+    this.core = 0.05;
+  }
+
+  clear() { this.n = 0; }
+
+  // Скорость, наведённая пеленой. Тот же закон Био — Савара и то же ядро, что у
+  // решётки: пелена — продолжение её вихрей, а не отдельная сущность.
+  induced(px, py, pz, ground, out) {
+    const L = this.len, rc2 = this.core * this.core, t = [0, 0, 0];
+    let ox = 0, oy = 0, oz = 0;
+    for (let f = 0; f < this.fil; f++) {
+      const g = this.g[f];
+      if (!g) continue;
+      let vx = 0, vy = 0, vz = 0;
+      const b = f * L;
+      for (let i = 0; i + 1 < this.n; i++) {
+        const p = b + i, q = p + 1;
+        segment(px, py, pz, this.x[p], this.y[p], this.z[p],
+                this.x[q], this.y[q], this.z[q], t, rc2);
+        vx += t[0]; vy += t[1]; vz += t[2];
+        if (ground) {
+          segment(px, py, pz, this.x[p], this.y[p], -this.z[p],
+                  this.x[q], this.y[q], -this.z[q], t, rc2);
+          vx -= t[0]; vy -= t[1]; vz -= t[2];
+        }
+      }
+      ox += g * vx; oy += g * vy; oz += g * vz;
+    }
+    out[0] = ox; out[1] = oy; out[2] = oz;
+    return out;
+  }
+
+  // Шаг: сперва сносим то, что есть, потом сажаем на кромку новый узел.
+  //
+  // Порядок именно такой. Снеси после посадки — и свежий узел уехал бы от
+  // кромки на целый шаг, оторвавшись от паруса на глазах.
+  //
+  // `seed(f, out)` даёт точку схода нити, `vel(x, y, z, out)` — местную
+  // скорость, `gam` — силы нитей.
+  step(dt, seed, vel, gam, ground) {
+    const L = this.len, v = [0, 0, 0], p = [0, 0, 0];
+    for (let f = 0; f < this.fil; f++) this.g[f] = gam[f];
+    for (let f = 0; f < this.fil; f++) {
+      const b = f * L;
+      for (let i = this.n - 1; i >= 0; i--) {
+        const k = b + i;
+        vel(this.x[k], this.y[k], this.z[k], v);
+        const nx = this.x[k] + v[0] * dt;
+        const ny = this.y[k] + v[1] * dt;
+        const nz = this.z[k] + v[2] * dt;
+        // Сдвиг на одну позицию: узел стареет и уходит вглубь цепочки. Последний
+        // при этом выпадает — цепочка ограничена по длине.
+        if (i + 1 < L) {
+          this.x[k + 1] = nx; this.y[k + 1] = ny; this.z[k + 1] = nz;
+        }
+      }
+      seed(f, p);
+      this.x[b] = p[0]; this.y[b] = p[1]; this.z[b] = p[2];
+    }
+    if (this.n < L) this.n++;
   }
 }

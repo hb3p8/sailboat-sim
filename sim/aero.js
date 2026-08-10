@@ -12,7 +12,7 @@
 // Оси связанные: X в нос, Y на ЛЕВЫЙ борт, Z вверх.
 
 import { wrapPi, DEG } from './util.js';
-import { Lattice } from './vlm.js';
+import { Lattice, FreeWake } from './vlm.js';
 import { membraneCamber, slackOf, luffFraction, luffFactor, sectionLift,
          capLift, liftCeiling } from './membrane.js';
 import { setSailPolar, hasSailPolar, polarCoeffs, polarCeiling,
@@ -540,6 +540,15 @@ export class Rig {
     }));
     this.latQ = new Float64Array(NCHORD);
     this.latSlope = new Float64Array(n * NCHORD);   // наклон средней линии панели
+    // Точки схода свободной пелены: нижняя и верхняя кромки каждой полоски.
+    // Нити сидят на ГРАНИЦАХ полосок, потому что сходит там разность
+    // циркуляций соседей, а не сама циркуляция.
+    this.shedLo = Array.from({ length: n }, () => [0, 0, 0]);
+    this.shedHi = Array.from({ length: n }, () => [0, 0, 0]);
+    // Пелена заводится по требованию: она стоит около четырёх миллисекунд на
+    // шаг, а в силы (пока) не входит вовсе. Нитей — по границе на полоску плюс
+    // одна: у каждого паруса свой набор, поперёк паруса вихрь не сходит.
+    this.wake = null;
     this.latDelta = new Float64Array(n);            // поправка угла, полоске
     this.latCam = new Float64Array(n);              // во сколько сплющено пузо
     this.alphaInd = new Float64Array(n);
@@ -683,6 +692,14 @@ export class Rig {
         p.ta[0] = p.a[0]; p.ta[1] = p.a[1]; p.ta[2] = p.a[2];
         p.tb[0] = p.b[0]; p.tb[1] = p.b[1]; p.tb[2] = p.b[2];
         put(p.c, st.h, chord, st.xLuff, tc);
+        // Точки схода пелены — на самой задней кромке (t = 1), а не на
+        // последней панели: панель кончается на трёх четвертях своей доли
+        // хорды, и пелена, посаженная туда, висела бы в воздухе перед
+        // кромкой. Считаются здесь, потому что здесь есть и геометрия, и пузо.
+        if (k === NCHORD - 1) {
+          put(this.shedLo[i], st.hLo, st.chordLo, st.xLuffLo, 1);
+          put(this.shedHi[i], st.hHi, st.chordHi, st.xLuffHi, 1);
+        }
         // Нормаль повёрнута на местный наклон средней линии — отсюда и берётся
         // подъёмная сила пуза, без отдельного слагаемого.
         const sl = camSign * cam * 4 * (1 - 2 * tc);
@@ -1026,6 +1043,18 @@ export class Rig {
       d.sep = leechSeparation(alpha, g.camber * g.fill);
     }
 
+    // Свободная пелена сносится ПОСЛЕ того, как силы посчитаны, и на них не
+    // влияет: матрица влияния выше по-прежнему считает прямые лучи. Это первый
+    // шаг из трёх (docs/flow-plan.md, III.2.a) — сперва показать, потом уже
+    // считать. Отпечаток модели с включённой пеленой обязан совпадать побайтово
+    // с тем, что был без неё, и это проверяется батареей.
+    // Стирается пелена только когда её ВЫКЛЮЧИЛИ. Прежде здесь стояло `else`,
+    // и любой вызов сил с нулевым шагом — а такие есть, силы считают и для
+    // приборов, — стирал её начисто: за кадр набегало четыре узла вместо сорока,
+    // и на картинке от пелены оставался огрызок в полметра.
+    if (!b.o.freeWake) { if (this.wake) this.wake.clear(); }
+    else if (dt > 0) this.stepWake(b, aw, dt);
+
     if (out.area > 0) {
       out.awaEff /= out.area; out.alpha /= out.area; out.cl /= out.area;
     }
@@ -1035,5 +1064,62 @@ export class Rig {
       out.ceX = rig.ce_x_m; out.ceY = 0; out.ceZ = rig.ce_height_m * cphi;
     }
     return out;
+  }
+
+  // Снос свободной пелены на шаг.
+  //
+  // Нить сидит на ГРАНИЦЕ полосок и несёт разность циркуляций соседей: сколько
+  // подъёмной силы прибавилось или убыло с высотой, столько и сошло вихрем.
+  // Паруса не сшиваются: между гротом и стакселем вихрь не сходит, там конец
+  // одного набора нитей и начало другого.
+  //
+  // Узел сносится местной скоростью: набегающий поток плюс наведённое связанными
+  // вихрями плюс наведённое самой пеленой. Сходящие лучи решётки при этом
+  // ИСКЛЮЧАЮТСЯ (`noTail`) — они и есть прямая замена той самой пелены, и
+  // складывать одно с другим значит посчитать её дважды.
+  stepWake(b, aw, dt) {
+    const NS = this.strips.length, lat = this.lattice;
+    if (!this.wake) this.wake = new FreeWake(NS + 2, 40);
+    const w = this.wake;
+    w.core = lat.core;
+    const G = new Float64Array(NS);
+    for (let i = 0; i < NS; i++) {
+      let s = 0;
+      for (let k = 0; k < NCHORD; k++) s += lat.gamma[i * NCHORD + k];
+      G[i] = s;
+    }
+    const gam = this._wakeGam || (this._wakeGam = new Float64Array(w.fil));
+    const seed = this._wakeSeed || (this._wakeSeed = new Array(w.fil));
+    let f = 0;
+    for (let i = 0; i <= NS && f < w.fil; i++) {
+      const prev = i > 0 ? this.strips[i - 1] : null;
+      const cur = i < NS ? this.strips[i] : null;
+      if (prev && cur && prev.jib !== cur.jib) {
+        // Стык двух парусов: у верхней полоски грота своя сходящая нить, у
+        // нижней полоски стакселя своя, и между ними ничего.
+        gam[f] = G[i - 1]; seed[f] = this.shedHi[i - 1]; f++;
+        if (f < w.fil) { gam[f] = -G[i]; seed[f] = this.shedLo[i]; f++; }
+        continue;
+      }
+      gam[f] = (prev ? G[i - 1] : 0) - (cur ? G[i] : 0);
+      seed[f] = cur ? this.shedLo[i] : this.shedHi[i - 1];
+      f++;
+    }
+    for (; f < w.fil; f++) { gam[f] = 0; seed[f] = this.shedLo[0]; }
+    const V = [0, 0, 0], T = [0, 0, 0];
+    const ux = aw.x, uy = aw.y;
+    const un = Math.hypot(ux, uy) || 1;
+    const dx = ux / un, dy = uy / un;
+    const vel = (x, y, z, out) => {
+      lat.induced(x, y, z, dx, dy, 0, true, T, true);
+      w.induced(x, y, z, true, V);
+      out[0] = ux + T[0] + V[0];
+      out[1] = uy + T[1] + V[1];
+      out[2] = T[2] + V[2];
+    };
+    w.step(dt, (i, out) => {
+      const p = seed[i];
+      out[0] = p[0]; out[1] = p[1]; out[2] = p[2];
+    }, vel, gam, true);
   }
 }

@@ -2281,6 +2281,24 @@ function dumpState() {
       ar: s.ar, twistF: s.twistF,
     })),
     trace: recorder.dump(),
+    // Свободная пелена — короткой сводкой, а не целиком: узлов пятьсот с
+    // лишним, и в дампе они заняли бы больше всего остального. Для разбора
+    // хватает того, сколько её и куда она уехала.
+    wake: boat.rig.wake && boat.rig.wake.n > 1 ? (() => {
+      const w = boat.rig.wake, L = w.len;
+      let far = 0, zlo = 1e9, zhi = -1e9;
+      for (let f = 0; f < w.fil; f++) {
+        for (let i = 0; i < w.n; i++) {
+          far = Math.max(far, Math.hypot(w.x[f * L + i] - w.x[f * L],
+                                         w.y[f * L + i] - w.y[f * L]));
+          zlo = Math.min(zlo, w.z[f * L + i]);
+          zhi = Math.max(zhi, w.z[f * L + i]);
+        }
+      }
+      return { fil: w.fil, nodes: w.n, far: +far.toFixed(2),
+               zlo: +zlo.toFixed(2), zhi: +zhi.toFixed(2),
+               g: Array.from(w.g, v => +v.toFixed(3)) };
+    })() : null,
   };
 }
 
@@ -2849,8 +2867,13 @@ function frame() {
   seaProbeMarks.visible = debugOn && camMode !== HIGH_CAM;
   if (seaProbeMarks.visible) updateSeaProbes(ix, iy, ipsi);
   updateStreaks(toSceneX(ix), toSceneZ(iy), dt);
+  // Свободная пелена считается только в виде потока: она стоит около девяти
+  // миллисекунд на шаг физики, а в силы (пока) не входит вовсе. Включать её
+  // всегда значило бы платить треть кадра за то, чего не видно.
+  boat.o.freeWake = debugMode === 2;
   curField.visible = debugMode === 1 && terrain.ready && boat.o.current > 0;
-  if (debugMode === 2) updateBalance();
+  if (debugMode === 2 && (steps || benchFrozen())) updateWake();
+  if (debugMode === 3) updateBalance();
   if (debugMode === 1) {
     updateField(toSceneX(ix), toSceneZ(iy), now);
     updateBattens(side);
@@ -2940,8 +2963,8 @@ function frame() {
   updateCrew();
   if (orthoView) renderOrtho(bx, bz, fx, fz, sx, sz);
   else renderer.render(scene, camera);
-  if ((tick % 3) === 0) { updateHud(t); if (debugMode === 1) updateRig(t);
-    if (debugMode === 2) updateBalCard();
+  if ((tick % 3) === 0) { updateHud(t); if (debugMode === 1 || debugMode === 2) updateRig(t);
+    if (debugMode === 3) updateBalCard();
     if (topShown) updateTop(); }
   tick++;
   requestAnimationFrame(frame);

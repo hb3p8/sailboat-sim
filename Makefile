@@ -105,7 +105,9 @@ serve: viewer/terrain.html $(TERRAIN_PACK)
 # Правило простое: правил модель — гони `test`, собрался коммитить — `all-tests`.
 # Отдельную батарею можно позвать по имени: `make t-wind`, `make t-upwind`.
 FAST := axes buoyancy membrane vlm waves ocean wind terrain replay physics sailcoeffs
-SLOW := upwind
+# Пелена в медленных: две сорокапятисекундные прогонки подряд, восемнадцать
+# секунд. Проверка там при этом самая важная — что пелена не трогает силы.
+SLOW := upwind wake
 # Медленное на питоне: совместный вязко-невязкий расчёт, десятки секунд.
 PYSLOW := coupled
 

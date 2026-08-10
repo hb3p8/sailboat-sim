@@ -673,6 +673,63 @@ flowGhost.renderOrder = 6;
 flowGroup.add(flowGhost);
 const flowV = [0, 0, 0];
 
+// --- свободная пелена ----------------------------------------------------------
+//
+// Рисуется линиями, а не трубками: нитей четырнадцать по сорок узлов, и трубка
+// на каждом звене стоила бы дороже всего остального в этом виде вместе взятого.
+// Линия здесь и честнее — пелена это и есть вихревая НИТЬ, у неё нет толщины.
+//
+// Цвет по знаку силы нити: с одного борта паруса завихренность сходит одного
+// знака, с другого другого, и по цвету сразу видно, где у пелены какая сторона.
+// Яркость по величине — слабые нити почти не видно, и это правильно: они и
+// наводят почти ничего.
+const WAKE_POS = [0.95, 0.55, 0.20];      // сила одного знака
+const WAKE_NEG = [0.30, 0.65, 0.95];      // и другого
+const wakeGeo = new BufferGeometry();
+const wakeLines = new LineSegments(wakeGeo, new LineBasicMaterial({
+  vertexColors: true, transparent: true, opacity: 0.85 }));
+wakeLines.frustumCulled = false;
+flowGroup.add(wakeLines);
+
+function updateWake() {
+  const w = boat.rig.wake;
+  if (!w || w.n < 2) { wakeGeo.setDrawRange(0, 0); return; }
+  const L = w.len, segs = w.fil * (w.n - 1);
+  let pos = wakeGeo.attributes.position;
+  if (!pos || pos.count < segs * 2) {
+    wakeGeo.setAttribute('position',
+      new Float32BufferAttribute(new Float32Array(segs * 2 * 3), 3));
+    wakeGeo.setAttribute('color',
+      new Float32BufferAttribute(new Float32Array(segs * 2 * 3), 3));
+    pos = wakeGeo.attributes.position;
+  }
+  const p = pos.array, c = wakeGeo.attributes.color.array;
+  let peak = 1e-6;
+  for (let f = 0; f < w.fil; f++) peak = Math.max(peak, Math.abs(w.g[f]));
+  let k = 0;
+  for (let f = 0; f < w.fil; f++) {
+    const g = w.g[f], b = f * L;
+    const col = g >= 0 ? WAKE_POS : WAKE_NEG;
+    // Яркость по силе нити, но не в ноль: совсем невидимая нить читается как
+    // «её нет», а она есть и просто слабая.
+    const a = 0.25 + 0.75 * Math.min(1, Math.abs(g) / peak);
+    for (let i = 0; i + 1 < w.n; i++) {
+      for (const j of [i, i + 1]) {
+        const o = k * 3;
+        p[o] = bodyPointLocalX(w.x[b + j]);
+        p[o + 1] = bodyPointLocalY(w.z[b + j]);
+        p[o + 2] = bodyPointLocalZ(w.y[b + j]);
+        c[o] = col[0] * a; c[o + 1] = col[1] * a; c[o + 2] = col[2] * a;
+        k++;
+      }
+    }
+  }
+  wakeGeo.setDrawRange(0, k);
+  wakeGeo.attributes.position.needsUpdate = true;
+  wakeGeo.attributes.color.needsUpdate = true;
+  wakeGeo.computeBoundingSphere();
+}
+
 // --- где модель считает поток оторвавшимся ------------------------------------
 //
 // Линии тока этого показать не могут, и это не недоделка, а устройство модели.
@@ -835,7 +892,10 @@ function updateFlow() {
 // Отладочных видов теперь два, и клавиша одна: G крутит их по кругу — выключено,
 // поток, баланс. Держать под каждый свою клавишу дороже, чем нажать дважды, а
 // одновременно они и не нужны: стрелки поля ветра спорят со стрелками сил.
-const DEBUG_MODES = 3;
+// Четыре вида по кругу: выключено, поток, пелена, баланс. Пелена вынесена
+// отдельно от потока нарочно — вместе они не читаются: шестьдесят трубок линий
+// тока закрывают четырнадцать тонких нитей, ради которых всё и затевалось.
+const DEBUG_MODES = 4;
 let debugMode = 0;
 let debugOn = false;                 // «хоть какой-то» — им гасится общее
 function setDebug(on) {
@@ -844,7 +904,7 @@ function setDebug(on) {
   // Имена нарочно не `flow` и не `field`: так зовутся сами объекты сцены, и
   // локальная переменная их перекрывает — картинка при этом не ломается, а
   // падает вся отрисовка.
-  const isFlow = debugMode === 1, isBal = debugMode === 2;
+  const isFlow = debugMode === 1, isWake = debugMode === 2, isBal = debugMode === 3;
   const on_ = debugOn;
   // Паруса приспускаются в прозрачность только в отладочном виде: там сквозь
   // них угадывается и поток, и колдунчик с подветренной стороны. В обычном
@@ -862,12 +922,13 @@ function setDebug(on) {
   grid.visible = on_;
   arrow.visible = on_;
   field.visible = isFlow;
-  battens.visible = isFlow;
+  battens.visible = isFlow || isWake;
   flow.visible = isFlow;
   flowGhost.visible = isFlow;
+  wakeLines.visible = isWake;
   sepVeil.visible = sepVeil.visible && isFlow;
   balGroup.visible = isBal;
-  document.getElementById('rigcard').hidden = !isFlow;
+  document.getElementById('rigcard').hidden = !(isFlow || isWake);
   document.getElementById('balcard').hidden = !isBal;
 }
 

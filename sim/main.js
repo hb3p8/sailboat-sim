@@ -2284,6 +2284,99 @@ function dumpState() {
   };
 }
 
+// Загрузка дампа: файл бросают в окно.
+//
+// Восстанавливается то, из чего складывается положение дел: состояние лодки,
+// органы управления, ветер и вид. Не восстанавливается запись (`trace`) — она
+// нужна проигрывателю, а не живому симулятору, — и не восстанавливается режим
+// физики паруса: дамп читается безусловно на измеренной поляре, иначе один и
+// тот же файл давал бы разный ответ в зависимости от галочки.
+//
+// Акватория при этом НЕ подменяется: если дамп снят на другой, лодка встанет в
+// те же координаты на нынешней, и об этом говорится вслух. Тень берега и
+// поворот ветра долиной зависят от места, и молча разойтись тут проще всего.
+function loadDump(d) {
+  if (!d || !d.boat || !d.controls) throw new Error('это не дамп симулятора');
+  Object.assign(boat.o, d.controls);
+  // Старый дамп знает шкот стакселя поправкой к гроту, новый — своим углом.
+  if (d.controls.jibSheet == null) {
+    boat.o.jibSheet = d.controls.sheet + (d.controls.jibTrim || 0);
+  }
+  if (d.controls.jibTwist == null) boat.o.jibTwist = null;
+  if (d.controls.jibDraft == null) boat.o.jibDraft = null;
+  boat.o.mainUp = d.controls.mainUp !== false;
+  boat.o.jibUp = d.controls.jibUp !== false;
+  Object.assign(boat, d.boat);
+  Object.assign(boat.wind.o, d.wind || {});
+  if (d.scene) {
+    autopilot = !!d.scene.autopilot;
+    apHeading = d.scene.apHeading != null ? d.scene.apHeading : boat.psi;
+  }
+  setSailPhysics(false);
+  syncPanelFromBoat();
+  wake.clear();
+  trackN = 0;
+  const mine = terrain.ready ? TERRAIN_PACK.hash : null;
+  const theirs = d.terrain ? d.terrain.hash : null;
+  return theirs === mine ? '' : (theirs && mine ? ' (снят на другой акватории)'
+                               : theirs ? ' (снят с акваторией, у нас её нет)'
+                                        : ' (снят без акватории)');
+}
+
+// Панель после загрузки обязана показывать то, что в лодке, а не то, что на ней
+// стояло. Иначе первый же кадр `readControls` вернёт всё обратно с ползунков.
+function syncPanelFromBoat() {
+  const o = boat.o, set = (id, v) => {
+    const el = ui[id];
+    if (!el) return;
+    if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
+    el.dispatchEvent(new Event('input'));
+  };
+  set('wind', o.windSpeed);
+  set('winddir', Math.round(((o.windDir / D) % 360 + 360) % 360));
+  set('hike', o.crewHike);
+  set('sailscale', o.sailScale);
+  set('gust', boat.wind.o.gust);
+  set('mainsheet', Math.round(o.sheet / D));
+  set('twist', Math.round(o.twist / D));
+  set('draft', Math.round(o.draft * 100));
+  set('jibsheet', Math.round(jibSheetOf(o) / D));
+  set('jibtwist', Math.round((o.jibTwist != null ? o.jibTwist : o.twist) / D));
+  set('jibdraft', Math.round((o.jibDraft != null ? o.jibDraft : o.draft) * 100));
+  set('mainup', o.mainUp !== false);
+  set('jibup', o.jibUp !== false);
+  set('oldsail', false);
+  set('fetch', o.fetch / 1000);
+  set('fetchover', o.fetchOverride);
+  if (ui.cur) set('cur', o.current);
+}
+
+// Бросить файл можно куда угодно в окне: целиться в кнопку — лишняя работа для
+// того, кто разбирается с застрявшей лодкой.
+addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('drop'); });
+addEventListener('dragleave', e => {
+  if (e.relatedTarget === null) document.body.classList.remove('drop');
+});
+addEventListener('drop', e => {
+  e.preventDefault();
+  document.body.classList.remove('drop');
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (!f) return;
+  const btn = document.getElementById('dump');
+  f.text().then(txt => {
+    const note = loadDump(JSON.parse(txt));
+    if (btn) {
+      btn.textContent = 'загружено: ' + f.name.slice(0, 28) + note;
+      setTimeout(() => { btn.textContent = 'Сдампать состояние'; }, 4000);
+    }
+  }).catch(err => {
+    if (btn) {
+      btn.textContent = 'не дамп: ' + err.message;
+      setTimeout(() => { btn.textContent = 'Сдампать состояние'; }, 4000);
+    }
+  });
+});
+
 function saveDump() {
   const name = 'sv20-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const blob = new Blob([JSON.stringify(dumpState(), null, 1)],

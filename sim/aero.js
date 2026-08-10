@@ -32,6 +32,12 @@ export function sailPhysicsIsOld() {
   return !hasSailPolar();
 }
 
+// Шкот стакселя. Своё поле, а не поправка к гроту, — но старые записи и дампы
+// знают только поправку, и читать их надо по-прежнему.
+export function jibSheetOf(o) {
+  return o.jibSheet != null ? o.jibSheet : o.sheet + (o.jibTrim || 0);
+}
+
 // Полосок на парус. Шесть хватает: профиль ветра по высоте гладкий, и на
 // восьми ответ отличается меньше чем на процент, а считать нужно каждый кадр.
 export const STRIPS = 6;
@@ -576,9 +582,17 @@ export class Rig {
     // Натянут ли шкот. Мерой служит угол атаки у нижней шкаторины: пока он
     // велик, парус упирается в шкот и держит форму; как только он падает к
     // нулю, снасть провисает и задняя шкаторина раскрывается сама.
-    const slack = 1 - Math.min(1, Math.max(0, out.awa - b.o.sheet) / LOADED_ALPHA);
-    const twist = b.o.twist + FREE_TWIST * slack;
+    // Провис шкота считается у каждого паруса по своему шкоту: гик с кареткой
+    // друг друга не двигают, и провиснуть они могут порознь.
+    const slackOfSheet = sh =>
+      1 - Math.min(1, Math.max(0, out.awa - sh) / LOADED_ALPHA);
+    const twist = b.o.twist + FREE_TWIST * slackOfSheet(b.o.sheet);
+    const twistJib = (b.o.jibTwist != null ? b.o.jibTwist : b.o.twist) +
+                     FREE_TWIST * slackOfSheet(jibSheetOf(b.o));
+    // Наружу отдаётся твист ГРОТА: по нему в приборах видно, провис ли шкот, а
+    // грот в этом смысле показательнее — он больше и держится дальше.
     this.twistEff = twist;
+    this.twistEffJib = twistJib;
     let load = 0;
 
     // --- проход первый: геометрия и углы атаки без учёта скоса.
@@ -589,8 +603,8 @@ export class Rig {
       const area = st.area * scale;
       // Выбрать острее, чем позволяет погон, нельзя: дальше шкот тянул бы
       // шкотовый угол сквозь каретку.
-      const sheet = Math.max(st.minSet, b.o.sheet + (st.jib ? b.o.jibTrim : 0)) +
-                    twist * st.twistF;
+      const sheet = Math.max(st.minSet, st.jib ? jibSheetOf(b.o) : b.o.sheet) +
+                    (st.jib ? twistJib : twist) * st.twistF;
       const chord = st.chord;
       // Положение полоски в горизонтной системе. Точка приложения — центр
       // давления её хорды, а не мачта: поэтому при потраве шкота парусность
@@ -645,7 +659,7 @@ export class Rig {
       // даст сама решётка, — а на матрицу влияния пузо действует слабо, через
       // наклон средней линии в контрольных точках. Силы дальше считаются уже
       // по летящему.
-      const cam = st.design * b.o.draft;
+      const cam = st.design * (st.jib && b.o.jibDraft != null ? b.o.jibDraft : b.o.draft);
       g.slack = slackOf(cam);
       g.camPanel = cam;                 // пузо, с которым построены панели
       // Точка на средней линии паруса на доле t хорды: вдоль хорды плюс пузо

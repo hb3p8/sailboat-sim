@@ -76,18 +76,20 @@ function readControls(dt) {
   // углом: два независимых органа понятнее, чем «общий и добавка к нему».
   // Перевод одной строкой, и он же держит связь: потравил грот — стаксель
   // остался там, где стоял.
-  if (keys.KeyR) { o.jibTrim -= sr * dt; byKey = true; }
-  if (keys.KeyF) { o.jibTrim += sr * dt; byKey = true; }
+  if (keys.KeyR) { o.jibSheet -= sr * dt; byKey = true; }
+  if (keys.KeyF) { o.jibSheet += sr * dt; byKey = true; }
   if (!byKey && ui.mainsheet) {
     o.sheet = parseFloat(ui.mainsheet.value) * D;
-    o.jibTrim = parseFloat(ui.jibsheet.value) * D - o.sheet;
+    o.jibSheet = parseFloat(ui.jibsheet.value) * D;
   }
-  // Ближе семи градусов шкот не выбирается: мешают ванты и погон.
+  // Ближе семи градусов шкот не выбирается: мешают ванты и погон. У стакселя
+  // свой упор острее диаметральной ставит каретка на погоне (physics.js), и
+  // здесь его держать не нужно.
   o.sheet = Math.max(7 * D, Math.min(90 * D, o.sheet));
-  o.jibTrim = Math.max(-30 * D, Math.min(55 * D, o.jibTrim));
+  o.jibSheet = Math.max(0, Math.min(90 * D, o.jibSheet));
   if (ui.mainsheet) {
     ui.mainsheet.value = (o.sheet / D).toFixed(0);
-    ui.jibsheet.value = ((o.sheet + o.jibTrim) / D).toFixed(0);
+    ui.jibsheet.value = (o.jibSheet / D).toFixed(0);
     // Подпись ползунка обновляется его же событием `input`, а клавиши такого
     // события не порождают. Поэтому при работе клавишами показ двигаем руками —
     // иначе ползунок едет, а число рядом с ним стоит.
@@ -122,6 +124,8 @@ function readControls(dt) {
   o.sailScale = parseFloat(ui.sailscale.value);
   o.twist = parseFloat(ui.twist.value) * D;
   o.draft = parseFloat(ui.draft.value) / 100;
+  o.jibTwist = parseFloat(ui.jibtwist.value) * D;
+  o.jibDraft = parseFloat(ui.jibdraft.value) / 100;
   // Разгон: с акваторией его задаёт место, а ползунок становится
   // переопределением. Без акватории галочка не нужна и не показывается — там
   // ползунок и есть единственный источник.

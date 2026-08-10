@@ -1380,7 +1380,7 @@ function shapeSails(side, dt) {
   // Та же формула, что в physics.sailForces: парус держится шкотом до своего
   // предела, дальше сваливается по потоку.
   const setOf = sail => {
-    const own = boat.o.sheet + (sail.mast ? 0 : boat.o.jibTrim);
+    const own = sail.mast ? boat.o.sheet : jibSheetOf(boat.o);
     const trim = Math.max(sail.minSet || 0, own);
     const held = Math.min(trim, awa);
     const over = Math.min(1, Math.max(0, (own - sail.maxSheet) / (25 * D)));
@@ -1392,7 +1392,11 @@ function shapeSails(side, dt) {
   // строке сетки — 3.130 м против 3.116 у спара, полтора сантиметра разницы.
   // Дешевле подтянуть нарисованный спар, чем спорить с обводами.
   let bmK = 1;
-  const twist = boat.rig.twistEff || boat.o.twist;
+  // Твист у каждого паруса свой: гик с оттяжкой и каретка стакселя друг друга
+  // не двигают.
+  const twistMain = boat.rig.twistEff || boat.o.twist;
+  const twistJib = boat.rig.twistEffJib != null ? boat.rig.twistEffJib
+                 : (boat.o.jibTwist != null ? boat.o.jibTwist : twistMain);
   // Пузо и положение горба больше не назначаются: их посчитала мембрана, по
   // полоске на каждую. Раньше здесь стояло 0.10 хорды по синусу — то есть
   // картинка жила отдельно от расчёта и врала вдвойне: и глубиной (в физике
@@ -1421,7 +1425,7 @@ function shapeSails(side, dt) {
       const h = zLo + f * (zHi - zLo);
       const xLuff = luffAt(h), chord = Math.max(0, xLuff - leechAt(h));
       if (k === 0 && r === 0) bmK = chord / rig.boom_m;
-      const sh = setOf(sail) + twist * Math.pow(f, 1.3);
+      const sh = setOf(sail) + (sail.mast ? twistMain : twistJib) * Math.pow(f, 1.3);
       // Пузо берётся у ближайшей по высоте полоски: их шесть на парус, строк
       // сетки одиннадцать.
       const g = strips[base + Math.min(5, Math.round(f * 5))] || {};
@@ -2404,7 +2408,8 @@ function startAt() {
 const ui = {};
 for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draft',
                   'fetch', 'fetchover', 'cur', 'shd0', 'shk', 'shg', 'chan', 'chop', 'ssr',
-                  'mainsheet', 'jibsheet', 'mainup', 'jibup', 'oldsail'])
+                  'mainsheet', 'jibsheet', 'mainup', 'jibup', 'oldsail',
+                  'jibtwist', 'jibdraft'])
   ui[id] = document.getElementById(id);
 
 // --- вода на панели -----------------------------------------------------------
@@ -2904,10 +2909,8 @@ function updateHud(t) {
     '<div class="big">' + (t.speedKn || 0).toFixed(2) + ' <span>уз</span></div>' +
     '<table>' + rows + '</table>' +
     '<div class="ctl">руль ' + (boat.o.rudder / D).toFixed(0) +
-    '°&nbsp;&nbsp;шкот ' + (boat.o.sheet / D).toFixed(0) + '°' +
-    (Math.abs(boat.o.jibTrim) > 0.5 * D
-      ? '&nbsp;&nbsp;стаксель ' + (boat.o.jibTrim > 0 ? '+' : '') +
-        (boat.o.jibTrim / D).toFixed(0) + '°' : '') + luff +
+    '°&nbsp;&nbsp;грот ' + (boat.o.sheet / D).toFixed(0) + '°' +
+    '&nbsp;&nbsp;стаксель ' + (jibSheetOf(boat.o) / D).toFixed(0) + '°' + luff +
     (autopilot ? '&nbsp;&nbsp;<b>авторулевой</b>' : '') + '</div>';
 }
 

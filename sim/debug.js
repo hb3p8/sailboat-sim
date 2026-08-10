@@ -526,10 +526,15 @@ function updateBattens(side) {
   for (let i = 0; i < NSTRIP; i++) {
     const s = boat.rig.strips[i], d = st ? st[i] : null;
     const aw = d ? d.awaDeg * D : Math.PI;
-    const held = Math.min(boat.o.sheet, aw);
-    const over = Math.min(1, Math.max(0, (boat.o.sheet - s.maxSheet) / (25 * D)));
-    const sheet = held + (aw - held) * over +
-                  (boat.rig.twistEff || boat.o.twist) * s.twistF;
+    // Настройки берутся у ТОГО паруса, которому полоска принадлежит: шкоты,
+    // твист и пузо у грота со стакселем свои.
+    const own = s.jib ? jibSheetOf(boat.o) : boat.o.sheet;
+    const tw = s.jib
+      ? (boat.rig.twistEffJib != null ? boat.rig.twistEffJib : boat.o.jibTwist || 0)
+      : (boat.rig.twistEff || boat.o.twist);
+    const held = Math.min(own, aw);
+    const over = Math.min(1, Math.max(0, (own - s.maxSheet) / (25 * D)));
+    const sheet = held + (aw - held) * over + tw * s.twistF;
     const ax = s.xLuff, az = 0;
     const bx = s.xLuff - s.chord * Math.cos(sheet);
     const bz = s.chord * Math.sin(sheet) * side;

@@ -13,6 +13,8 @@
 // скоростью, направлением, порывистостью и парой (положение, время). Значит
 // восстановления лодки достаточно, чтобы получить тот же самый ветер.
 
+import { jibSheetOf } from './aero.js';
+
 export const TRACE_FIELDS = [
   // состояние лодки — по нему она восстанавливается целиком
   't', 'x', 'y', 'psi', 'u', 'v', 'r', 'phi', 'p_', 'rigSide', 'hike',
@@ -29,7 +31,7 @@ export const TRACE_FIELDS = [
   // месте и пошёл заново, уже от нуля.
   'rigRate',
   // органы управления и условия — всё, что можно тронуть на ходу
-  'rudder', 'sheet', 'jibTrim', 'twist', 'twistEff', 'draft', 'fetch', 'fetchOverride',
+  'rudder', 'sheet', 'jibSheet', 'twist', 'twistEff', 'draft', 'fetch', 'fetchOverride',
   'windSpeed', 'windDir', 'gust', 'shift', 'crewHike', 'crewMass', 'sailScale',
   // Условия акватории — тоже ползунки, и они тоже меняются на ходу. Их не было,
   // и запись, снятая с поворотом ползунка течения, воспроизводилась с конечным
@@ -38,15 +40,30 @@ export const TRACE_FIELDS = [
   // показания — для сверки при воспроизведении и для разбора без пересчёта
   'speedKn', 'heelDeg', 'leewayDeg', 'driveN', 'sideN', 'alphaDeg',
   'awaDeg', 'twsKn',
+  // Дописано в конец нарочно: старые дампы читаются по своему списку полей, а
+  // новые поля в середине сдвинули бы все следующие. Здесь у стакселя свои твист
+  // и пузо (раньше они были общими на два паруса) и признак «парус поставлен».
+  //
+  // Режима физики паруса тут НЕТ. Дамп — про то, как лодку вели, и
+  // воспроизводится он безусловно на измеренной поляре: иначе одна и та же
+  // запись давала бы разный ответ в зависимости от галочки, которую забыли
+  // переключить.
+  'jibTwist', 'jibDraft', 'mainUp', 'jibUp',
 ];
 
 // Поля, которые при воспроизведении надо подавать обратно в лодку.
 export const TRACE_INPUTS = [
-  'rudder', 'sheet', 'jibTrim', 'twist', 'draft', 'fetch', 'fetchOverride',
+  'rudder', 'sheet', 'jibSheet', 'twist', 'draft', 'fetch', 'fetchOverride',
+  'jibTwist', 'jibDraft', 'mainUp', 'jibUp',
   'windSpeed', 'windDir',
   'crewHike', 'crewMass', 'crewX', 'crewZ', 'sailScale',
   'current', 'shadeD0', 'shadeK', 'shadeGust', 'chan',
 ];
+
+// Поля, которые в записи лежат единицей и нулём, а в лодке обязаны быть
+// логическими. Без этого убранный парус восстанавливался нулём, а ноль — не
+// `false`, и парус молча оставался стоять.
+const TRACE_BOOLS = new Set(['fetchOverride', 'mainUp', 'jibUp']);
 
 // Округление разное, и не для красоты.
 //
@@ -74,7 +91,7 @@ export function traceFrame(boat) {
     r9(boat.zc), r9(boat.w), r9(boat.th), r9(boat.q),
     boat.rig.alphaLag ? Array.from(boat.rig.alphaLag, r9) : null,
     r9(boat.rigRate),
-    r9(boat.o.rudder), r9(boat.o.sheet), r9(boat.o.jibTrim),
+    r9(boat.o.rudder), r9(boat.o.sheet), r9(jibSheetOf(boat.o)),
     r9(boat.o.twist), r4(boat.rig.twistEff),
     r9(boat.o.draft), r9(boat.o.fetch), boat.o.fetchOverride ? 1 : 0,
     r9(boat.o.windSpeed), r9(boat.o.windDir),
@@ -84,6 +101,9 @@ export function traceFrame(boat) {
     r9(boat.o.shadeGust), r9(boat.o.chan), r9(boat.o.crewX), r9(boat.o.crewZ),
     r4(t.speedKn), r4(t.heelDeg), r4(t.leewayDeg), r4(t.driveN), r4(t.sideN),
     r4(t.alphaDeg), r4(t.awaDeg), r4(t.twsKn),
+    r9(boat.o.jibTwist != null ? boat.o.jibTwist : boat.o.twist),
+    r9(boat.o.jibDraft != null ? boat.o.jibDraft : boat.o.draft),
+    boat.o.mainUp === false ? 0 : 1, boat.o.jibUp === false ? 0 : 1,
   ];
 }
 
@@ -128,7 +148,14 @@ export function restoreFrom(boat, frame, index) {
 // Подать в лодку органы управления и условия из кадра.
 export function applyFrom(boat, frame, index) {
   for (const name of TRACE_INPUTS) {
-    if (index[name] != null) boat.o[name] = frame[index[name]];
+    if (index[name] == null) continue;
+    const v = frame[index[name]];
+    boat.o[name] = TRACE_BOOLS.has(name) ? !!v : v;
+  }
+  // Старый дамп знает шкот стакселя только поправкой к гроту. Переводим его в
+  // свой угол здесь, один раз, а не в каждом месте, где он спрашивается.
+  if (index.jibSheet == null && index.jibTrim != null) {
+    boat.o.jibSheet = boat.o.sheet + frame[index.jibTrim];
   }
   if (index.gust != null) boat.wind.o.gust = frame[index.gust];
   if (index.shift != null) boat.wind.o.shift = frame[index.shift];

@@ -162,11 +162,6 @@
     <input id="sailscale" type="range" min="0.6" max="2.2" step="0.05" value="1"></label>
   <label><span class="cap"><span>Порывистость</span><span id="v-gust"></span></span>
     <input id="gust" type="range" min="0" max="0.45" step="0.01" value="0.18"></label>
-  <label><span class="cap"><span>Твист паруса</span><span id="v-twist"></span></span>
-    <input id="twist" type="range" min="0" max="30" step="1" value="8"></label>
-
-  <label><span class="cap"><span>Пузо парусов</span><span id="v-draft"></span></span>
-    <input id="draft" type="range" min="40" max="130" step="5" value="100"></label>
 
   <label><span class="cap">
       <span><input id="fetchover" type="checkbox"> Разгон волны</span>
@@ -175,15 +170,27 @@
   <label id="curbox"><span class="cap"><span>Течение на стрежне</span><span id="v-cur"></span></span>
     <input id="cur" type="range" min="0" max="1.5" step="0.05" value="0.55"></label>
 
-  <h2>Паруса</h2>
+  <h2>Грот</h2>
   <label><span class="cap">
-      <span><input id="mainup" type="checkbox" checked> Грот</span>
+      <span><input id="mainup" type="checkbox" checked> Поставлен · шкот</span>
       <span id="v-mainsheet"></span></span>
     <input id="mainsheet" type="range" min="7" max="90" step="1" value="25"></label>
+  <label><span class="cap"><span>Твист</span><span id="v-twist"></span></span>
+    <input id="twist" type="range" min="0" max="30" step="1" value="8"></label>
+  <label><span class="cap"><span>Пузо</span><span id="v-draft"></span></span>
+    <input id="draft" type="range" min="40" max="130" step="5" value="100"></label>
+
+  <h2>Стаксель</h2>
   <label><span class="cap">
-      <span><input id="jibup" type="checkbox" checked> Стаксель</span>
+      <span><input id="jibup" type="checkbox" checked> Поставлен · шкот</span>
       <span id="v-jibsheet"></span></span>
     <input id="jibsheet" type="range" min="0" max="90" step="1" value="25"></label>
+  <label><span class="cap"><span>Твист</span><span id="v-jibtwist"></span></span>
+    <input id="jibtwist" type="range" min="0" max="30" step="1" value="8"></label>
+  <label><span class="cap"><span>Пузо</span><span id="v-jibdraft"></span></span>
+    <input id="jibdraft" type="range" min="40" max="130" step="5" value="100"></label>
+
+  <h2>Модель</h2>
   <label class="flat"><span class="cap">
       <span><input id="oldsail" type="checkbox"> Прежняя физика паруса</span>
       <span id="v-oldsail"></span></span></label>
@@ -342,6 +349,8 @@ const BUILD = /*__BUILD__*/ null;
     twist: v => (+v).toFixed(0) + '°',
     mainsheet: v => (+v).toFixed(0) + '°',
     jibsheet: v => (+v).toFixed(0) + '°',
+    jibtwist: v => (+v).toFixed(0) + '°',
+    jibdraft: v => (+v).toFixed(0) + '%',
     draft: v => (+v).toFixed(0) + '%',
     fetch: v => (+v === 0 ? 'гладкая вода' : (+v).toFixed(1) + ' км'),
     cur: v => (+v === 0 ? 'стоячая вода' : (+v).toFixed(2) + ' м/с (' +

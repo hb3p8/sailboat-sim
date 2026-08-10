@@ -683,13 +683,25 @@ const flowV = [0, 0, 0];
 // знака, с другого другого, и по цвету сразу видно, где у пелены какая сторона.
 // Яркость по величине — слабые нити почти не видно, и это правильно: они и
 // наводят почти ничего.
-const WAKE_POS = [0.95, 0.55, 0.20];      // сила одного знака
-const WAKE_NEG = [0.30, 0.65, 0.95];      // и другого
+const WAKE_POS = [1.00, 0.62, 0.22];      // сила одного знака
+const WAKE_NEG = [0.35, 0.72, 1.00];      // и другого
 const wakeGeo = new BufferGeometry();
 const wakeLines = new LineSegments(wakeGeo, new LineBasicMaterial({
-  vertexColors: true, transparent: true, opacity: 0.85 }));
+  vertexColors: true, transparent: true, opacity: 0.95 }));
 wakeLines.frustumCulled = false;
 flowGroup.add(wakeLines);
+
+// Пелена это ЛИСТ, а не пучок отдельных нитей: между соседними нитями натянута
+// вихревая плёнка, и сворачивается в жгут именно она. Без неё на картинке
+// четырнадцать ниточек, по которым не понять ни где у пелены край, ни как она
+// закручивается. Плёнка рисуется полупрозрачной, нити поверх неё.
+const wakeSheetGeo = new BufferGeometry();
+const wakeSheet = new Mesh(wakeSheetGeo, new MeshBasicMaterial({
+  vertexColors: true, transparent: true, opacity: 0.38,
+  side: DoubleSide, depthWrite: false }));
+wakeSheet.frustumCulled = false;
+wakeSheet.renderOrder = 5;
+flowGroup.add(wakeSheet);
 
 function updateWake() {
   const w = boat.rig.wake;
@@ -710,9 +722,10 @@ function updateWake() {
   for (let f = 0; f < w.fil; f++) {
     const g = w.g[f], b = f * L;
     const col = g >= 0 ? WAKE_POS : WAKE_NEG;
-    // Яркость по силе нити, но не в ноль: совсем невидимая нить читается как
-    // «её нет», а она есть и просто слабая.
-    const a = 0.25 + 0.75 * Math.min(1, Math.abs(g) / peak);
+    // Яркость по силе нити — но пол высокий, 0.55. Прежде было 0.25, и слабые
+    // нити гасли до черноты: на тёмной воде чёрная линия это отсутствие линии.
+    // Слабую нить надо видеть, просто она не должна кричать.
+    const a = 0.55 + 0.45 * Math.min(1, Math.abs(g) / peak);
     for (let i = 0; i + 1 < w.n; i++) {
       for (const j of [i, i + 1]) {
         const o = k * 3;
@@ -728,6 +741,56 @@ function updateWake() {
   wakeGeo.attributes.position.needsUpdate = true;
   wakeGeo.attributes.color.needsUpdate = true;
   wakeGeo.computeBoundingSphere();
+
+  // Плёнка между соседними нитями. Соседними считаются те, что сошли с одного
+  // паруса: между гротом и стакселем полотна нет, там разрыв, и натягивать
+  // через него значит рисовать то, чего не существует.
+  const quads = [];
+  for (let f = 0; f + 1 < w.fil; f++) {
+    if (!wakeSameSail(f)) continue;
+    quads.push(f);
+  }
+  const tris = quads.length * (w.n - 1) * 2;
+  let sp = wakeSheetGeo.attributes.position;
+  if (!sp || sp.count < tris * 3) {
+    wakeSheetGeo.setAttribute('position',
+      new Float32BufferAttribute(new Float32Array(tris * 3 * 3), 3));
+    wakeSheetGeo.setAttribute('color',
+      new Float32BufferAttribute(new Float32Array(tris * 3 * 3), 3));
+    sp = wakeSheetGeo.attributes.position;
+  }
+  const q = sp.array, qc = wakeSheetGeo.attributes.color.array;
+  let m = 0;
+  const put = (f, i) => {
+    const o = m * 3, b = f * L + i;
+    q[o] = bodyPointLocalX(w.x[b]);
+    q[o + 1] = bodyPointLocalY(w.z[b]);
+    q[o + 2] = bodyPointLocalZ(w.y[b]);
+    const col = w.g[f] >= 0 ? WAKE_POS : WAKE_NEG;
+    qc[o] = col[0]; qc[o + 1] = col[1]; qc[o + 2] = col[2];
+    m++;
+  };
+  for (const f of quads) {
+    for (let i = 0; i + 1 < w.n; i++) {
+      put(f, i); put(f + 1, i); put(f + 1, i + 1);
+      put(f, i); put(f + 1, i + 1); put(f, i + 1);
+    }
+  }
+  wakeSheetGeo.setDrawRange(0, m);
+  wakeSheetGeo.attributes.position.needsUpdate = true;
+  wakeSheetGeo.attributes.color.needsUpdate = true;
+  wakeSheetGeo.computeBoundingSphere();
+}
+
+// Соседние нити принадлежат одному парусу? Нити расставлены по границам
+// полосок, а на стыке грота со стакселем их две подряд — конец одного набора и
+// начало другого. Полотна между ними нет.
+function wakeSameSail(f) {
+  const S = boat.rig.strips;
+  const cur = S[f], nxt = S[f + 1];
+  if (!cur) return false;
+  if (!nxt) return true;
+  return cur.jib === nxt.jib;
 }
 
 // --- где модель считает поток оторвавшимся ------------------------------------

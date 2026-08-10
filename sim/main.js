@@ -2295,9 +2295,21 @@ function dumpState() {
           zhi = Math.max(zhi, w.z[f * L + i]);
         }
       }
+      // Заодно — что реально лежит в буфере отрисовки: сколько вершин, куда
+      // они разъехались и виден ли объект. Без этого «пелены не видно»
+      // разбирается перебором догадок.
+      const gp = wakeGeo.attributes.position;
+      let vmin = 1e9, vmax = -1e9;
+      if (gp) for (let i = 0; i < gp.count * 3; i++) {
+        vmin = Math.min(vmin, gp.array[i]); vmax = Math.max(vmax, gp.array[i]);
+      }
       return { fil: w.fil, nodes: w.n, far: +far.toFixed(2),
                zlo: +zlo.toFixed(2), zhi: +zhi.toFixed(2),
-               g: Array.from(w.g, v => +v.toFixed(3)) };
+               g: Array.from(w.g, v => +v.toFixed(3)),
+               draw: gp ? { vert: gp.count, min: +vmin.toFixed(2), max: +vmax.toFixed(2),
+                            vis: wakeLines.visible,
+                            r: wakeGeo.boundingSphere ? +wakeGeo.boundingSphere.radius.toFixed(1) : null }
+                        : null };
     })() : null,
   };
 }

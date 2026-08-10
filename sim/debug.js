@@ -685,9 +685,11 @@ const flowV = [0, 0, 0];
 // наводят почти ничего.
 const WAKE_POS = [1.00, 0.62, 0.22];      // сила одного знака
 const WAKE_NEG = [0.35, 0.72, 1.00];      // и другого
+// Нити рисуются трубками, как линии тока: линия в один пиксель на обычном
+// удалении не читается вовсе, и четырнадцать таких линий выглядели как ничего.
+// Трубка вдобавок несёт толщину, а толщине есть что сказать — силу нити.
 const wakeGeo = new BufferGeometry();
-const wakeLines = new LineSegments(wakeGeo, new LineBasicMaterial({
-  vertexColors: true, transparent: true, opacity: 0.95 }));
+const wakeLines = new Mesh(wakeGeo, new MeshBasicMaterial({ vertexColors: true }));
 wakeLines.frustumCulled = false;
 flowGroup.add(wakeLines);
 
@@ -697,59 +699,107 @@ flowGroup.add(wakeLines);
 // закручивается. Плёнка рисуется полупрозрачной, нити поверх неё.
 const wakeSheetGeo = new BufferGeometry();
 const wakeSheet = new Mesh(wakeSheetGeo, new MeshBasicMaterial({
-  vertexColors: true, transparent: true, opacity: 0.38,
+  vertexColors: true, transparent: true, opacity: 0.22,
   side: DoubleSide, depthWrite: false }));
 wakeSheet.frustumCulled = false;
 wakeSheet.renderOrder = 5;
 flowGroup.add(wakeSheet);
 
-function updateWake() {
-  const w = boat.rig.wake;
-  if (!w || w.n < 2) { wakeGeo.setDrawRange(0, 0); return; }
-  const L = w.len, segs = w.fil * (w.n - 1);
-  let pos = wakeGeo.attributes.position;
-  if (!pos || pos.count < segs * 2) {
-    wakeGeo.setAttribute('position',
-      new Float32BufferAttribute(new Float32Array(segs * 2 * 3), 3));
-    wakeGeo.setAttribute('color',
-      new Float32BufferAttribute(new Float32Array(segs * 2 * 3), 3));
-    pos = wakeGeo.attributes.position;
-  }
-  const p = pos.array, c = wakeGeo.attributes.color.array;
-  let peak = 1e-6;
-  for (let f = 0; f < w.fil; f++) peak = Math.max(peak, Math.abs(w.g[f]));
-  let k = 0;
-  for (let f = 0; f < w.fil; f++) {
-    const g = w.g[f], b = f * L;
-    const col = g >= 0 ? WAKE_POS : WAKE_NEG;
-    // Яркость по силе нити — но пол высокий, 0.55. Прежде было 0.25, и слабые
-    // нити гасли до черноты: на тёмной воде чёрная линия это отсутствие линии.
-    // Слабую нить надо видеть, просто она не должна кричать.
-    const a = 0.55 + 0.45 * Math.min(1, Math.abs(g) / peak);
-    for (let i = 0; i + 1 < w.n; i++) {
-      for (const j of [i, i + 1]) {
-        const o = k * 3;
-        p[o] = bodyPointLocalX(w.x[b + j]);
-        p[o + 1] = bodyPointLocalY(w.z[b + j]);
-        p[o + 2] = bodyPointLocalZ(w.y[b + j]);
-        c[o] = col[0] * a; c[o + 1] = col[1] * a; c[o + 2] = col[2] * a;
-        k++;
+// Радиус трубки нити: тонкая у слабых, толстая у сильных. Не украшение —
+// толщина здесь и есть сила, и по ней сразу видно, где пелена настоящая, а где
+// висит почти пустая нитка. Числа подобраны так, чтобы на обычном удалении
+// самая сильная читалась, а самая слабая не пропадала.
+// Толще, чем у линий тока (там 28 мм), и намеренно: линий шестьдесят и они
+// длинные, а нитей четырнадцать, и на обычном удалении тонкая нить теряется.
+// Это отладочный вид, читаемость тут важнее буквальности — у настоящей вихревой
+// нити толщины нет вовсе.
+const WAKE_R0 = 0.06, WAKE_R1 = 0.10;
+const WAKE_SIDES = 5;
+let wakeMade = 0;                       // на сколько нитей построены индексы
+
+function wakeGeometry(fil, len) {
+  const nv = fil * len * WAKE_SIDES;
+  wakeGeo.setAttribute('position', new Float32BufferAttribute(new Float32Array(nv * 3), 3));
+  wakeGeo.setAttribute('color', new Float32BufferAttribute(new Float32Array(nv * 3), 3));
+  const idx = [];
+  for (let f = 0; f < fil; f++) {
+    for (let k = 0; k + 1 < len; k++) {
+      const a = (f * len + k) * WAKE_SIDES, b = a + WAKE_SIDES;
+      for (let t = 0; t < WAKE_SIDES; t++) {
+        const t2 = (t + 1) % WAKE_SIDES;
+        idx.push(a + t, b + t, b + t2, a + t, b + t2, a + t2);
       }
     }
   }
-  wakeGeo.setDrawRange(0, k);
+  wakeGeo.setIndex(idx);
+  wakeMade = fil;
+}
+
+function updateWake() {
+  const w = boat.rig.wake;
+  if (!w || w.n < 2) { wakeGeo.setDrawRange(0, 0); wakeSheetGeo.setDrawRange(0, 0); return; }
+  const L = w.len;
+  if (wakeMade !== w.fil) wakeGeometry(w.fil, L);
+  const p = wakeGeo.attributes.position.array;
+  const c = wakeGeo.attributes.color.array;
+  let peak = 1e-6;
+  for (let f = 0; f < w.fil; f++) peak = Math.max(peak, Math.abs(w.g[f]));
+
+  for (let f = 0; f < w.fil; f++) {
+    const g = w.g[f], b = f * L;
+    const col = g >= 0 ? WAKE_POS : WAKE_NEG;
+    const rel = Math.min(1, Math.abs(g) / peak);
+    // Яркость и толщина обе по силе, но по-разному: яркость с высоким полом,
+    // чтобы слабая нить не пропала на тёмной воде, толщина от нуля — чтобы
+    // сильную было видно сразу.
+    const a = 0.55 + 0.45 * rel;
+    const R = WAKE_R0 + WAKE_R1 * rel;
+    for (let i = 0; i < L; i++) {
+      const k = b + Math.min(i, w.n - 1);
+      // Касательная — на следующий узел, у последнего на предыдущий.
+      const k2 = b + Math.min(i + 1, w.n - 1), k0 = b + Math.max(0, Math.min(i, w.n - 1) - 1);
+      const ax0 = w.x[k2] - w.x[k0], ay0 = w.y[k2] - w.y[k0], az0 = w.z[k2] - w.z[k0];
+      const al = Math.hypot(ax0, ay0, az0) || 1;
+      // Касательная в осях отрисовки: X в нос, Y вверх, Z вправо — как у линий
+      // тока, и по той же причине: считаем в осях лодки, переводим только то,
+      // что кладём в буфер.
+      const tx = bodyDirLocalX(ax0 / al), ty = bodyDirLocalY(az0 / al),
+            tz = bodyDirLocalZ(ay0 / al);
+      let ux = -tz, uy = 0, uz = tx;
+      const ul = Math.hypot(ux, uz) || 1;
+      ux /= ul; uz /= ul;
+      const vx = ty * uz - uy, vy = tz * ux - tx * uz, vz = -ty * ux;
+      for (let t = 0; t < WAKE_SIDES; t++) {
+        const ang = 2 * Math.PI * t / WAKE_SIDES;
+        const ca = Math.cos(ang), sa = Math.sin(ang);
+        const nx = ux * ca + vx * sa, ny = uy * ca + vy * sa, nz = uz * ca + vz * sa;
+        const o = ((f * L + i) * WAKE_SIDES + t) * 3;
+        p[o] = bodyPointLocalX(w.x[k]) + nx * R;
+        p[o + 1] = bodyPointLocalY(w.z[k]) + ny * R;
+        p[o + 2] = bodyPointLocalZ(w.y[k]) + nz * R;
+        // Тот же кант по нормали, что и у линий тока: сверху светлее, снизу
+        // темнее, и трубка читается на любом фоне.
+        const d = nx * FLOW_LIGHT[0] + ny * FLOW_LIGHT[1] + nz * FLOW_LIGHT[2];
+        const sh = a * (0.55 + 0.45 * (0.5 + 0.5 * d));
+        c[o] = col[0] * sh; c[o + 1] = col[1] * sh; c[o + 2] = col[2] * sh;
+      }
+    }
+  }
+  // Рисуется весь буфер. Обрезать его по числу сошедших узлов нельзя: индексы
+  // идут нить за нитью, и «первые столько-то» это первые НИТИ целиком, а не
+  // начало каждой. Так и вышло — из четырнадцати рисовались пять, остальных на
+  // картинке не было вовсе. Несошедшие узлы при этом сидят копией последнего,
+  // треугольники между ними вырождены и в кадр не попадают сами.
+  wakeGeo.setDrawRange(0, Infinity);
   wakeGeo.attributes.position.needsUpdate = true;
   wakeGeo.attributes.color.needsUpdate = true;
   wakeGeo.computeBoundingSphere();
 
-  // Плёнка между соседними нитями. Соседними считаются те, что сошли с одного
-  // паруса: между гротом и стакселем полотна нет, там разрыв, и натягивать
-  // через него значит рисовать то, чего не существует.
+  // Плёнка между соседними нитями одного паруса: пелена это лист, и
+  // сворачивается в жгут именно он. Трубки показывают нити, плёнка — что между
+  // ними натянуто.
   const quads = [];
-  for (let f = 0; f + 1 < w.fil; f++) {
-    if (!wakeSameSail(f)) continue;
-    quads.push(f);
-  }
+  for (let f = 0; f + 1 < w.fil; f++) if (wakeSameSail(f)) quads.push(f);
   const tris = quads.length * (w.n - 1) * 2;
   let sp = wakeSheetGeo.attributes.position;
   if (!sp || sp.count < tris * 3) {
@@ -762,10 +812,10 @@ function updateWake() {
   const q = sp.array, qc = wakeSheetGeo.attributes.color.array;
   let m = 0;
   const put = (f, i) => {
-    const o = m * 3, b = f * L + i;
-    q[o] = bodyPointLocalX(w.x[b]);
-    q[o + 1] = bodyPointLocalY(w.z[b]);
-    q[o + 2] = bodyPointLocalZ(w.y[b]);
+    const o = m * 3, k = f * L + i;
+    q[o] = bodyPointLocalX(w.x[k]);
+    q[o + 1] = bodyPointLocalY(w.z[k]);
+    q[o + 2] = bodyPointLocalZ(w.y[k]);
     const col = w.g[f] >= 0 ? WAKE_POS : WAKE_NEG;
     qc[o] = col[0]; qc[o + 1] = col[1]; qc[o + 2] = col[2];
     m++;

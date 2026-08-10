@@ -1053,7 +1053,7 @@ export class Rig {
     // приборов, — стирал её начисто: за кадр набегало четыре узла вместо сорока,
     // и на картинке от пелены оставался огрызок в полметра.
     if (!b.o.freeWake) { if (this.wake) this.wake.clear(); }
-    else if (dt > 0) this.stepWake(b, aw, dt);
+    else if (dt > 0) this.stepWake(b, dt);
 
     if (out.area > 0) {
       out.awaEff /= out.area; out.alpha /= out.area; out.cl /= out.area;
@@ -1073,11 +1073,20 @@ export class Rig {
   // Паруса не сшиваются: между гротом и стакселем вихрь не сходит, там конец
   // одного набора нитей и начало другого.
   //
-  // Узел сносится местной скоростью: набегающий поток плюс наведённое связанными
-  // вихрями плюс наведённое самой пеленой. Сходящие лучи решётки при этом
-  // ИСКЛЮЧАЮТСЯ (`noTail`) — они и есть прямая замена той самой пелены, и
+  // Узел сносится местной скоростью: воздух над грунтом плюс наведённое
+  // связанными вихрями плюс наведённое самой пеленой. Сходящие лучи решётки при
+  // этом ИСКЛЮЧАЮТСЯ (`noTail`) — они и есть прямая замена той самой пелены, и
   // складывать одно с другим значит посчитать её дважды.
-  stepWake(b, aw, dt) {
+  //
+  // Считается всё в МИРОВЫХ осях, и это здесь главное. Пелена — это след,
+  // оставленный в воздухе; воздух о лодке не знает и вместе с ней не
+  // поворачивается. Храни узлы в связанных осях — и после поворота оверштаг
+  // весь старый след послушно развернулся бы вместе с лодкой, то есть лодка
+  // никогда бы не попала в свою же старую пелену. Ради этого маршевая схема и
+  // берётся, так что перевод осей туда-обратно тут не накладной расход, а сама
+  // задача: точка схода из корпуса в мир, точка запроса к решётке из мира в
+  // корпус, наведённая ею скорость обратно в мир.
+  stepWake(b, dt) {
     const NS = this.strips.length, lat = this.lattice;
     if (!this.wake) this.wake = new FreeWake(NS + 2, 40);
     const w = this.wake;
@@ -1090,6 +1099,12 @@ export class Rig {
     }
     const gam = this._wakeGam || (this._wakeGam = new Float64Array(w.fil));
     const seed = this._wakeSeed || (this._wakeSeed = new Array(w.fil));
+    // Чей парус у нити — записывается здесь, а не восстанавливается потом по
+    // номеру. На стыке нитей две подряд, номера нитей и полосок разъезжаются, и
+    // всякий, кто позже полезет от номера нити к полоске, ошибётся на одну.
+    // Полотно пелены натянуто между соседними нитями ОДНОГО паруса, и признак
+    // для него берётся отсюда.
+    const sail = this.wakeSail || (this.wakeSail = new Int8Array(w.fil));
     let f = 0;
     for (let i = 0; i <= NS && f < w.fil; i++) {
       const prev = i > 0 ? this.strips[i - 1] : null;
@@ -1097,29 +1112,41 @@ export class Rig {
       if (prev && cur && prev.jib !== cur.jib) {
         // Стык двух парусов: у верхней полоски грота своя сходящая нить, у
         // нижней полоски стакселя своя, и между ними ничего.
-        gam[f] = G[i - 1]; seed[f] = this.shedHi[i - 1]; f++;
-        if (f < w.fil) { gam[f] = -G[i]; seed[f] = this.shedLo[i]; f++; }
+        gam[f] = G[i - 1]; seed[f] = this.shedHi[i - 1];
+        sail[f] = prev.jib ? 1 : 0; f++;
+        if (f < w.fil) {
+          gam[f] = -G[i]; seed[f] = this.shedLo[i];
+          sail[f] = cur.jib ? 1 : 0; f++;
+        }
         continue;
       }
       gam[f] = (prev ? G[i - 1] : 0) - (cur ? G[i] : 0);
       seed[f] = cur ? this.shedLo[i] : this.shedHi[i - 1];
+      sail[f] = (cur || prev).jib ? 1 : 0;
       f++;
     }
-    for (; f < w.fil; f++) { gam[f] = 0; seed[f] = this.shedLo[0]; }
+    // Хвост незанятых нитей: их не рисуют и они ничего не наводят, но парус им
+    // приписывается заведомо чужой, чтобы полотно не потянулось к ним.
+    for (; f < w.fil; f++) { gam[f] = 0; seed[f] = this.shedLo[0]; sail[f] = -1; }
     const V = [0, 0, 0], T = [0, 0, 0];
-    const ux = aw.x, uy = aw.y;
-    const un = Math.hypot(ux, uy) || 1;
-    const dx = ux / un, dy = uy / un;
-    const vel = (x, y, z, out) => {
-      lat.induced(x, y, z, dx, dy, 0, true, T, true);
-      w.induced(x, y, z, true, V);
-      out[0] = ux + T[0] + V[0];
-      out[1] = uy + T[1] + V[1];
+    const c = Math.cos(b.psi), sn = Math.sin(b.psi);
+    const vel = (X, Y, Z, out) => {
+      // Точка мировая — решётке её надо подать в осях корпуса.
+      const rx = X - b.x, ry = Y - b.y;
+      const bx = rx * c + ry * sn, by = -rx * sn + ry * c;
+      lat.induced(bx, by, Z, 1, 0, 0, true, T, true);
+      // ...а полученное ею — вернуть в мир.
+      w.induced(X, Y, Z, true, V);
+      const air = b.windAtWorld(X, Y, Z);
+      out[0] = air.x + T[0] * c - T[1] * sn + V[0];
+      out[1] = air.y + T[0] * sn + T[1] * c + V[1];
       out[2] = T[2] + V[2];
     };
     w.step(dt, (i, out) => {
       const p = seed[i];
-      out[0] = p[0]; out[1] = p[1]; out[2] = p[2];
-    }, vel, gam, true);
+      out[0] = b.x + p[0] * c - p[1] * sn;
+      out[1] = b.y + p[0] * sn + p[1] * c;
+      out[2] = p[2];
+    }, vel, gam);
   }
 }

@@ -675,10 +675,6 @@ const flowV = [0, 0, 0];
 
 // --- свободная пелена ----------------------------------------------------------
 //
-// Рисуется линиями, а не трубками: нитей четырнадцать по сорок узлов, и трубка
-// на каждом звене стоила бы дороже всего остального в этом виде вместе взятого.
-// Линия здесь и честнее — пелена это и есть вихревая НИТЬ, у неё нет толщины.
-//
 // Цвет по знаку силы нити: с одного борта паруса завихренность сходит одного
 // знака, с другого другого, и по цвету сразу видно, где у пелены какая сторона.
 // Яркость по величине — слабые нити почти не видно, и это правильно: они и
@@ -688,10 +684,18 @@ const WAKE_NEG = [0.35, 0.72, 1.00];      // и другого
 // Нити рисуются трубками, как линии тока: линия в один пиксель на обычном
 // удалении не читается вовсе, и четырнадцать таких линий выглядели как ничего.
 // Трубка вдобавок несёт толщину, а толщине есть что сказать — силу нити.
+// Пелена живёт НЕ в группе лодки, а прямо в сцене, и по той же причине, по
+// которой её узлы считаются в мировых осях: это след в воздухе, он лодке не
+// принадлежит. Повесь его на `flowGroup` — и он ездил бы и поворачивался вместе
+// с ней. Поэтому у группы пелены поворота нет вовсе, а мировые координаты
+// узлов переводятся в сцену тем же отображением (x, y, z) -> (x, z, -y), что и
+// всё остальное мировое.
+const wakeGroup = new Group();
+scene.add(wakeGroup);
 const wakeGeo = new BufferGeometry();
 const wakeLines = new Mesh(wakeGeo, new MeshBasicMaterial({ vertexColors: true }));
 wakeLines.frustumCulled = false;
-flowGroup.add(wakeLines);
+wakeGroup.add(wakeLines);
 
 // Пелена это ЛИСТ, а не пучок отдельных нитей: между соседними нитями натянута
 // вихревая плёнка, и сворачивается в жгут именно она. Без неё на картинке
@@ -703,7 +707,7 @@ const wakeSheet = new Mesh(wakeSheetGeo, new MeshBasicMaterial({
   side: DoubleSide, depthWrite: false }));
 wakeSheet.frustumCulled = false;
 wakeSheet.renderOrder = 5;
-flowGroup.add(wakeSheet);
+wakeGroup.add(wakeSheet);
 
 // Радиус трубки нити: тонкая у слабых, толстая у сильных. Не украшение —
 // толщина здесь и есть сила, и по ней сразу видно, где пелена настоящая, а где
@@ -760,11 +764,9 @@ function updateWake() {
       const k2 = b + Math.min(i + 1, w.n - 1), k0 = b + Math.max(0, Math.min(i, w.n - 1) - 1);
       const ax0 = w.x[k2] - w.x[k0], ay0 = w.y[k2] - w.y[k0], az0 = w.z[k2] - w.z[k0];
       const al = Math.hypot(ax0, ay0, az0) || 1;
-      // Касательная в осях отрисовки: X в нос, Y вверх, Z вправо — как у линий
-      // тока, и по той же причине: считаем в осях лодки, переводим только то,
-      // что кладём в буфер.
-      const tx = bodyDirLocalX(ax0 / al), ty = bodyDirLocalY(az0 / al),
-            tz = bodyDirLocalZ(ay0 / al);
+      // Касательная в осях сцены. Направление переводится тем же отображением,
+      // что и точка, только без начала отсчёта — а начала отсчёта у мира и нет.
+      const tx = toSceneX(ax0 / al), ty = az0 / al, tz = toSceneZ(ay0 / al);
       let ux = -tz, uy = 0, uz = tx;
       const ul = Math.hypot(ux, uz) || 1;
       ux /= ul; uz /= ul;
@@ -774,9 +776,9 @@ function updateWake() {
         const ca = Math.cos(ang), sa = Math.sin(ang);
         const nx = ux * ca + vx * sa, ny = uy * ca + vy * sa, nz = uz * ca + vz * sa;
         const o = ((f * L + i) * WAKE_SIDES + t) * 3;
-        p[o] = bodyPointLocalX(w.x[k]) + nx * R;
-        p[o + 1] = bodyPointLocalY(w.z[k]) + ny * R;
-        p[o + 2] = bodyPointLocalZ(w.y[k]) + nz * R;
+        p[o] = toSceneX(w.x[k]) + nx * R;
+        p[o + 1] = w.z[k] + ny * R;
+        p[o + 2] = toSceneZ(w.y[k]) + nz * R;
         // Тот же кант по нормали, что и у линий тока: сверху светлее, снизу
         // темнее, и трубка читается на любом фоне.
         const d = nx * FLOW_LIGHT[0] + ny * FLOW_LIGHT[1] + nz * FLOW_LIGHT[2];
@@ -813,9 +815,9 @@ function updateWake() {
   let m = 0;
   const put = (f, i) => {
     const o = m * 3, k = f * L + i;
-    q[o] = bodyPointLocalX(w.x[k]);
-    q[o + 1] = bodyPointLocalY(w.z[k]);
-    q[o + 2] = bodyPointLocalZ(w.y[k]);
+    q[o] = toSceneX(w.x[k]);
+    q[o + 1] = w.z[k];
+    q[o + 2] = toSceneZ(w.y[k]);
     const col = w.g[f] >= 0 ? WAKE_POS : WAKE_NEG;
     qc[o] = col[0]; qc[o + 1] = col[1]; qc[o + 2] = col[2];
     m++;
@@ -832,15 +834,15 @@ function updateWake() {
   wakeSheetGeo.computeBoundingSphere();
 }
 
-// Соседние нити принадлежат одному парусу? Нити расставлены по границам
-// полосок, а на стыке грота со стакселем их две подряд — конец одного набора и
-// начало другого. Полотна между ними нет.
+// Соседние нити принадлежат одному парусу? Признак записан при построении нитей
+// (`rig.wakeSail`), и брать его надо именно оттуда. Восстанавливать его по
+// номеру нити нельзя: на стыке грота со стакселем нитей две подряд, номера
+// нитей и полосок с этого места разъезжаются на единицу — и полотно натягивалось
+// бы через щель между парусами, а у топа грота обрывалось на нить раньше.
 function wakeSameSail(f) {
-  const S = boat.rig.strips;
-  const cur = S[f], nxt = S[f + 1];
-  if (!cur) return false;
-  if (!nxt) return true;
-  return cur.jib === nxt.jib;
+  const S = boat.rig.wakeSail;
+  if (!S) return false;
+  return S[f] >= 0 && S[f] === S[f + 1];
 }
 
 // --- где модель считает поток оторвавшимся ------------------------------------
@@ -1039,6 +1041,7 @@ function setDebug(on) {
   flow.visible = isFlow;
   flowGhost.visible = isFlow;
   wakeLines.visible = isWake;
+  wakeSheet.visible = isWake;
   sepVeil.visible = sepVeil.visible && isFlow;
   balGroup.visible = isBal;
   document.getElementById('rigcard').hidden = !(isFlow || isWake);

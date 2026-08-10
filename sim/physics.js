@@ -303,6 +303,9 @@ export class Boat {
     this.rigRate = 0;                // и его скорость, 1/с
     this.hike = 0;                   // момент откренивания сейчас, Н·м
     if (this.rig && this.rig.alphaLag) this.rig.alphaLag.fill(0);
+    // Пелена висит в мировых осях: после переноса лодки в другое место старая
+    // остаётся там, где была, растянутой ниткой через полакватории.
+    if (this.rig && this.rig.wake) this.rig.wake.clear();
     this.t = 0;
   }
 
@@ -318,24 +321,31 @@ export class Boat {
   // не туда, куда на озере. Без акватории `curB` — точный ноль.
   apparentAt(xb, yb, zb, vx, vy) {
     const c = Math.cos(this.psi), s = Math.sin(this.psi);
-    const w = this.wind.sample(this.x + xb * c - yb * s,
-                              this.y + xb * s + yb * c,
-                              Math.max(0.3, zb), this.t, this.gustK);
+    const w = this.windAtWorld(this.x + xb * c - yb * s,
+                               this.y + xb * s + yb * c, zb);
+    const ax = w.x * c + w.y * s - (vx + this.curB.x);
+    const ay = -w.x * s + w.y * c - (vy + this.curB.y);
+    return { x: ax, y: ay, speed: Math.hypot(ax, ay),
+             angle: Math.atan2(ay, ax), ws: w.ws };
+  }
+
+  // Скорость воздуха над грунтом в мировой точке — то же, что видит `apparentAt`,
+  // но до перевода в связанные оси и без вычитания скорости лодки. Отдельно это
+  // понадобилось свободной пелене: её узлы живут в мире и сносятся воздухом, а
+  // не кажущимся ветром — они никуда не плывут сами.
+  windAtWorld(X, Y, zb) {
+    const w = this.wind.sample(X, Y, Math.max(0.3, zb), this.t, this.gustK);
     // Множитель за берег: ветер над водой разгоняется не сразу. Один на всю
     // лодку — он меняется на сотнях метров, а лодка шесть метров длиной.
     const k = this.windK;
-    // Поворот к оси долины — до перевода в связанные оси: он мировой, как и
-    // сам ветер. Без акватории он точный ноль, и поворот на ноль не трогает
-    // ни одного разряда.
+    // Поворот к оси долины: он мировой, как и сам ветер. Без акватории он точный
+    // ноль, и поворот на ноль не трогает ни одного разряда.
     let wx = w.x, wy = w.y;
     if (this.chanRot) {
       const cr = Math.cos(this.chanRot), sr = Math.sin(this.chanRot);
       wx = w.x * cr - w.y * sr; wy = w.x * sr + w.y * cr;
     }
-    const ax = wx * k * c + wy * k * s - (vx + this.curB.x);
-    const ay = -wx * k * s + wy * k * c - (vy + this.curB.y);
-    return { x: ax, y: ay, speed: Math.hypot(ax, ay),
-             angle: Math.atan2(ay, ax), ws: w.speed * k };
+    return { x: wx * k, y: wy * k, ws: w.speed * k };
   }
 
   // Кажущийся ветер «у лодки» — на высоте центра парусности. Это то, что

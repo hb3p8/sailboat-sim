@@ -2297,13 +2297,15 @@ function dumpState() {
       }
       // Заодно — что реально лежит в буфере отрисовки: сколько вершин, куда
       // они разъехались и виден ли объект. Без этого «пелены не видно»
-      // разбирается перебором догадок.
+      // разбирается перебором догадок. Координаты тут МИРОВЫЕ, поэтому рядом
+      // кладётся и место лодки: без него «max = 380» ни о чём не говорит.
       const gp = wakeGeo.attributes.position;
       let vmin = 1e9, vmax = -1e9;
       if (gp) for (let i = 0; i < gp.count * 3; i++) {
         vmin = Math.min(vmin, gp.array[i]); vmax = Math.max(vmax, gp.array[i]);
       }
       return { fil: w.fil, nodes: w.n, far: +far.toFixed(2),
+               at: [+boat.x.toFixed(1), +boat.y.toFixed(1)],
                zlo: +zlo.toFixed(2), zhi: +zhi.toFixed(2),
                g: Array.from(w.g, v => +v.toFixed(3)),
                draw: gp ? { vert: gp.count, min: +vmin.toFixed(2), max: +vmax.toFixed(2),
@@ -2886,17 +2888,23 @@ function frame() {
   curField.visible = debugMode === 1 && terrain.ready && boat.o.current > 0;
   if (debugMode === 2 && (steps || benchFrozen())) updateWake();
   if (debugMode === 3) updateBalance();
+  // Группа отладочной геометрии стоит на лодке и смотрит с ней в одну сторону.
+  // Обновляется для ОБОИХ видов, а не только для линий тока: латы показываются и
+  // в пелене, а с непереставленной группой они висели бы там, где лодка была в
+  // последний раз, когда смотрели поток.
+  if (debugMode === 1 || debugMode === 2) {
+    flowGroup.position.set(toSceneX(ix), 0, toSceneZ(iy));
+    flowGroup.rotation.y = headingRotY(ipsi);
+    updateBattens(side);
+  }
   if (debugMode === 1) {
     updateField(toSceneX(ix), toSceneZ(iy), now);
-    updateBattens(side);
     // Линии тока считаются по всей решётке в каждой точке. Пересчёт привязан к
     // ШАГУ ФИЗИКИ, а не к кадру отрисовки: поле держится на циркуляциях, а те
     // меняются только в шаге. На мониторе в 120 Гц кадров вчетверо больше, чем
     // шагов, и считать в них одно и то же — платить вчетверо ни за что.
     // На скамье физика стоит вовсе, и там считается каждый кадр: ответ один и
     // тот же, зато буфер заведомо заполнен.
-    flowGroup.position.set(toSceneX(ix), 0, toSceneZ(iy));
-    flowGroup.rotation.y = headingRotY(ipsi);
     if (steps || benchFrozen()) updateFlow();
     // Полосу отрыва — каждый кадр: она следует за парусом, а не за потоком.
     updateSepVeil();

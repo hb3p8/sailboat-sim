@@ -237,6 +237,89 @@ console.log('\nЛодка с пеленой и без неё, 45 секунд с
     moved.toFixed(2) + ' против ' + asIfBody.toFixed(2) + ' м');
 }
 
+// --- полный курс: пелена не должна разносить счёт -------------------------------
+//
+// Здесь она разносилась, и это была не физика. Ядро вихря стояло на четырёх
+// сантиметрах, а нити на полном курсе сходились до семи: внутри ядра Био — Савар
+// тем быстрее, чем ближе подошли, явный шаг швыряет узел дальше, тот подходит
+// ещё ближе. Узел ехал 2000 м/с при кажущемся ветре 4.5 — в четыреста раз
+// быстрее воздуха, который его несёт.
+//
+// Полный курс попадает под это первым по двум причинам сразу: кажущийся ветер
+// там самый слабый, узлы почти не уносит от паруса и они висят в самом сильном
+// наведённом поле; а циркуляции за срывом большие и неровные по высоте, и силы
+// нитей — их разности — выходят большими и шумными.
+//
+// Мерится это не «на глаз по картинке», а изломом: углом между соседними
+// звеньями нити. У гладкой пелены это единицы градусов, у разнесённой — шесть
+// десятков, и она именно так и выглядит — рваной.
+{
+  const b = new Boat(PACK);
+  b.o.freeWake = true;
+  b.o.windSpeed = 8; b.o.windDir = 100 * D; b.psi = -75 * D;   // TWA 175°
+  b.o.sheet = 80 * D; b.o.jibSheet = 80 * D;
+  b.o.crewHike = 1; b.o.crewMass = 219.9; b.u = 3;
+  b.wind.o.gust = 0.2; b.wind.o.shift = 9 * D;
+  for (let i = 0; i < 20 * 30; i++) b.step(1 / 30);
+
+  const w = b.rig.wake, L = w.len;
+  const air = b.apparentWind().speed;
+  let sum = 0, cnt = 0, fast = 0, seg = 0;
+  for (let f = 0; f < w.fil; f++) {
+    if (!w.g[f]) continue;
+    for (let k = 1; k < w.n; k++) {
+      const a = f * L + k - 1, m = f * L + k;
+      const ax = w.x[m] - w.x[a], ay = w.y[m] - w.y[a], az = w.z[m] - w.z[a];
+      const la = Math.hypot(ax, ay, az);
+      seg++;
+      if (la * 30 > 4 * air) fast++;
+      if (k + 1 >= w.n || la < 1e-9) continue;
+      const c = f * L + k + 1;
+      const bx = w.x[c] - w.x[m], by = w.y[c] - w.y[m], bz = w.z[c] - w.z[m];
+      const lb = Math.hypot(bx, by, bz);
+      if (lb < 1e-9) continue;
+      const cs = Math.max(-1, Math.min(1, (ax * bx + ay * by + az * bz) / (la * lb)));
+      sum += Math.acos(cs) / D; cnt++;
+    }
+  }
+  const kink = sum / cnt;
+  console.log('\nПолный курс, кажущийся %s м/с: излом %s° на узел, быстрее ' +
+              'четверного ветра %d звеньев из %d\n',
+              air.toFixed(1), kink.toFixed(1), fast, seg);
+  check('на полном курсе пелена гладкая, а не рваная', kink < 6,
+    kink.toFixed(1) + '° на узел');
+  check('узлы плывут с воздухом, а не летят', fast < 0.02 * seg,
+    fast + ' из ' + seg);
+
+  // Оба средства против разноса — на месте и работают.
+  let rcYoung = 0, rcOld = 0;
+  for (let f = 0; f < w.fil; f++) {
+    rcYoung = Math.max(rcYoung, w.rc[f * L]);
+    rcOld = Math.max(rcOld, w.rc[f * L + w.n - 1]);
+  }
+  check('ядро расплывается с возрастом узла', rcOld > 3 * w.core,
+    (100 * w.core).toFixed(1) + ' см у свежего, ' + (100 * rcOld).toFixed(0) + ' у старого');
+  // Пол по расстоянию до соседа: у каждого узла ядро не меньше половины
+  // расстояния до БЛИЖАЙШЕЙ соседней нити того же возраста. Ближайшей, а не
+  // любой: пол ставится по тесноте, а тесно бывает с одной стороны.
+  let tight = 0;
+  for (let f = 0; f < w.fil; f++) {
+    if (!w.g[f]) continue;
+    for (let k = 0; k < w.n; k++) {
+      const a = f * L + k;
+      let d = Infinity;
+      for (const nf of [f - 1, f + 1]) {
+        if (nf < 0 || nf >= w.fil || !w.g[nf]) continue;
+        const c = nf * L + k;
+        d = Math.min(d, Math.hypot(w.x[c] - w.x[a], w.y[c] - w.y[a], w.z[c] - w.z[a]));
+      }
+      if (d < Infinity && 2 * w.rc[a] < d - 1e-9) tight++;
+    }
+  }
+  check('ядро не меньше полурасстояния до ближайшей нити', tight === 0, String(tight));
+  rcYoung;
+}
+
 // --- выключение и сброс --------------------------------------------------------
 {
   const b = run(true, 5 * 30);

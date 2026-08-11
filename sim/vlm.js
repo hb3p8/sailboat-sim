@@ -109,6 +109,10 @@ export class Lattice {
     this.gamma = new Float64Array(n);
     this.aInd = new Float64Array(n);        // скос потока, рад
     this.aWake = new Float64Array(n);       // скос от одной пелены, рад
+    // Скос от СВОБОДНОЙ пелены в середине присоединённого вихря. Матрицей его
+    // не выразить — циркуляции сошедших колец уже не зависят от решаемых, — и
+    // он кладётся сюда снаружи. Нули, пока пелена в силы не входит.
+    this.wExtra = new Float64Array(n);
     this.core = 0;                          // радиус ядра вихревой нити, м
     this.panels = [];
     for (let i = 0; i < n; i++) {
@@ -138,7 +142,12 @@ export class Lattice {
   // шкаторина не сбрасывает свободный вихрь, как конец крыла, — вода ей не
   // даёт. Отражение с обратной циркуляцией это и выражает. Без него скос
   // получается примерно вдвое больше настоящего, и грот в расчёте умирает.
-  build(ux, uy, uz, self, ground) {
+  // `noTail` — собрать матрицу БЕЗ прямых сходящих лучей. Нужно, когда пелену
+  // считает не решётка, а свободный лист: лучи и есть его прямая замена, и
+  // держать оба значит посчитать пелену дважды. Скос от листа тогда приходит
+  // правой частью (он известен: циркуляции сошедших колец уже не меняются), а
+  // не матрицей.
+  build(ux, uy, uz, self, ground, noTail) {
     const n = this.n, P = this.panels, v = this._v, t = this._t;
     const rc2 = this.core * this.core;
     // Отражённая геометрия зависит только от панели, а не от контрольной точки,
@@ -202,10 +211,12 @@ export class Lattice {
           segment(ci[0], ci[1], ci[2], B[0], B[1], B[2], TB[0], TB[1], TB[2], t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
         }
-        tail(ci[0], ci[1], ci[2], TB[0], TB[1], TB[2], ux, uy, uz, t, rc2);
-        v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        tail(ci[0], ci[1], ci[2], TA[0], TA[1], TA[2], ux, uy, uz, t, rc2);
-        v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
+        if (!noTail) {
+          tail(ci[0], ci[1], ci[2], TB[0], TB[1], TB[2], ux, uy, uz, t, rc2);
+          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+          tail(ci[0], ci[1], ci[2], TA[0], TA[1], TA[2], ux, uy, uz, t, rc2);
+          v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
+        }
         let kij = v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
         if (ground) {
           // Зеркальный контур: та же геометрия, отражённая в z = 0, и обратная
@@ -224,10 +235,12 @@ export class Lattice {
                     M.tb[o], M.tb[o + 1], M.tb[o + 2], t, rc2);
             v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
           }
-          tail(ci[0], ci[1], ci[2], M.tb[o], M.tb[o + 1], M.tb[o + 2], ux, uy, uz, t, rc2);
-          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          tail(ci[0], ci[1], ci[2], M.ta[o], M.ta[o + 1], M.ta[o + 2], ux, uy, uz, t, rc2);
-          v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
+          if (!noTail) {
+            tail(ci[0], ci[1], ci[2], M.tb[o], M.tb[o + 1], M.tb[o + 2], ux, uy, uz, t, rc2);
+            v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+            tail(ci[0], ci[1], ci[2], M.ta[o], M.ta[o + 1], M.ta[o + 2], ux, uy, uz, t, rc2);
+            v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
+          }
           kij -= v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
         }
         this.k[i * n + j] = kij;
@@ -260,10 +273,12 @@ export class Lattice {
           segment(mx, my, mz, B[0], B[1], B[2], TB[0], TB[1], TB[2], t, rc2);
           v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
         }
-        tail(mx, my, mz, TB[0], TB[1], TB[2], ux, uy, uz, t, rc2);
-        v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        tail(mx, my, mz, TA[0], TA[1], TA[2], ux, uy, uz, t, rc2);
-        v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
+        if (!noTail) {
+          tail(mx, my, mz, TB[0], TB[1], TB[2], ux, uy, uz, t, rc2);
+          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+          tail(mx, my, mz, TA[0], TA[1], TA[2], ux, uy, uz, t, rc2);
+          v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
+        }
         let kwij = v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
         if (ground) {
           v[0] = v[1] = v[2] = 0;
@@ -277,10 +292,12 @@ export class Lattice {
                     M.tb[o], M.tb[o + 1], M.tb[o + 2], t, rc2);
             v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
           }
-          tail(mx, my, mz, M.tb[o], M.tb[o + 1], M.tb[o + 2], ux, uy, uz, t, rc2);
-          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          tail(mx, my, mz, M.ta[o], M.ta[o + 1], M.ta[o + 2], ux, uy, uz, t, rc2);
-          v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
+          if (!noTail) {
+            tail(mx, my, mz, M.tb[o], M.tb[o + 1], M.tb[o + 2], ux, uy, uz, t, rc2);
+            v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
+            tail(mx, my, mz, M.ta[o], M.ta[o + 1], M.ta[o + 2], ux, uy, uz, t, rc2);
+            v[0] -= t[0]; v[1] -= t[1]; v[2] -= t[2];
+          }
           kwij -= v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
         }
         this.kw[i * n + j] = kwij;
@@ -295,6 +312,7 @@ export class Lattice {
     for (let i = 0; i < n; i++) {
       let w = 0;
       for (let j = 0; j < n; j++) w += this.kw[i * n + j] * g[j];
+      w += this.wExtra[i];
       const V = P[i].speed;
       out[i] = V > 1e-3 ? Math.atan2(-w, V) : 0;
     }
@@ -633,73 +651,6 @@ export class FreeWake {
     return out;
   }
 
-  // Скорость, наведённая пеленой на саму себя, — сразу ВО ВСЕХ узлах.
-  //
-  // Тот же счёт, что и в `induced`, но цикл вывернут наизнанку: снаружи рёбра,
-  // внутри точки. Ответ до последнего разряда тот же (порядок сложения по
-  // рёбрам не меняется), а стоит втрое дешевле: данные ребра остаются в
-  // регистрах на все пятьсот шестьдесят точек, вместо того чтобы читаться
-  // заново для каждой.
-  //
-  // Это и есть та самая петля, в которой живёт 95% цены пелены: пятьсот
-  // шестьдесят точек на две тысячи рёбер — миллион с лишним отрезков за шаг.
-  selfInduce() {
-    const L = this.len, F = this.fil, N = this.n, P = F * N;
-    if (!this.sx || this.sx.length < F * L) {
-      this.sx = new Float64Array(F * L);
-      this.sy = new Float64Array(F * L);
-      this.sz = new Float64Array(F * L);
-      this.qx = new Float64Array(F * L);
-      this.qy = new Float64Array(F * L);
-      this.qz = new Float64Array(F * L);
-    }
-    const sx = this.sx, sy = this.sy, sz = this.sz;
-    const qx = this.qx, qy = this.qy, qz = this.qz;
-    for (let f = 0; f < F; f++) {
-      for (let i = 0; i < N; i++) {
-        const j = f * N + i, k = f * L + i;
-        qx[j] = this.x[k]; qy[j] = this.y[k]; qz[j] = this.z[k];
-        sx[j] = 0; sy[j] = 0; sz[j] = 0;
-      }
-    }
-    const e = this.eg, ne = this.ne;
-    for (let m = 0, k8 = 0; m < ne; m++, k8 += 8) {
-      const ax = e[k8], ay = e[k8 + 1], az = e[k8 + 2];
-      const r0x = e[k8 + 3], r0y = e[k8 + 4], r0z = e[k8 + 5];
-      const g = e[k8 + 6], den = e[k8 + 7];
-      for (let j = 0; j < P; j++) {
-        const r1x = qx[j] - ax, r1y = qy[j] - ay, r1z = qz[j] - az;
-        const r2x = r1x - r0x, r2y = r1y - r0y, r2z = r1z - r0z;
-        const cx = r1y * r2z - r1z * r2y;
-        const cy = r1z * r2x - r1x * r2z;
-        const cz = r1x * r2y - r1y * r2x;
-        const c2 = cx * cx + cy * cy + cz * cz;
-        if (c2 < EPS) continue;
-        const l1 = Math.sqrt(r1x * r1x + r1y * r1y + r1z * r1z);
-        const l2 = Math.sqrt(r2x * r2x + r2y * r2y + r2z * r2z);
-        if (l1 < EPS || l2 < EPS) continue;
-        const fq = (r0x * r1x + r0y * r1y + r0z * r1z) / l1 -
-                   (r0x * r2x + r0y * r2y + r0z * r2z) / l2;
-        const kk = fq / (FOURPI * Math.max(c2, den));
-        sx[j] += g * (cx * kk); sy[j] += g * (cy * kk); sz[j] += g * (cz * kk);
-      }
-    }
-    // Хвосты — по точкам, их мало.
-    const t = [0, 0, 0];
-    for (let f = 0; f < F; f++) {
-      const p = f * L + N - 1, g = this.et[p];
-      if (!g) continue;
-      const rc2 = this.rc[p] * this.rc[p];
-      const hx = this.x[p], hy = this.y[p], hz = this.z[p];
-      for (let j = 0; j < P; j++) {
-        tail(qx[j], qy[j], qz[j], hx, hy, hz, this.tx, this.ty, this.tz, t, rc2);
-        sx[j] += g * t[0]; sy[j] += g * t[1]; sz[j] += g * t[2];
-        tail(qx[j], qy[j], qz[j], hx, hy, -hz, this.tx, this.ty, -this.tz, t, rc2);
-        sx[j] -= g * t[0]; sy[j] -= g * t[1]; sz[j] -= g * t[2];
-      }
-    }
-  }
-
   // Плотная запись всех рёбер: то, чем считается поле, и то, что не зависит от
   // точки запроса.
   //
@@ -782,19 +733,82 @@ export class FreeWake {
     }
   }
 
-  // Шаг: сперва сносим то, что есть, потом сажаем на кромку новый узел.
+  // Поле пелены сразу в НАБОРЕ точек: снаружи рёбра, внутри точки.
   //
-  // Порядок именно такой. Снеси после посадки — и свежий узел уехал бы от
-  // кромки на целый шаг, оторвавшись от паруса на глазах.
+  // Тот же счёт, что в `induced`, и тот же порядок сложения по рёбрам, но
+  // данные ребра остаются в регистрах на весь набор вместо того, чтобы
+  // читаться заново под каждую точку. Этим считается и снос самой пелены
+  // (пятьсот шестьдесят узлов), и её скос на парусе (семьдесят две точки).
+  field(qx, qy, qz, np, ox, oy, oz) {
+    const L = this.len, F = this.fil, N = this.n;
+    for (let j = 0; j < np; j++) { ox[j] = 0; oy[j] = 0; oz[j] = 0; }
+    if (N < 2) return;
+    const e = this.eg, ne = this.ne;
+    for (let m = 0, k8 = 0; m < ne; m++, k8 += 8) {
+      const ax = e[k8], ay = e[k8 + 1], az = e[k8 + 2];
+      const r0x = e[k8 + 3], r0y = e[k8 + 4], r0z = e[k8 + 5];
+      const g = e[k8 + 6], den = e[k8 + 7];
+      for (let j = 0; j < np; j++) {
+        const r1x = qx[j] - ax, r1y = qy[j] - ay, r1z = qz[j] - az;
+        const r2x = r1x - r0x, r2y = r1y - r0y, r2z = r1z - r0z;
+        const cx = r1y * r2z - r1z * r2y;
+        const cy = r1z * r2x - r1x * r2z;
+        const cz = r1x * r2y - r1y * r2x;
+        const c2 = cx * cx + cy * cy + cz * cz;
+        if (c2 < EPS) continue;
+        const l1 = Math.sqrt(r1x * r1x + r1y * r1y + r1z * r1z);
+        const l2 = Math.sqrt(r2x * r2x + r2y * r2y + r2z * r2z);
+        if (l1 < EPS || l2 < EPS) continue;
+        const fq = (r0x * r1x + r0y * r1y + r0z * r1z) / l1 -
+                   (r0x * r2x + r0y * r2y + r0z * r2z) / l2;
+        const kk = fq / (FOURPI * Math.max(c2, den));
+        ox[j] += g * (cx * kk); oy[j] += g * (cy * kk); oz[j] += g * (cz * kk);
+      }
+    }
+    const t = [0, 0, 0];
+    for (let f = 0; f < F; f++) {
+      const p = f * L + N - 1, g = this.et[p];
+      if (!g) continue;
+      const rc2 = this.rc[p] * this.rc[p];
+      const hx = this.x[p], hy = this.y[p], hz = this.z[p];
+      for (let j = 0; j < np; j++) {
+        tail(qx[j], qy[j], qz[j], hx, hy, hz, this.tx, this.ty, this.tz, t, rc2);
+        ox[j] += g * t[0]; oy[j] += g * t[1]; oz[j] += g * t[2];
+        tail(qx[j], qy[j], qz[j], hx, hy, -hz, this.tx, this.ty, -this.tz, t, rc2);
+        ox[j] -= g * t[0]; oy[j] -= g * t[1]; oz[j] -= g * t[2];
+      }
+    }
+  }
+
+  // Скорость, наведённая пеленой на саму себя, — сразу ВО ВСЕХ узлах.
   //
-  // Снос идёт В ДВА ПРОХОДА, и это не аккуратность ради аккуратности. Скорость
-  // в узле зависит от всей пелены, включая соседние нити. Если двигать узлы по
-  // ходу дела, то второй нити достаётся поле, в котором первая уже сдвинулась,
-  // а третья ещё нет, — и ответ начинает зависеть от порядка нитей в массиве.
-  // Свернуться в жгут такая пелена может по-разному в зависимости от того, как
-  // пронумерованы нити, а это не физика. Поэтому сперва считаются скорости всех
-  // старых узлов, и только потом все узлы переезжают.
+  // Тот же счёт, что и в `induced`, но цикл вывернут наизнанку: снаружи рёбра,
+  // внутри точки. Ответ до последнего разряда тот же (порядок сложения по
+  // рёбрам не меняется), а стоит втрое дешевле: данные ребра остаются в
+  // регистрах на все пятьсот шестьдесят точек, вместо того чтобы читаться
+  // заново для каждой.
   //
+  // Это и есть та самая петля, в которой живёт 95% цены пелены: пятьсот
+  // шестьдесят точек на две тысячи рёбер — миллион с лишним отрезков за шаг.
+  selfInduce() {
+    const L = this.len, F = this.fil, N = this.n;
+    if (!this.sx || this.sx.length < F * L) {
+      this.sx = new Float64Array(F * L);
+      this.sy = new Float64Array(F * L);
+      this.sz = new Float64Array(F * L);
+      this.qx = new Float64Array(F * L);
+      this.qy = new Float64Array(F * L);
+      this.qz = new Float64Array(F * L);
+    }
+    for (let f = 0; f < F; f++) {
+      for (let i = 0; i < N; i++) {
+        const j = f * N + i, k = f * L + i;
+        this.qx[j] = this.x[k]; this.qy[j] = this.y[k]; this.qz[j] = this.z[k];
+      }
+    }
+    this.field(this.qx, this.qy, this.qz, F * N, this.sx, this.sy, this.sz);
+  }
+
   // `seed(f, out)` даёт точку схода нити, `vel(x, y, z, out)` — местную скорость
   // БЕЗ собственного поля пелены (его она добавляет сама, и сразу всем узлам),
   // `gring` — связанные циркуляции полосок (нулевые там, где между соседними

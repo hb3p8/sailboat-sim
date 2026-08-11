@@ -747,7 +747,21 @@ export class Rig {
     const aInd = this.alphaInd;
     aInd.fill(0);
     if (awSpeed > 0.2) {
-      if (this.latRebuild) lat.build(aw.x / awSpeed, aw.y / awSpeed, 0, true, true);
+      // Пелена в силах: решётка собирается БЕЗ прямых лучей, а скос от
+      // свободного листа приходит правой частью. Оба сразу — это пелена дважды.
+      //
+      // Правой частью, а не матрицей, потому что она известна: циркуляции
+      // сошедших колец от решаемых уже не зависят. Свежий ряд при этом несёт
+      // циркуляцию ПРОШЛОГО шага — тридцатую долю секунды назад, — и это не
+      // огрех схемы, а она сама: сошедший вихрь уносит с собой изменение
+      // циркуляции, отчего подъёмная сила и выходит на новую величину не
+      // мгновенно. Ради этого запаздывания всё и затевалось (III.2.c).
+      const WF = !!b.o.wakeForces && this.wake && this.wake.n > 1;
+      if (this.latRebuild || WF !== this.latNoTail) {
+        lat.build(aw.x / awSpeed, aw.y / awSpeed, 0, true, true, WF);
+        this.latNoTail = WF;
+      }
+      if (WF) this.wakeDownwash(b, lat); else lat.wExtra.fill(0);
       const q = this.latQ;
       // Рабочий знак нагрузки: в какую сторону парус ПОСТАВЛЕН. Берётся он у
       // геометрии — у угла атаки к хорде, взвешенного по площади, — и один на
@@ -782,7 +796,8 @@ export class Rig {
           for (let k = 0; k < NCHORD; k++) {
             const p = i * NCHORD + k;
             this.latRhs[p] = -g.ve *
-              Math.sin(g.alpha + dA[i] - camS[i] * this.latSlope[p]);
+              Math.sin(g.alpha + dA[i] - camS[i] * this.latSlope[p]) -
+              (WF ? this.latWn[p] : 0);
           }
         }
         gam = lat.solveLinear(this.latRhs);
@@ -1052,7 +1067,7 @@ export class Rig {
     // и любой вызов сил с нулевым шагом — а такие есть, силы считают и для
     // приборов, — стирал её начисто: за кадр набегало четыре узла вместо сорока,
     // и на картинке от пелены оставался огрызок в полметра.
-    if (!b.o.freeWake) { if (this.wake) this.wake.clear(); }
+    if (!b.o.freeWake && !b.o.wakeForces) { if (this.wake) this.wake.clear(); }
     else if (dt > 0) this.stepWake(b, dt);
 
     if (out.area > 0) {
@@ -1064,6 +1079,46 @@ export class Rig {
       out.ceX = rig.ce_x_m; out.ceY = 0; out.ceZ = rig.ce_height_m * cphi;
     }
     return out;
+  }
+
+  // Скос от свободной пелены на парусе: в контрольных точках (туда он идёт
+  // правой частью системы) и в серединах присоединённых вихрей (там по нему
+  // наклоняется подъёмная сила, то есть считается индуктивное сопротивление).
+  //
+  // Обе выборки одним заходом: у поля пелены цикл вывернут наизнанку, и семь
+  // десятков точек стоят вдесятеро дешевле, чем если спрашивать по одной.
+  wakeDownwash(b, lat) {
+    const n = lat.n, w = this.wake;
+    if (!this.wqx || this.wqx.length < 2 * n) {
+      this.wqx = new Float64Array(2 * n); this.wqy = new Float64Array(2 * n);
+      this.wqz = new Float64Array(2 * n); this.wvx = new Float64Array(2 * n);
+      this.wvy = new Float64Array(2 * n); this.wvz = new Float64Array(2 * n);
+      this.latWn = new Float64Array(n);
+    }
+    const c = Math.cos(b.psi), sn = Math.sin(b.psi);
+    for (let i = 0; i < n; i++) {
+      const P = lat.panels[i];
+      const px = P.c[0], py = P.c[1], pz = P.c[2];
+      const mx = (P.a[0] + P.b[0]) / 2, my = (P.a[1] + P.b[1]) / 2,
+            mz = (P.a[2] + P.b[2]) / 2;
+      this.wqx[i] = b.x + px * c - py * sn;
+      this.wqy[i] = b.y + px * sn + py * c;
+      this.wqz[i] = pz;
+      this.wqx[n + i] = b.x + mx * c - my * sn;
+      this.wqy[n + i] = b.y + mx * sn + my * c;
+      this.wqz[n + i] = mz;
+    }
+    w.field(this.wqx, this.wqy, this.wqz, 2 * n, this.wvx, this.wvy, this.wvz);
+    for (let i = 0; i < n; i++) {
+      const nr = lat.panels[i].nrm;
+      // Обратно в оси корпуса — и на нормаль.
+      const ax = this.wvx[i] * c + this.wvy[i] * sn;
+      const ay = -this.wvx[i] * sn + this.wvy[i] * c;
+      this.latWn[i] = ax * nr[0] + ay * nr[1] + this.wvz[i] * nr[2];
+      const bx = this.wvx[n + i] * c + this.wvy[n + i] * sn;
+      const by = -this.wvx[n + i] * sn + this.wvy[n + i] * c;
+      lat.wExtra[i] = bx * nr[0] + by * nr[1] + this.wvz[n + i] * nr[2];
+    }
   }
 
   // Снос свободной пелены на шаг.

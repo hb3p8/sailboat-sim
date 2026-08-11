@@ -591,6 +591,7 @@ export class FreeWake {
     this.tx = 1; this.ty = 0; this.tz = 0;
     this.g = new Float64Array(fil);         // сила нити у кромки — только для цвета
     this.rc = new Float64Array(fil * len);  // радиус ядра В КАЖДОМ узле
+    this.hold = false;                      // свежий ряд вынут в неизвестные
     this.n = 0;                             // сколько узлов уже сошло
     this.core = 0.05;                       // ядро свежесошедшего узла
   }
@@ -725,9 +726,19 @@ export class FreeWake {
     for (let f = 0; f < F; f++) {
       const b = f * L;
       for (let i = 0; i < N; i++) {
-        const lo = f > 0 ? this.gr[b - L + i] : 0;
-        this.et[b + i] = this.gr[b + i] - lo;
-        this.es[b + i] = i > 0 ? this.gr[b + i - 1] - this.gr[b + i] : 0;
+        // `hold` — считать свежий ряд колец ПУСТЫМ.
+        //
+        // Он несёт циркуляцию, которую как раз и решают, а не известную. Пока
+        // он лежал в правой части с прошлого шага, в матрице не оставалось
+        // скоса вовсе: решётка выдавала циркуляцию бесконечного размаха, ответ
+        // приходил на шаг позже и перебарщивал, и лодка на эталоне вставала и
+        // шла назад. Здесь он вынимается, а обратно кладётся уже как
+        // неизвестная — тремя отрезками в матрицу (aero.js, nearRing).
+        const cur = (i === 0 && this.hold) ? 0 : this.gr[b + i];
+        const lo = f > 0 ? ((i === 0 && this.hold) ? 0 : this.gr[b - L + i]) : 0;
+        const pr = i > 0 ? ((i === 1 && this.hold) ? 0 : this.gr[b + i - 1]) : 0;
+        this.et[b + i] = cur - lo;
+        this.es[b + i] = i > 0 ? pr - cur : 0;
       }
       this.g[f] = this.et[b];
     }
@@ -865,6 +876,33 @@ export class FreeWake {
     this.spaceCore();
     this.edges();
     this.pack();
+  }
+
+  // Свежее кольцо нити f — то, что несёт решаемую циркуляцию. Отдаётся тремя
+  // отрезками: две сходящие ножки (по нитям f и f+1, от кромки к первому
+  // снесённому узлу) и замыкающий поперечный между ними. Четвёртый, у самой
+  // кромки, замыкается связанным вихрем решётки и потому не нужен.
+  //
+  // Знаки — те же, что даёт `edges` для кольца ряда 0: +Г на ножку нити f, -Г
+  // на ножку нити f+1, +Г на поперечный по ряду 1.
+  nearInfluence(f, px, py, pz, ground, out) {
+    const L = this.len, b = f * L, c = (f + 1) * L, t = [0, 0, 0];
+    const rc2 = 0.5 * (this.rc[b] * this.rc[b] + this.rc[b + 1] * this.rc[b + 1]);
+    let vx = 0, vy = 0, vz = 0;
+    const leg = (p, q, sg, mir) => {
+      const z1 = mir ? -this.z[p] : this.z[p], z2 = mir ? -this.z[q] : this.z[q];
+      segment(px, py, pz, this.x[p], this.y[p], z1,
+              this.x[q], this.y[q], z2, t, rc2);
+      vx += sg * t[0]; vy += sg * t[1]; vz += sg * t[2];
+    };
+    for (let mir = 0; mir < (ground ? 2 : 1); mir++) {
+      const m = mir === 1, k = m ? -1 : 1;
+      leg(b, b + 1, k, m);              // ножка по нити f
+      leg(c, c + 1, -k, m);             // ножка по нити f+1
+      leg(b + 1, c + 1, k, m);          // замыкающий поперечный, ряд 1
+    }
+    out[0] = vx; out[1] = vy; out[2] = vz;
+    return out;
   }
 
   // Ядро не может быть меньше половины расстояния до соседней нити.

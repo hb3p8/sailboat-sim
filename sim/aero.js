@@ -1089,6 +1089,9 @@ export class Rig {
   // десятков точек стоят вдесятеро дешевле, чем если спрашивать по одной.
   wakeDownwash(b, lat) {
     const n = lat.n, w = this.wake;
+    // Свежий ряд колец вынимается из известного поля: он несёт решаемую
+    // циркуляцию, и его место не в правой части, а в матрице.
+    w.hold = true; w.edges(); w.pack();
     if (!this.wqx || this.wqx.length < 2 * n) {
       this.wqx = new Float64Array(2 * n); this.wqy = new Float64Array(2 * n);
       this.wqz = new Float64Array(2 * n); this.wvx = new Float64Array(2 * n);
@@ -1119,6 +1122,62 @@ export class Rig {
       const by = -this.wvx[n + i] * sn + this.wvy[n + i] * c;
       lat.wExtra[i] = bx * nr[0] + by * nr[1] + this.wvz[n + i] * nr[2];
     }
+    this.nearWake(b, lat);
+  }
+
+  // Свежее кольцо — в МАТРИЦУ, а не в правую часть.
+  //
+  // Оно несёт ту самую циркуляцию, которую решают, и в этом всё дело. Отдать
+  // его в правую часть с прошлого шага — значит решать систему, в которой скоса
+  // от собственного следа нет вовсе: решётка выдаёт циркуляцию бесконечного
+  // размаха, вдвое с лишним больше настоящей, ответ приходит на шаг позже и
+  // перебарщивает. На эталоне это выглядело так: сила 823 Н вместо 331, потом
+  // лодка встаёт и идёт назад.
+  //
+  // Кольцо линейно по Г, значит его влияние — обычные коэффициенты матрицы.
+  // Циркуляция кольца равна циркуляции ПОЛОСКИ, то есть сумме циркуляций её
+  // панелей по хорде, поэтому один и тот же коэффициент прибавляется всем трём
+  // столбцам полоски.
+  nearWake(b, lat) {
+    const n = lat.n, w = this.wake, map = this.wakeMap();
+    const c = Math.cos(b.psi), sn = Math.sin(b.psi);
+    const V = [0, 0, 0];
+    for (let f = 0; f + 1 < w.fil; f++) {
+      const s = map[f];
+      if (s < 0) continue;
+      for (let i = 0; i < n; i++) {
+        const P = lat.panels[i], p = P.c, nr = P.nrm;
+        const X = b.x + p[0] * c - p[1] * sn, Y = b.y + p[0] * sn + p[1] * c;
+        w.nearInfluence(f, X, Y, p[2], true, V);
+        const ax = V[0] * c + V[1] * sn, ay = -V[0] * sn + V[1] * c;
+        const kk = ax * nr[0] + ay * nr[1] + V[2] * nr[2];
+        for (let k = 0; k < NCHORD; k++) lat.k[i * n + s * NCHORD + k] += kk;
+      }
+    }
+  }
+
+  // Какая полоска стоит за нитью f (или -1, если между f и f+1 паруса нет).
+  // Раскладка от состояния не зависит — только от числа полосок и места стыка
+  // парусов, — поэтому считается один раз. Тот же обход, что в stepWake, и это
+  // единственное место, где он повторяется: разъедутся — полоска получит чужое
+  // кольцо, а это ошибка на одну по высоте, которую по картинке не увидеть.
+  wakeMap() {
+    if (this.wakeStrip) return this.wakeStrip;
+    const NS = this.strips.length, fil = NS + 2;
+    const map = this.wakeStrip = new Int16Array(fil).fill(-1);
+    let f = 0;
+    for (let i = 0; i <= NS && f < fil; i++) {
+      const prev = i > 0 ? this.strips[i - 1] : null;
+      const cur = i < NS ? this.strips[i] : null;
+      if (prev && cur && prev.jib !== cur.jib) {
+        map[f] = -1; f++;
+        if (f < fil) { map[f] = i; f++; }
+        continue;
+      }
+      map[f] = cur ? i : -1;
+      f++;
+    }
+    return map;
   }
 
   // Снос свободной пелены на шаг.
@@ -1215,5 +1274,8 @@ export class Rig {
       out[1] = b.y + p[0] * sn + p[1] * c;
       out[2] = p[2];
     }, vel, gring);
+    // Свежий ряд возвращается на место: снос пелены считается по ПОЛНОМУ полю,
+    // вынут он был только на время решения системы.
+    w.hold = false; w.edges(); w.pack();
   }
 }

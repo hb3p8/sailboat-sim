@@ -592,6 +592,11 @@ export class FreeWake {
     this.g = new Float64Array(fil);         // сила нити у кромки — только для цвета
     this.rc = new Float64Array(fil * len);  // радиус ядра В КАЖДОМ узле
     this.hold = false;                      // свежий ряд вынут в неизвестные
+    // Пол на квадрат ядра. Ноль для собственного сноса — там пелена сама себе
+    // соседка и мельчить незачем. Для запроса С ПАРУСА поднимается: панели там
+    // без малого метр, и нить, прошедшая в трёх сантиметрах от контрольной
+    // точки, даёт коэффициент, которого у сетки такой грубости быть не может.
+    this.rcFloor = 0;
     this.n = 0;                             // сколько узлов уже сошло
     this.core = 0.05;                       // ядро свежесошедшего узла
   }
@@ -696,7 +701,8 @@ export class FreeWake {
   put(e, m, p, q, g, sz) {
     const ax = this.x[p], ay = this.y[p], az = sz * this.z[p];
     const r0x = this.x[q] - ax, r0y = this.y[q] - ay, r0z = sz * this.z[q] - az;
-    const rc2 = 0.5 * (this.rc[p] * this.rc[p] + this.rc[q] * this.rc[q]);
+    let rc2 = 0.5 * (this.rc[p] * this.rc[p] + this.rc[q] * this.rc[q]);
+    if (rc2 < this.rcFloor) rc2 = this.rcFloor;
     e[m] = ax; e[m + 1] = ay; e[m + 2] = az;
     e[m + 3] = r0x; e[m + 4] = r0y; e[m + 5] = r0z;
     e[m + 6] = g;
@@ -887,7 +893,8 @@ export class FreeWake {
   // на ножку нити f+1, +Г на поперечный по ряду 1.
   nearInfluence(f, px, py, pz, ground, out) {
     const L = this.len, b = f * L, c = (f + 1) * L, t = [0, 0, 0];
-    const rc2 = 0.5 * (this.rc[b] * this.rc[b] + this.rc[b + 1] * this.rc[b + 1]);
+    const rc2 = Math.max(this.rcFloor,
+      0.5 * (this.rc[b] * this.rc[b] + this.rc[b + 1] * this.rc[b + 1]));
     let vx = 0, vy = 0, vz = 0;
     const leg = (p, q, sg, mir) => {
       const z1 = mir ? -this.z[p] : this.z[p], z2 = mir ? -this.z[q] : this.z[q];

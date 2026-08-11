@@ -419,6 +419,72 @@ console.log('\nЛодка с пеленой и без неё, 45 секунд с
   check('и почти той же величины', ratio > 0.7 && ratio < 1.15, ratio.toFixed(2));
 }
 
+// --- задача Вагнера ------------------------------------------------------------
+//
+// То, ради чего пелена в силы и заводится. Смена угла атаки не даёт новой
+// подъёмной силы сразу: с задней шкаторины должен сойти разгонный вихрь, и пока
+// он рядом, его скос держит циркуляцию. Классика с 1925 года:
+//
+//     Ф(s) = 1 - 0.165 e^(-0.0455 s) - 0.335 e^(-0.3 s),
+//
+// где s — путь в полухордах. Ф(0) = 0.5, Ф(∞) = 1.
+//
+// Прямые сходящие лучи этого не знают вовсе: они мгновенно перестраиваются под
+// новую циркуляцию, и Ф у них тождественно единица. Запаздывание в модели
+// поэтому и стояло назначенным — фильтром `alphaLag` с подобранной постоянной.
+// Здесь проверяется, что пелена даёт его сама.
+{
+  const wag = (x) => 1 - 0.165 * Math.exp(-0.0455 * x) - 0.335 * Math.exp(-0.3 * x);
+  const run2 = (wf) => {
+    const b = new Boat(PACK);
+    b.o.wakeForces = wf; b.o.freeWake = wf;
+    b.wind.o.gradient = false;
+    b.o.windSpeed = 8; b.o.windDir = 60 * D; b.o.sheet = 14 * D; b.o.twist = 0;
+    // Лодка замораживается: мерить надо парус, а не разгон корпуса.
+    const hold = (n) => {
+      for (let i = 0; i < n; i++) {
+        b.u = 6; b.v = 0; b.r = 0; b.phi = 0; b.p_ = 0; b.psi = 0;
+        b.step(1 / 30);
+      }
+    };
+    // Циркуляция полоски прямо из решётки: сечение с его потолком и пузом тут
+    // ни при чём, проверяется постановка.
+    const G = () => { const l = b.rig.lattice; return l.gamma[6] + l.gamma[7] + l.gamma[8]; };
+    hold(900);
+    const g0 = G();
+    b.o.sheet = 26 * D;
+    const tr = [];
+    for (let i = 0; i < 300; i++) { hold(1); tr.push(G()); }
+    hold(1200);
+    const gInf = G();
+    const ve = b.rig.stripCalc[2].ve, ch = b.rig.strips[2].chord;
+    const phi = tr.map((g) => (g - g0) / (gInf - g0));
+    // Путь в полухордах -> номер шага.
+    return (x) => {
+      const i = Math.round(x * ch / 2 / ve * 30) - 1;
+      return i >= 0 && i < phi.length ? phi[i] : NaN;
+    };
+  };
+
+  const straight = run2(false), free = run2(true);
+  console.log('\n       путь, полухорд      2      6     12');
+  console.log('  Вагнер                %s   %s   %s',
+    wag(2).toFixed(2), wag(6).toFixed(2), wag(12).toFixed(2));
+  console.log('  прямые лучи           %s   %s   %s',
+    straight(2).toFixed(2), straight(6).toFixed(2), straight(12).toFixed(2));
+  console.log('  свободная пелена      %s   %s   %s\n',
+    free(2).toFixed(2), free(6).toFixed(2), free(12).toFixed(2));
+
+  check('прямые лучи запаздывания не дают вовсе', Math.abs(straight(6) - 1) < 0.02,
+    straight(6).toFixed(2));
+  check('пелена держит циркуляцию, пока разгонный вихрь рядом',
+    free(2) > 0.5 && free(2) < 0.8, free(2).toFixed(2));
+  check('и отпускает её по Вагнеру', Math.abs(free(6) - wag(6)) < 0.15 &&
+    Math.abs(free(12) - wag(12)) < 0.15,
+    free(6).toFixed(2) + ' против ' + wag(6).toFixed(2) + ', ' +
+    free(12).toFixed(2) + ' против ' + wag(12).toFixed(2));
+}
+
 // --- выключение и сброс --------------------------------------------------------
 {
   const b = run(true, 5 * 30);

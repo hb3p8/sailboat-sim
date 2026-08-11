@@ -1132,7 +1132,7 @@ export class Rig {
     // Хвост незанятых нитей: их не рисуют и они ничего не наводят, но парус им
     // приписывается заведомо чужой, чтобы полотно не потянулось к ним.
     for (; f < w.fil; f++) { gring[f] = 0; seed[f] = this.shedLo[0]; sail[f] = -1; }
-    const V = [0, 0, 0], T = [0, 0, 0];
+    const T = [0, 0, 0];
     const c = Math.cos(b.psi), sn = Math.sin(b.psi);
     // Куда продолжать пелену за дальним рядом: по кажущемуся ветру у рига, в
     // мировых осях — там же, где живут узлы.
@@ -1147,12 +1147,12 @@ export class Rig {
       const rx = X - b.x, ry = Y - b.y;
       const bx = rx * c + ry * sn, by = -rx * sn + ry * c;
       lat.induced(bx, by, Z, 1, 0, 0, true, T, true);
-      // ...а полученное ею — вернуть в мир.
-      w.induced(X, Y, Z, true, V);
+      // ...а полученное ею — вернуть в мир. Своё поле пелена добавит сама: она
+      // считает его одним заходом на все узлы разом, и это втрое дешевле.
       const air = b.windAtWorld(X, Y, Z);
-      out[0] = air.x + T[0] * c - T[1] * sn + V[0];
-      out[1] = air.y + T[0] * sn + T[1] * c + V[1];
-      out[2] = T[2] + V[2];
+      out[0] = air.x + T[0] * c - T[1] * sn;
+      out[1] = air.y + T[0] * sn + T[1] * c;
+      out[2] = T[2];
     };
     w.step(dt, (i, out) => {
       const p = seed[i];

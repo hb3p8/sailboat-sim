@@ -524,6 +524,7 @@ function solveGauss(M, out, n) {
 // вырастает с пяти сантиметров до тридцати — примерно в толщину той вихревой
 // пелены, что видно за парусом в дыму.
 const CORE_GROW = 0.06;
+const FOURPI = 4 * Math.PI;
 
 export class FreeWake {
   // `fil` — сколько нитей (по числу границ полосок), `len` — сколько узлов в
@@ -589,65 +590,166 @@ export class FreeWake {
   // и узел ехал со скоростью 2000 м/с при кажущемся ветре 4.5. Ядро на звено
   // берётся как средний квадрат по его концам.
   induced(px, py, pz, ground, out) {
-    const L = this.len, N = this.n, t = [0, 0, 0];
+    const L = this.len, N = this.n;
     let ox = 0, oy = 0, oz = 0;
     if (N < 2) { out[0] = out[1] = out[2] = 0; return out; }
+    const e = this.eg, ne = ground ? this.ne : this.neReal;
+    for (let m = 0, k8 = 0; m < ne; m++, k8 += 8) {
+      const ax = e[k8], ay = e[k8 + 1], az = e[k8 + 2];
+      const r0x = e[k8 + 3], r0y = e[k8 + 4], r0z = e[k8 + 5];
+      const r1x = px - ax, r1y = py - ay, r1z = pz - az;
+      const r2x = r1x - r0x, r2y = r1y - r0y, r2z = r1z - r0z;
+      const cx = r1y * r2z - r1z * r2y;
+      const cy = r1z * r2x - r1x * r2z;
+      const cz = r1x * r2y - r1y * r2x;
+      const c2 = cx * cx + cy * cy + cz * cz;
+      if (c2 < EPS) continue;
+      const l1 = Math.sqrt(r1x * r1x + r1y * r1y + r1z * r1z);
+      const l2 = Math.sqrt(r2x * r2x + r2y * r2y + r2z * r2z);
+      if (l1 < EPS || l2 < EPS) continue;
+      const fq = (r0x * r1x + r0y * r1y + r0z * r1z) / l1 -
+                 (r0x * r2x + r0y * r2y + r0z * r2z) / l2;
+      const kk = fq / (FOURPI * Math.max(c2, e[k8 + 7]));
+      const g = e[k8 + 6];
+      ox += g * (cx * kk); oy += g * (cy * kk); oz += g * (cz * kk);
+    }
+    // Хвосты — своим ядром и своей формулой; их четырнадцать, в общий список
+    // класть не за чем.
+    const t = [0, 0, 0];
     for (let f = 0; f < this.fil; f++) {
-      const b = f * L;
-      // Рёбра вдоль нити.
-      for (let i = 0; i + 1 < N; i++) {
-        const g = this.et[b + i];
-        if (!g) continue;
-        const p = b + i, q = p + 1;
-        const rc2 = 0.5 * (this.rc[p] * this.rc[p] + this.rc[q] * this.rc[q]);
-        segment(px, py, pz, this.x[p], this.y[p], this.z[p],
-                this.x[q], this.y[q], this.z[q], t, rc2);
-        ox += g * t[0]; oy += g * t[1]; oz += g * t[2];
-        if (ground) {
-          segment(px, py, pz, this.x[p], this.y[p], -this.z[p],
-                  this.x[q], this.y[q], -this.z[q], t, rc2);
-          ox -= g * t[0]; oy -= g * t[1]; oz -= g * t[2];
-        }
-      }
-      // Рёбра поперёк — сошедшая завихренность. Ряд 0 пропускается: свежий ряд
-      // сошёл с той же циркуляцией, что стоит на парусе сейчас, и разность там
-      // тождественный ноль.
-      if (f + 1 < this.fil) {
-        for (let i = 1; i < N; i++) {
-          const g = this.es[b + i];
-          if (!g) continue;
-          const p = b + i, q = p + L;
-          const rc2 = 0.5 * (this.rc[p] * this.rc[p] + this.rc[q] * this.rc[q]);
-          segment(px, py, pz, this.x[p], this.y[p], this.z[p],
-                  this.x[q], this.y[q], this.z[q], t, rc2);
-          ox += g * t[0]; oy += g * t[1]; oz += g * t[2];
-          if (ground) {
-            segment(px, py, pz, this.x[p], this.y[p], -this.z[p],
-                    this.x[q], this.y[q], -this.z[q], t, rc2);
-            ox -= g * t[0]; oy -= g * t[1]; oz -= g * t[2];
-          }
-        }
-      }
-      // Хвост: дальний ряд не обрывается, а уходит по своему же направлению в
-      // бесконечность. Оборванная нить наводит НЕ ТО, что тянущаяся до конца, —
-      // у неё на конце берётся ниоткуда источник завихренности, которого в
-      // природе нет (Гельмгольц: вихревая нить не может кончиться в жидкости).
-      const g = this.et[b + N - 1];
-      if (g) {
-        const p = b + N - 1;
-        const rc2 = this.rc[p] * this.rc[p];
-        tail(px, py, pz, this.x[p], this.y[p], this.z[p],
-             this.tx, this.ty, this.tz, t, rc2);
-        ox += g * t[0]; oy += g * t[1]; oz += g * t[2];
-        if (ground) {
-          tail(px, py, pz, this.x[p], this.y[p], -this.z[p],
-               this.tx, this.ty, -this.tz, t, rc2);
-          ox -= g * t[0]; oy -= g * t[1]; oz -= g * t[2];
-        }
+      const p = f * L + N - 1, g = this.et[p];
+      if (!g) continue;
+      const rc2 = this.rc[p] * this.rc[p];
+      tail(px, py, pz, this.x[p], this.y[p], this.z[p],
+           this.tx, this.ty, this.tz, t, rc2);
+      ox += g * t[0]; oy += g * t[1]; oz += g * t[2];
+      if (ground) {
+        tail(px, py, pz, this.x[p], this.y[p], -this.z[p],
+             this.tx, this.ty, -this.tz, t, rc2);
+        ox -= g * t[0]; oy -= g * t[1]; oz -= g * t[2];
       }
     }
     out[0] = ox; out[1] = oy; out[2] = oz;
     return out;
+  }
+
+  // Скорость, наведённая пеленой на саму себя, — сразу ВО ВСЕХ узлах.
+  //
+  // Тот же счёт, что и в `induced`, но цикл вывернут наизнанку: снаружи рёбра,
+  // внутри точки. Ответ до последнего разряда тот же (порядок сложения по
+  // рёбрам не меняется), а стоит втрое дешевле: данные ребра остаются в
+  // регистрах на все пятьсот шестьдесят точек, вместо того чтобы читаться
+  // заново для каждой.
+  //
+  // Это и есть та самая петля, в которой живёт 95% цены пелены: пятьсот
+  // шестьдесят точек на две тысячи рёбер — миллион с лишним отрезков за шаг.
+  selfInduce() {
+    const L = this.len, F = this.fil, N = this.n, P = F * N;
+    if (!this.sx || this.sx.length < F * L) {
+      this.sx = new Float64Array(F * L);
+      this.sy = new Float64Array(F * L);
+      this.sz = new Float64Array(F * L);
+      this.qx = new Float64Array(F * L);
+      this.qy = new Float64Array(F * L);
+      this.qz = new Float64Array(F * L);
+    }
+    const sx = this.sx, sy = this.sy, sz = this.sz;
+    const qx = this.qx, qy = this.qy, qz = this.qz;
+    for (let f = 0; f < F; f++) {
+      for (let i = 0; i < N; i++) {
+        const j = f * N + i, k = f * L + i;
+        qx[j] = this.x[k]; qy[j] = this.y[k]; qz[j] = this.z[k];
+        sx[j] = 0; sy[j] = 0; sz[j] = 0;
+      }
+    }
+    const e = this.eg, ne = this.ne;
+    for (let m = 0, k8 = 0; m < ne; m++, k8 += 8) {
+      const ax = e[k8], ay = e[k8 + 1], az = e[k8 + 2];
+      const r0x = e[k8 + 3], r0y = e[k8 + 4], r0z = e[k8 + 5];
+      const g = e[k8 + 6], den = e[k8 + 7];
+      for (let j = 0; j < P; j++) {
+        const r1x = qx[j] - ax, r1y = qy[j] - ay, r1z = qz[j] - az;
+        const r2x = r1x - r0x, r2y = r1y - r0y, r2z = r1z - r0z;
+        const cx = r1y * r2z - r1z * r2y;
+        const cy = r1z * r2x - r1x * r2z;
+        const cz = r1x * r2y - r1y * r2x;
+        const c2 = cx * cx + cy * cy + cz * cz;
+        if (c2 < EPS) continue;
+        const l1 = Math.sqrt(r1x * r1x + r1y * r1y + r1z * r1z);
+        const l2 = Math.sqrt(r2x * r2x + r2y * r2y + r2z * r2z);
+        if (l1 < EPS || l2 < EPS) continue;
+        const fq = (r0x * r1x + r0y * r1y + r0z * r1z) / l1 -
+                   (r0x * r2x + r0y * r2y + r0z * r2z) / l2;
+        const kk = fq / (FOURPI * Math.max(c2, den));
+        sx[j] += g * (cx * kk); sy[j] += g * (cy * kk); sz[j] += g * (cz * kk);
+      }
+    }
+    // Хвосты — по точкам, их мало.
+    const t = [0, 0, 0];
+    for (let f = 0; f < F; f++) {
+      const p = f * L + N - 1, g = this.et[p];
+      if (!g) continue;
+      const rc2 = this.rc[p] * this.rc[p];
+      const hx = this.x[p], hy = this.y[p], hz = this.z[p];
+      for (let j = 0; j < P; j++) {
+        tail(qx[j], qy[j], qz[j], hx, hy, hz, this.tx, this.ty, this.tz, t, rc2);
+        sx[j] += g * t[0]; sy[j] += g * t[1]; sz[j] += g * t[2];
+        tail(qx[j], qy[j], qz[j], hx, hy, -hz, this.tx, this.ty, -this.tz, t, rc2);
+        sx[j] -= g * t[0]; sy[j] -= g * t[1]; sz[j] -= g * t[2];
+      }
+    }
+  }
+
+  // Плотная запись всех рёбер: то, чем считается поле, и то, что не зависит от
+  // точки запроса.
+  //
+  // На каждое ребро восемь чисел: начало (3), вектор до конца (3), сила и
+  // знаменатель ограничителя. Всё это раньше пересчитывалось ЗАНОВО в каждой из
+  // пятисот шестидесяти точек — вычитание концов, длина ребра, квадрат ядра.
+  // Здесь считается один раз за шаг.
+  //
+  // Отражение от воды лежит в том же списке отдельными рёбрами: зеркальное
+  // ребро — это то же ребро с перевёрнутым z и обратным знаком силы. Отдельной
+  // ветки на воду от этого не нужно вовсе, а стоила она 45% всего счёта.
+  // Настоящие рёбра идут первыми, зеркальные следом, — значит запрос без воды
+  // это просто обход первой половины списка.
+  pack() {
+    const L = this.len, F = this.fil, N = this.n;
+    const cap = 2 * F * (2 * L) * 8;
+    if (!this.eg || this.eg.length < cap) this.eg = new Float64Array(cap);
+    const e = this.eg;
+    let m = 0;
+    for (let mir = 0; mir < 2; mir++) {
+      const sz = mir ? -1 : 1, sg = mir ? -1 : 1;
+      for (let f = 0; f < F; f++) {
+        const b = f * L;
+        for (let i = 0; i + 1 < N; i++) {
+          const g = this.et[b + i];
+          if (g) m = this.put(e, m, b + i, b + i + 1, mir ? -g : g, sz);
+        }
+        if (f + 1 < F) {
+          for (let i = 1; i < N; i++) {
+            const g = this.es[b + i];
+            if (g) m = this.put(e, m, b + i, b + i + L, mir ? -g : g, sz);
+          }
+        }
+        sg;
+      }
+      if (!mir) this.neReal = m / 8;
+    }
+    this.ne = m / 8;
+  }
+
+  // Одно ребро в плотную запись. `sz` = -1 для зеркального.
+  put(e, m, p, q, g, sz) {
+    const ax = this.x[p], ay = this.y[p], az = sz * this.z[p];
+    const r0x = this.x[q] - ax, r0y = this.y[q] - ay, r0z = sz * this.z[q] - az;
+    const rc2 = 0.5 * (this.rc[p] * this.rc[p] + this.rc[q] * this.rc[q]);
+    e[m] = ax; e[m + 1] = ay; e[m + 2] = az;
+    e[m + 3] = r0x; e[m + 4] = r0y; e[m + 5] = r0z;
+    e[m + 6] = g;
+    e[m + 7] = rc2 * (r0x * r0x + r0y * r0y + r0z * r0z);
+    return m + 8;
   }
 
   // Силы рёбер из циркуляций колец. Раз в шаг, а не на каждой точке запроса.
@@ -683,9 +785,10 @@ export class FreeWake {
   // пронумерованы нити, а это не физика. Поэтому сперва считаются скорости всех
   // старых узлов, и только потом все узлы переезжают.
   //
-  // `seed(f, out)` даёт точку схода нити, `vel(x, y, z, out)` — местную
-  // скорость, `gring` — связанные циркуляции полосок (нулевые там, где между
-  // соседними нитями паруса нет).
+  // `seed(f, out)` даёт точку схода нити, `vel(x, y, z, out)` — местную скорость
+  // БЕЗ собственного поля пелены (его она добавляет сама, и сразу всем узлам),
+  // `gring` — связанные циркуляции полосок (нулевые там, где между соседними
+  // нитями паруса нет).
   step(dt, seed, vel, gring) {
     const L = this.len, N = this.fil * L, v = [0, 0, 0], p = [0, 0, 0];
     if (!this.vx || this.vx.length !== N) {
@@ -693,13 +796,21 @@ export class FreeWake {
       this.vy = new Float64Array(N);
       this.vz = new Float64Array(N);
     }
-    // Проход первый: скорости по СТАРОМУ полю, ничего не двигаем.
+    // Проход первый: скорости по СТАРОМУ полю, ничего не двигаем. Своё поле
+    // пелена считает одним заходом на весь список узлов, чужое — по точкам.
+    if (this.n > 1) this.selfInduce();
     for (let f = 0; f < this.fil; f++) {
       const b = f * L;
       for (let i = 0; i < this.n; i++) {
-        const k = b + i;
+        const k = b + i, j = f * this.n + i;
         vel(this.x[k], this.y[k], this.z[k], v);
-        this.vx[k] = v[0]; this.vy[k] = v[1]; this.vz[k] = v[2];
+        if (this.n > 1) {
+          this.vx[k] = v[0] + this.sx[j];
+          this.vy[k] = v[1] + this.sy[j];
+          this.vz[k] = v[2] + this.sz[j];
+        } else {
+          this.vx[k] = v[0]; this.vy[k] = v[1]; this.vz[k] = v[2];
+        }
       }
     }
     // Проход второй: все переезжают и стареют на одну позицию. Вместе с узлом
@@ -729,6 +840,7 @@ export class FreeWake {
     if (this.n < L) this.n++;
     this.spaceCore();
     this.edges();
+    this.pack();
   }
 
   // Ядро не может быть меньше половины расстояния до соседней нити.

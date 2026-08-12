@@ -725,7 +725,12 @@ const WAKE_R0 = 0.06, WAKE_R1 = 0.10;
 // экране цепочка отдельных плит. Втрое так и выглядело.
 const WAKE_BOLD = 1.2;
 const WAKE_SIDES = 5;
-let wakeMade = 0;                       // на сколько нитей построены индексы
+// На сколько нитей И УЗЛОВ построены индексы. Длину надо помнить наравне с
+// числом нитей: индексный буфер сшивает узлы с шагом `len`, и если пелена
+// станет короче, а буфер останется прежним, каждый треугольник свяжет узлы из
+// разных нитей. На картинке это выглядит как зигзаг во весь экран — так и
+// вышло, когда цепочку укоротили с сорока узлов до двадцати четырёх.
+let wakeMade = 0, wakeMadeLen = 0;
 
 function wakeGeometry(fil, len) {
   const nv = fil * len * WAKE_SIDES;
@@ -750,7 +755,7 @@ function wakeGeometry(fil, len) {
   wakeSheetGeo.setAttribute('color',
     new Float32BufferAttribute(new Float32Array(tris * 3 * 3), 3));
   wakeSheetGeo.setDrawRange(0, 0);
-  wakeMade = fil;
+  wakeMade = fil; wakeMadeLen = len;
 }
 
 // Буферы заводятся СРАЗУ, а не при первом сошедшем узле.
@@ -766,13 +771,13 @@ function wakeGeometry(fil, len) {
 //
 // Число нитей то же, что в aero.js: границы полосок плюс лишняя на стыке
 // парусов. Разойдётся — `wakeGeometry` пересоберёт по месту.
-wakeGeometry(boat.rig.strips.length + 2, 40);
+wakeGeometry(boat.rig.strips.length + 2, WAKE_LEN);
 
 function updateWake() {
   const w = boat.rig.wake;
   if (!w || w.n < 2) { wakeGeo.setDrawRange(0, 0); wakeSheetGeo.setDrawRange(0, 0); return; }
   const L = w.len;
-  if (wakeMade !== w.fil) wakeGeometry(w.fil, L);
+  if (wakeMade !== w.fil || wakeMadeLen !== L) wakeGeometry(w.fil, L);
   const p = wakeGeo.attributes.position.array;
   const c = wakeGeo.attributes.color.array;
   // Сила у КАЖДОГО звена своя, а не одна на нить. Теперь это не придирка:

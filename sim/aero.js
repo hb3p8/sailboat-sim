@@ -1502,7 +1502,7 @@ export class Rig {
       const a = b.apparentWind();
       const ax = a.x * c - a.y * sn, ay = a.x * sn + a.y * c;
       const al = Math.hypot(ax, ay) || 1;
-      w.tx = ax / al; w.ty = ay / al; w.tz = 0;
+      w.dirx = ax / al; w.diry = ay / al; w.dirz = 0;
     }
     // Поле решётки во ВСЕХ узлах сразу — одним заходом, а не по точке.
     //

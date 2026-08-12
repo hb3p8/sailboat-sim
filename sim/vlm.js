@@ -655,7 +655,16 @@ export class FreeWake {
     // узел вместо 3.7 — то есть по картинке не отличить от прежнего разноса, а
     // причина совсем другая. Далеко за кормой пелена всё равно вытягивается
     // вдоль потока, так что честнее сразу туда её и продолжать.
-    this.tx = 1; this.ty = 0; this.tz = 0;
+    // А вот ПО КАКОМУ потоку — по тому, что был, когда этот ряд сходил, и это не
+    // придирка. Направление было одно на всю пелену и переписывалось каждый шаг
+    // текущим ветром: после поворота весь дальний след разом менял направление,
+    // хотя ближние узлы стояли на месте. Памяти о том, куда шла лодка, не было
+    // ровно никакой. Теперь направление стареет вместе с рядом.
+    this.tdx = new Float64Array(len);
+    this.tdy = new Float64Array(len);
+    this.tdz = new Float64Array(len);
+    this.tdx[0] = 1;
+    this.dirx = 1; this.diry = 0; this.dirz = 0;   // поток для СВЕЖЕГО ряда
     this.g = new Float64Array(fil);         // сила нити у кромки — только для цвета
     this.rc = new Float64Array(fil * len);  // радиус ядра В КАЖДОМ узле
     this.hold = false;                      // свежий ряд вынут в неизвестные
@@ -706,12 +715,11 @@ export class FreeWake {
       const p = f * L + N - 1, g = this.et[p];
       if (!g) continue;
       const rc2 = this.rc[p] * this.rc[p];
-      tail(px, py, pz, this.x[p], this.y[p], this.z[p],
-           this.tx, this.ty, this.tz, t, rc2);
+      const dx = this.tdx[N - 1], dy = this.tdy[N - 1], dz = this.tdz[N - 1];
+      tail(px, py, pz, this.x[p], this.y[p], this.z[p], dx, dy, dz, t, rc2);
       ox += g * t[0]; oy += g * t[1]; oz += g * t[2];
       if (ground) {
-        tail(px, py, pz, this.x[p], this.y[p], -this.z[p],
-             this.tx, this.ty, -this.tz, t, rc2);
+        tail(px, py, pz, this.x[p], this.y[p], -this.z[p], dx, dy, -dz, t, rc2);
         ox -= g * t[0]; oy -= g * t[1]; oz -= g * t[2];
       }
     }
@@ -849,10 +857,11 @@ export class FreeWake {
       if (!g) continue;
       const rc2 = this.rc[p] * this.rc[p];
       const hx = this.x[p], hy = this.y[p], hz = this.z[p];
+      const dx = this.tdx[N - 1], dy = this.tdy[N - 1], dz = this.tdz[N - 1];
       for (let j = 0; j < np; j++) {
-        tail(qx[j], qy[j], qz[j], hx, hy, hz, this.tx, this.ty, this.tz, t, rc2);
+        tail(qx[j], qy[j], qz[j], hx, hy, hz, dx, dy, dz, t, rc2);
         ox[j] += g * t[0]; oy[j] += g * t[1]; oz[j] += g * t[2];
-        tail(qx[j], qy[j], qz[j], hx, hy, -hz, this.tx, this.ty, -this.tz, t, rc2);
+        tail(qx[j], qy[j], qz[j], hx, hy, -hz, dx, dy, -dz, t, rc2);
         ox[j] -= g * t[0]; oy[j] -= g * t[1]; oz[j] -= g * t[2];
       }
     }
@@ -951,6 +960,14 @@ export class FreeWake {
       this.gr[b] = gring[f];
       this.ring[f] = gring[f] !== 0 ? 1 : this.ring[f];
     }
+    // Направление хвоста стареет вместе с рядами: сдвиг с конца, свежему ряду —
+    // сегодняшний поток.
+    for (let i = Math.min(this.n, L - 2); i >= 0; i--) {
+      this.tdx[i + 1] = this.tdx[i];
+      this.tdy[i + 1] = this.tdy[i];
+      this.tdz[i + 1] = this.tdz[i];
+    }
+    this.tdx[0] = this.dirx; this.tdy[0] = this.diry; this.tdz[0] = this.dirz;
     if (this.n < L) this.n++;
     this.spaceCore();
     this.edges();

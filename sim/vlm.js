@@ -685,6 +685,7 @@ export class FreeWake {
     // 0.5 как лучшее по согласию между 30 и 60 Гц: 1% на обоих курсах против
     // 3% у 0.25. Таблицы — в docs/wake.md.
     this.spaceK = 0.5;
+    this.ground = true;                     // зеркало от воды; false — стенд
     this.hold = false;                      // свежий ряд вынут в неизвестные
     this.n = 0;                             // сколько узлов уже сошло
     this.core = 0.05;                       // ядро свежесошедшего узла
@@ -764,7 +765,10 @@ export class FreeWake {
     if (!this.eg || this.eg.length < cap) this.eg = new Float64Array(cap);
     const e = this.eg;
     let m = 0;
-    for (let mir = 0; mir < 2; mir++) {
+    // Отражение от воды кладётся в тот же список. Выключается оно только на
+    // проверочных стендах, где воды нет вовсе (крыло в свободном потоке).
+    const halves = this.ground === false ? 1 : 2;
+    for (let mir = 0; mir < halves; mir++) {
       const sz = mir ? -1 : 1, sg = mir ? -1 : 1;
       for (let f = 0; f < F; f++) {
         const b = f * L;

@@ -1472,6 +1472,13 @@ export class Rig {
     // Полотно пелены натянуто между соседними нитями ОДНОГО паруса, и признак
     // для него берётся отсюда.
     const sail = this.wakeSail || (this.wakeSail = new Int8Array(w.fil));
+    // Топология листа — раз и навсегда, из раскладки полосок: между какими
+    // парами нитей натянуто полотно. Пелена меряет по ней толщину листа.
+    if (!this.ringSet) {
+      const map = this.wakeMap();
+      for (let q = 0; q < w.fil; q++) w.ring[q] = map[q] >= 0 ? 1 : 0;
+      this.ringSet = true;
+    }
     let f = 0;
     for (let i = 0; i <= NS && f < w.fil; i++) {
       const prev = i > 0 ? this.strips[i - 1] : null;

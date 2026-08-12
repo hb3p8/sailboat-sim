@@ -180,9 +180,14 @@ function gameCompass(deg) {
   const c = gameEl.comp, g = c.getContext('2d');
   const w = c.width, h = c.height;
   g.clearRect(0, 0, w, h);
+  // Подложки под лентой нет — она закрывала небо. Читаемость держит тень, та же
+  // по смыслу, что у текста в разметке.
+  g.shadowColor = 'rgba(0, 8, 18, .85)';
+  g.shadowBlur = 6;
+  g.shadowOffsetY = 1;
   const px = w / (2 * GAME_SPAN);          // пикселей на градус
   g.textAlign = 'center';
-  g.font = '600 20px ui-sans-serif, -apple-system, sans-serif';
+  g.font = '700 17px ui-sans-serif, -apple-system, sans-serif';
   const from = Math.ceil(deg - GAME_SPAN), to = Math.floor(deg + GAME_SPAN);
   for (let a = from; a <= to; a++) {
     if (a % 5) continue;
@@ -191,7 +196,7 @@ function gameCompass(deg) {
     g.strokeStyle = big ? 'rgba(235,242,251,.85)' : 'rgba(235,242,251,.35)';
     g.lineWidth = big ? 2 : 1;
     g.beginPath();
-    g.moveTo(x, h - (big ? 26 : 16));
+    g.moveTo(x, h - (big ? 18 : 11));
     g.lineTo(x, h - 4);
     g.stroke();
     if (!big) continue;
@@ -199,12 +204,12 @@ function gameCompass(deg) {
     const name = GAME_RHUMB[n / 30] || null;
     g.fillStyle = name ? '#ffcf5a' : 'rgba(235,242,251,.8)';
     g.fillText(name && n % 30 === 0 ? name
-               : String(n).padStart(3, '0'), x, h - 32);
+               : String(n).padStart(3, '0'), x, h - 22);
   }
   // Указатель курса — треугольник посередине. Он и есть нос.
   g.fillStyle = '#ffcf5a';
   g.beginPath();
-  g.moveTo(w / 2, 14); g.lineTo(w / 2 - 8, 0); g.lineTo(w / 2 + 8, 0);
+  g.moveTo(w / 2, 11); g.lineTo(w / 2 - 7, 0); g.lineTo(w / 2 + 7, 0);
   g.closePath(); g.fill();
 }
 

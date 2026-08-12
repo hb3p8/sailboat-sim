@@ -61,6 +61,22 @@ export const NCHORD = 3;
 // оно здесь по другой причине: сквозь твёрдую поверхность вихревая нить не
 // проходит, и узел, лежащий на полотне, — это заведомо неверная геометрия,
 // какими бы малыми ни выходили её последствия сегодня.
+// Сколько узлов в нити пелены.
+//
+// Двадцать четыре, а не сорок, и выбрано это замером, а не на глаз. Цена
+// самоиндукции растёт как КВАДРАТ этого числа, и на сорока пелена стоила 7.9 мс
+// на шаг из восьми.
+//
+// Установившиеся силы к длине не чувствительны вовсе: от сорока узлов до
+// двенадцати тяга и боковая совпадают до третьей значащей цифры. Это не
+// удивительно — дальний конец закрыт полубесконечным хвостом, и укорачивание
+// цепочки лишь передвигает место, где подробная пелена сменяется прямой.
+//
+// Платит за длину НЕСТАЦИОНАРНОСТЬ, и правило простое: цепочка обязана
+// покрывать тот путь, на котором мерится отклик. Двадцать четыре узла это 7.8
+// полухорды — Ф(2) и Ф(6) не меняются вовсе, Ф(12) уходит с 0.96 на 0.99. На
+// шестнадцати узлах (5.1 полухорды) Ф(6) ломается — 0.98 вместо 0.85.
+const WAKE_LEN = 24;
 const SAIL_KEEP = 0.2;
 const NEAR = [0, 0, 0];
 
@@ -1262,12 +1278,34 @@ export class Rig {
       W[k + 1] = b.y + x * sn + y * c;
       W[k + 2] = this.surf[k + 2];
     }
+    // Обхватывающие сферы полосок: узел, до которой дальше её радиуса плюс
+    // запас, ни одного её треугольника достать не может. Без этой отсечки на
+    // каждый узел приходилось семьдесят две задачи «точка — треугольник», а
+    // сходятся близко единицы узлов из пятисот.
+    const cx = this.surfC || (this.surfC = new Float64Array(NS * 4));
+    for (let s = 0; s < NS; s++) {
+      const o = s * 2 * M * 3;
+      let ax = 0, ay = 0, az = 0;
+      for (let j = 0; j < 2 * M; j++) {
+        ax += W[o + j * 3]; ay += W[o + j * 3 + 1]; az += W[o + j * 3 + 2];
+      }
+      ax /= 2 * M; ay /= 2 * M; az /= 2 * M;
+      let r = 0;
+      for (let j = 0; j < 2 * M; j++) {
+        r = Math.max(r, Math.hypot(W[o + j * 3] - ax, W[o + j * 3 + 1] - ay,
+                                   W[o + j * 3 + 2] - az));
+      }
+      cx[s * 4] = ax; cx[s * 4 + 1] = ay; cx[s * 4 + 2] = az;
+      cx[s * 4 + 3] = (r + SAIL_KEEP) * (r + SAIL_KEEP);
+    }
     for (let f = 0; f < w.fil; f++) {
       for (let i = 1; i < w.n; i++) {
         const k = f * L + i;
         const px = w.x[k], py = w.y[k], pz = w.z[k];
         let best = Infinity, bx = 0, by = 0, bz = 0;
         for (let s = 0; s < NS; s++) {
+          const dx = px - cx[s * 4], dy = py - cx[s * 4 + 1], dz = pz - cx[s * 4 + 2];
+          if (dx * dx + dy * dy + dz * dz > cx[s * 4 + 3]) continue;
           const o = s * 2 * M * 3;
           for (let j = 0; j < NCHORD; j++) {
             const q = o + j * 6;
@@ -1417,7 +1455,7 @@ export class Rig {
   // корпус, наведённая ею скорость обратно в мир.
   stepWake(b, dt) {
     const NS = this.strips.length, lat = this.lattice;
-    if (!this.wake) this.wake = new FreeWake(NS + 2, 40);
+    if (!this.wake) this.wake = new FreeWake(NS + 2, this.wakeLen || WAKE_LEN);
     const w = this.wake;
     w.core = lat.core;
     const G = new Float64Array(NS);
@@ -1457,7 +1495,6 @@ export class Rig {
     // Хвост незанятых нитей: их не рисуют и они ничего не наводят, но парус им
     // приписывается заведомо чужой, чтобы полотно не потянулось к ним.
     for (; f < w.fil; f++) { gring[f] = 0; seed[f] = this.shedLo[0]; sail[f] = -1; }
-    const T = [0, 0, 0];
     const c = Math.cos(b.psi), sn = Math.sin(b.psi);
     // Куда продолжать пелену за дальним рядом: по кажущемуся ветру у рига, в
     // мировых осях — там же, где живут узлы.
@@ -1467,17 +1504,37 @@ export class Rig {
       const al = Math.hypot(ax, ay) || 1;
       w.tx = ax / al; w.ty = ay / al; w.tz = 0;
     }
-    const vel = (X, Y, Z, out) => {
-      // Точка мировая — решётке её надо подать в осях корпуса.
-      const rx = X - b.x, ry = Y - b.y;
-      const bx = rx * c + ry * sn, by = -rx * sn + ry * c;
-      lat.induced(bx, by, Z, 1, 0, 0, true, T, true);
-      // ...а полученное ею — вернуть в мир. Своё поле пелена добавит сама: она
-      // считает его одним заходом на все узлы разом, и это втрое дешевле.
+    // Поле решётки во ВСЕХ узлах сразу — одним заходом, а не по точке.
+    //
+    // Узлов триста с лишним, отрезков связанного контура две сотни; спрашивать
+    // по одному значит перечитывать концы панелей и считать их длины заново на
+    // каждую точку. Своё поле пелена добавляет себе сама (`selfInduce`), здесь
+    // только чужое.
+    const P = w.fil * w.n;
+    if (!this.lqx || this.lqx.length < w.fil * w.len) {
+      const N = w.fil * w.len;
+      this.lqx = new Float64Array(N); this.lqy = new Float64Array(N);
+      this.lqz = new Float64Array(N); this.lvx = new Float64Array(N);
+      this.lvy = new Float64Array(N); this.lvz = new Float64Array(N);
+    }
+    for (let f = 0; f < w.fil; f++) {
+      for (let i = 0; i < w.n; i++) {
+        const k = f * w.len + i, j = f * w.n + i;
+        const rx = w.x[k] - b.x, ry = w.y[k] - b.y;
+        this.lqx[j] = rx * c + ry * sn;      // в оси корпуса
+        this.lqy[j] = -rx * sn + ry * c;
+        this.lqz[j] = w.z[k];
+      }
+    }
+    lat.packBound(true);
+    lat.fieldBound(this.lqx, this.lqy, this.lqz, P, this.lvx, this.lvy, this.lvz);
+    const vel = (X, Y, Z, out, j) => {
+      // Наведённое решёткой посчитано заранее, в осях корпуса — вернуть в мир.
+      const tx = this.lvx[j], ty = this.lvy[j];
       const air = b.windAtWorld(X, Y, Z);
-      out[0] = air.x + T[0] * c - T[1] * sn;
-      out[1] = air.y + T[0] * sn + T[1] * c;
-      out[2] = T[2];
+      out[0] = air.x + tx * c - ty * sn;
+      out[1] = air.y + tx * sn + ty * c;
+      out[2] = this.lvz[j];
     };
     w.step(dt, (i, out) => {
       const p = seed[i];

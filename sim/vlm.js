@@ -453,6 +453,73 @@ export class Lattice {
     return out;
   }
 
+  // Плотная запись связанного контура — то же, что `FreeWake.pack`, и по той же
+  // причине.
+  //
+  // Пелена спрашивает поле решётки в каждом своём узле: триста с лишним точек на
+  // двести с лишним отрезков за шаг. В `induced` при этом на КАЖДУЮ точку заново
+  // читались концы панели, проверялись вырожденные отрезки вдоль хорды и
+  // считалась длина — всё то, что от точки не зависит. Здесь это считается раз
+  // за шаг, а поле берётся `fieldBound`.
+  //
+  // Сходящие лучи сюда не входят: со свободной пеленой их нет, а её саму она
+  // добавляет себе сама.
+  packBound(ground) {
+    const n = this.n, P = this.panels;
+    const cap = n * 3 * 2 * 8;
+    if (!this.bg || this.bg.length < cap) this.bg = new Float64Array(cap);
+    const e = this.bg, rc2 = this.core * this.core;
+    let m = 0;
+    const put = (ax, ay, az, bx, by, bz, g) => {
+      const r0x = bx - ax, r0y = by - ay, r0z = bz - az;
+      const l0 = r0x * r0x + r0y * r0y + r0z * r0z;
+      if (l0 < EPS) return;
+      e[m] = ax; e[m + 1] = ay; e[m + 2] = az;
+      e[m + 3] = r0x; e[m + 4] = r0y; e[m + 5] = r0z;
+      e[m + 6] = g; e[m + 7] = rc2 * l0;
+      m += 8;
+    };
+    for (let mir = 0; mir < (ground ? 2 : 1); mir++) {
+      const sz = mir ? -1 : 1, sg = mir ? -1 : 1;
+      for (let j = 0; j < n; j++) {
+        const g = this.gamma[j];
+        if (!g) continue;
+        const p = P[j], a = p.a, b = p.b, ta = p.ta, tb = p.tb;
+        put(a[0], a[1], sz * a[2], b[0], b[1], sz * b[2], sg * g);
+        put(ta[0], ta[1], sz * ta[2], a[0], a[1], sz * a[2], sg * g);
+        put(b[0], b[1], sz * b[2], tb[0], tb[1], sz * tb[2], sg * g);
+      }
+    }
+    this.nb = m / 8;
+  }
+
+  // Поле связанного контура сразу в наборе точек. Кернел тот же, что у пелены.
+  fieldBound(qx, qy, qz, np, ox, oy, oz) {
+    for (let j = 0; j < np; j++) { ox[j] = 0; oy[j] = 0; oz[j] = 0; }
+    const e = this.bg, ne = this.nb || 0;
+    for (let m = 0, k8 = 0; m < ne; m++, k8 += 8) {
+      const ax = e[k8], ay = e[k8 + 1], az = e[k8 + 2];
+      const r0x = e[k8 + 3], r0y = e[k8 + 4], r0z = e[k8 + 5];
+      const g = e[k8 + 6], den = e[k8 + 7];
+      for (let j = 0; j < np; j++) {
+        const r1x = qx[j] - ax, r1y = qy[j] - ay, r1z = qz[j] - az;
+        const r2x = r1x - r0x, r2y = r1y - r0y, r2z = r1z - r0z;
+        const cx = r1y * r2z - r1z * r2y;
+        const cy = r1z * r2x - r1x * r2z;
+        const cz = r1x * r2y - r1y * r2x;
+        const c2 = cx * cx + cy * cy + cz * cz;
+        if (c2 < EPS) continue;
+        const l1 = Math.sqrt(r1x * r1x + r1y * r1y + r1z * r1z);
+        const l2 = Math.sqrt(r2x * r2x + r2y * r2y + r2z * r2z);
+        if (l1 < EPS || l2 < EPS) continue;
+        const fq = (r0x * r1x + r0y * r1y + r0z * r1z) / l1 -
+                   (r0x * r2x + r0y * r2y + r0z * r2z) / l2;
+        const kk = fq / (FOURPI * Math.max(c2, den));
+        ox[j] += g * (cx * kk); oy[j] += g * (cy * kk); oz[j] += g * (cz * kk);
+      }
+    }
+  }
+
   // Постановка Вайссингера: условие непротекания в контрольной точке на трёх
   // четвертях хорды. Система линейная, решается один раз, срыва не знает — его
   // навешивают потом, по полученному эффективному углу атаки.
@@ -820,8 +887,10 @@ export class FreeWake {
     this.field(this.qx, this.qy, this.qz, F * N, this.sx, this.sy, this.sz);
   }
 
-  // `seed(f, out)` даёт точку схода нити, `vel(x, y, z, out)` — местную скорость
-  // БЕЗ собственного поля пелены (его она добавляет сама, и сразу всем узлам),
+  // `seed(f, out)` даёт точку схода нити, `vel(x, y, z, out, j)` — местную
+  // скорость БЕЗ собственного поля пелены (его она добавляет сама, и сразу всем
+  // узлам); `j` — номер узла в той же плотной раскладке, что у `selfInduce`,
+  // чтобы вызывающий мог держать посчитанное заранее,
   // `gring` — связанные циркуляции полосок (нулевые там, где между соседними
   // нитями паруса нет).
   step(dt, seed, vel, gring) {
@@ -838,7 +907,7 @@ export class FreeWake {
       const b = f * L;
       for (let i = 0; i < this.n; i++) {
         const k = b + i, j = f * this.n + i;
-        vel(this.x[k], this.y[k], this.z[k], v);
+        vel(this.x[k], this.y[k], this.z[k], v, f * this.n + i);
         if (this.n > 1) {
           this.vx[k] = v[0] + this.sx[j];
           this.vy[k] = v[1] + this.sy[j];
@@ -895,21 +964,25 @@ export class FreeWake {
   //
   // Знаки — те же, что даёт `edges` для кольца ряда 0: +Г на ножку нити f, -Г
   // на ножку нити f+1, +Г на поперечный по ряду 1.
+  // Зовётся семьсот раз за шаг (кольца на панели, и по две точки на панель),
+  // поэтому ни замыканий, ни временных массивов внутри: и то и другое здесь
+  // стоило дороже самого Био — Савара.
   nearInfluence(f, px, py, pz, ground, out) {
-    const L = this.len, b = f * L, c = (f + 1) * L, t = [0, 0, 0];
+    const L = this.len, b = f * L, c = (f + 1) * L;
+    const t = this._nt || (this._nt = [0, 0, 0]);
     const rc2 = 0.5 * (this.rc[b] * this.rc[b] + this.rc[b + 1] * this.rc[b + 1]);
     let vx = 0, vy = 0, vz = 0;
-    const leg = (p, q, sg, mir) => {
-      const z1 = mir ? -this.z[p] : this.z[p], z2 = mir ? -this.z[q] : this.z[q];
-      segment(px, py, pz, this.x[p], this.y[p], z1,
-              this.x[q], this.y[q], z2, t, rc2);
-      vx += sg * t[0]; vy += sg * t[1]; vz += sg * t[2];
-    };
+    const x = this.x, y = this.y, z = this.z;
+    const P = this._np || (this._np = [0, 0, 0, 0, 0, 0]);
+    P[0] = b; P[1] = b + 1; P[2] = c; P[3] = c + 1; P[4] = b + 1; P[5] = c + 1;
     for (let mir = 0; mir < (ground ? 2 : 1); mir++) {
-      const m = mir === 1, k = m ? -1 : 1;
-      leg(b, b + 1, k, m);              // ножка по нити f
-      leg(c, c + 1, -k, m);             // ножка по нити f+1
-      leg(b + 1, c + 1, k, m);          // замыкающий поперечный, ряд 1
+      const sz = mir ? -1 : 1, k = mir ? -1 : 1;
+      for (let e = 0; e < 3; e++) {
+        const p = P[e * 2], q = P[e * 2 + 1];
+        segment(px, py, pz, x[p], y[p], sz * z[p], x[q], y[q], sz * z[q], t, rc2);
+        const sg = e === 1 ? -k : k;    // средняя ножка (по нити f+1) с минусом
+        vx += sg * t[0]; vy += sg * t[1]; vz += sg * t[2];
+      }
     }
     out[0] = vx; out[1] = vy; out[2] = vz;
     return out;
@@ -940,15 +1013,21 @@ export class FreeWake {
       const b = f * L;
       for (let i = 0; i < this.n; i++) {
         const k = b + i;
-        let d = Infinity;
-        for (const nf of [f - 1, f + 1]) {
+        // Квадратами: корень нужен один раз, а не на каждого соседа.
+        let d2 = Infinity;
+        for (let s = -1; s <= 1; s += 2) {
+          const nf = f + s;
           if (nf < 0 || nf >= this.fil || !this.g[nf]) continue;
           const m = nf * L + i;
-          d = Math.min(d, Math.hypot(this.x[m] - this.x[k],
-                                     this.y[m] - this.y[k],
-                                     this.z[m] - this.z[k]));
+          const ax = this.x[m] - this.x[k], ay = this.y[m] - this.y[k],
+                az = this.z[m] - this.z[k];
+          const q = ax * ax + ay * ay + az * az;
+          if (q < d2) d2 = q;
         }
-        if (d < Infinity) this.rc[k] = Math.max(this.rc[k], 0.5 * d);
+        if (d2 < Infinity) {
+          const half = 0.5 * Math.sqrt(d2);
+          if (half > this.rc[k]) this.rc[k] = half;
+        }
       }
     }
   }

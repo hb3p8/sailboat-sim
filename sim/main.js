@@ -43,7 +43,8 @@ const SKY = new Color(0xa8c4d8);
 const terrain = new Terrain(TERRAIN_PACK);
 const FAR_WATER = terrain.ready;
 scene.fog = new Fog(SKY, FAR_WATER ? 900 : 110, FAR_WATER ? 14000 : 420);
-const camera = new PerspectiveCamera(52, 1, FAR_WATER ? 0.5 : 0.15,
+const CAM_FOV = 52;
+const camera = new PerspectiveCamera(CAM_FOV, 1, FAR_WATER ? 0.5 : 0.15,
                                      FAR_WATER ? 20000 : 2000);
 // WebGPU. Если его нет, рендерер сам откатывается на WebGL2 — код при этом
 // один и тот же, TSL компилируется и туда и туда.
@@ -2745,6 +2746,14 @@ function resize() {
   if (r.width < 2 || r.height < 2) return;
   renderer.setSize(r.width, r.height, true);
   camera.aspect = r.width / r.height;
+  // Угол обзора держится ГОРИЗОНТАЛЬНЫМ, а не вертикальным. У three он задан по
+  // вертикали, и на стоячем телефоне это значит, что вбок видно вчетверо меньше,
+  // чем на ноутбуке: лодка распирает кадр, а воды вокруг не остаётся. Здесь
+  // вертикальный угол наращивается ровно настолько, чтобы горизонтальный не
+  // упал ниже своего значения при обычном альбомном кадре.
+  const wantH = 2 * Math.atan(Math.tan(CAM_FOV * D / 2) * 16 / 9);
+  const vert = 2 * Math.atan(Math.tan(wantH / 2) / camera.aspect);
+  camera.fov = Math.max(CAM_FOV, Math.min(88, vert / D));
   camera.updateProjectionMatrix();
   // Сколько метров приходится на пиксель на каждый метр дальности. По этому
   // числу в шейдере воды гаснут мелкие каскады: рябь, которая мельче пикселя,
@@ -3002,7 +3011,8 @@ function frame() {
   updateCrew();
   if (orthoView) renderOrtho(bx, bz, fx, fz, sx, sz);
   else renderer.render(scene, camera);
-  if ((tick % 3) === 0) { updateHud(t); if (debugMode >= 1 && debugMode <= 3) updateRig(t);
+  if ((tick % 3) === 0) { updateHud(t); gameHud(t);
+    if (debugMode >= 1 && debugMode <= 3) updateRig(t);
     if (debugMode === 4) updateBalCard();
     if (topShown) updateTop(); }
   tick++;

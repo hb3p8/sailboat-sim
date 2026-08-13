@@ -670,7 +670,23 @@ export class FreeWake {
     this.tdx[0] = 1;
     this.dirx = 1; this.diry = 0; this.dirz = 0;   // поток для СВЕЖЕГО ряда
     this.g = new Float64Array(fil);         // сила нити у кромки — только для цвета
-    this.rc = new Float64Array(fil * len);  // радиус ядра В КАЖДОМ узле
+    // Ядро в каждом узле — ДВА, и разница между ними существенная.
+    //
+    // `rc` — ядро самой нити: растёт с возрастом по Лэмбу — Озеену, и только.
+    // Им пелена видится ПАРУСУ.
+    //
+    // `rcSp` — то же, но не меньше половины расстояния до соседней нити. Им
+    // пелена видит САМА СЕБЯ, и без этого пола счёт не сходится по шагу:
+    // сгущение шага сближает узлы, а ядро от этого не растёт.
+    //
+    // Держать одно на двоих нельзя, и это стоило разбирательства. Нити разнесены
+    // на метр с лишним, пол даёт ядро под метр, а контрольная точка сидит в
+    // двадцати сантиметрах за кромкой — и разгонный вихрь, от которого зависит
+    // весь нестационарный отклик, оказывался внутри ядра и гасился в семьдесят
+    // раз. Ф на первом отсчёте выходило 0.91 вместо вагнеровских 0.5, и от шага
+    // это не зависело вовсе.
+    this.rc = new Float64Array(fil * len);
+    this.rcSp = new Float64Array(fil * len);
     // Доля расстояния до ближайшей соседней нити, ниже которой ядро не
     // опускается. Половина — то есть ядра соседей хотя бы касаются.
     //
@@ -759,7 +775,10 @@ export class FreeWake {
   // ветки на воду от этого не нужно вовсе, а стоила она 45% всего счёта.
   // Настоящие рёбра идут первыми, зеркальные следом, — значит запрос без воды
   // это просто обход первой половины списка.
-  pack() {
+  // `space` — брать ядро с полом по соседу (для собственного сноса) или без
+  // него (для запроса с паруса).
+  pack(space) {
+    this.packSpace = !!space;
     const L = this.len, F = this.fil, N = this.n;
     const cap = 2 * F * (2 * L) * 8;
     if (!this.eg || this.eg.length < cap) this.eg = new Float64Array(cap);
@@ -793,7 +812,8 @@ export class FreeWake {
   put(e, m, p, q, g, sz) {
     const ax = this.x[p], ay = this.y[p], az = sz * this.z[p];
     const r0x = this.x[q] - ax, r0y = this.y[q] - ay, r0z = sz * this.z[q] - az;
-    const rc2 = 0.5 * (this.rc[p] * this.rc[p] + this.rc[q] * this.rc[q]);
+    const r = this.packSpace ? this.rcSp : this.rc;
+    const rc2 = 0.5 * (r[p] * r[p] + r[q] * r[q]);
     e[m] = ax; e[m + 1] = ay; e[m + 2] = az;
     e[m + 3] = r0x; e[m + 4] = r0y; e[m + 5] = r0z;
     e[m + 6] = g;
@@ -993,7 +1013,7 @@ export class FreeWake {
     if (this.n < L) this.n++;
     this.spaceCore();
     this.edges();
-    this.pack();
+    this.pack(true);      // снос пелены — с полом по соседу
   }
 
   // Свежее кольцо нити f — то, что несёт решаемую циркуляцию. Отдаётся тремя
@@ -1047,6 +1067,7 @@ export class FreeWake {
   // которая из них держит, стоит: цифры в tests/wake.test.mjs.
   spaceCore() {
     const L = this.len;
+    for (let k = 0; k < this.rcSp.length; k++) this.rcSp[k] = this.rc[k];
     for (let f = 0; f < this.fil; f++) {
       // Сосед есть там, где между нитями натянуто ПОЛОТНО, и определяется это
       // топологией, а не сегодняшней силой нити.
@@ -1073,10 +1094,8 @@ export class FreeWake {
           const q = ax * ax + ay * ay + az * az;
           if (q < d2) d2 = q;
         }
-        if (d2 < Infinity) {
-          const half = this.spaceK * Math.sqrt(d2);
-          if (half > this.rc[k]) this.rc[k] = half;
-        }
+        this.rcSp[k] = d2 < Infinity
+          ? Math.max(this.rc[k], this.spaceK * Math.sqrt(d2)) : this.rc[k];
       }
     }
   }

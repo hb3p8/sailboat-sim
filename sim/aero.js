@@ -1217,7 +1217,9 @@ export class Rig {
     const n = lat.n, w = this.wake;
     // Свежий ряд колец вынимается из известного поля: он несёт решаемую
     // циркуляцию, и его место не в правой части, а в матрице.
-    w.hold = true; w.edges(); w.pack();
+    // Парус видит пелену БЕЗ пола по соседу: пол — про то, как лист смотрит сам
+    // на себя, а разгонный вихрь у кромки он бы просто съел.
+    w.hold = true; w.edges(); w.pack(false);
     if (!this.wqx || this.wqx.length < 2 * n) {
       this.wqx = new Float64Array(2 * n); this.wqy = new Float64Array(2 * n);
       this.wqz = new Float64Array(2 * n); this.wvx = new Float64Array(2 * n);
@@ -1390,7 +1392,7 @@ export class Rig {
       const s = map[f];
       w.gr[f * L] = s >= 0 ? G[s] : 0;
     }
-    w.hold = false; w.edges(); w.pack();
+    w.hold = false; w.edges(); w.pack(true);
   }
 
   // Ближнее кольцо в скос, по которому наклоняется сила. Зовётся после решения,
@@ -1553,6 +1555,6 @@ export class Rig {
     // Свежий ряд возвращается на место: снос пелены считается по ПОЛНОМУ полю,
     // вынут он был только на время решения системы. Ядра — после выталкивания:
     // они меряются по расстоянию между нитями, а оно только что изменилось.
-    w.hold = false; w.spaceCore(); w.edges(); w.pack();
+    w.hold = false; w.spaceCore(); w.edges(); w.pack(true);
   }
 }

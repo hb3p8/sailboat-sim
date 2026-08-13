@@ -552,6 +552,66 @@ console.log('\nЛодка с пеленой и без неё, 45 секунд с
     'сдвинулся на ' + ang(was, tail).toFixed(1) + '°');
 }
 
+// --- выталкивание из паруса: что оно делает с геометрией -------------------------
+//
+// Оно телепортирует узел, а телепортация — приём опасный: ею легко нарисовать
+// излом, которого в потоке не было, или перебросить узел на другую сторону
+// полотна. Поэтому здесь мерится не «работает ли», а СКОЛЬКО оно делает.
+//
+// На силы оно при этом не влияет вовсе (та же циркуляция с ним и без него на
+// шести курсах), и стоит там потому, что узел на полотне — заведомо неверная
+// геометрия. Числа отсюда: три-четыре узла за шаг, перенос до 17 см при шаге
+// сноса около 40 см.
+{
+  const b = new Boat(PACK);
+  b.o.windSpeed = 8; b.o.windDir = 100 * D; b.psi = 55 * D;
+  b.o.sheet = 16 * D; b.o.jibSheet = 16 * D; b.o.twist = 8 * D;
+  b.o.crewHike = 1; b.o.crewMass = 219.9; b.u = 4;
+  b.wind.o.gust = 0.2; b.wind.o.shift = 9 * D;
+  const rig = b.rig, orig = rig.keepWakeOut.bind(rig);
+  let pushed = 0, steps = 0, maxPush = 0, kinkBefore = 0, kinkAfter = 0;
+  const angle = (w, L) => {
+    let sum = 0, cnt = 0;
+    for (let f = 0; f < w.fil; f++) {
+      if (!w.g[f]) continue;
+      for (let k = 1; k + 1 < w.n; k++) {
+        const a = f * L + k - 1, m = f * L + k, c = f * L + k + 1;
+        const ax = w.x[m] - w.x[a], ay = w.y[m] - w.y[a], az = w.z[m] - w.z[a];
+        const bx = w.x[c] - w.x[m], by = w.y[c] - w.y[m], bz = w.z[c] - w.z[m];
+        const la = Math.hypot(ax, ay, az), lb = Math.hypot(bx, by, bz);
+        if (la < 1e-9 || lb < 1e-9) continue;
+        sum += Math.acos(Math.max(-1, Math.min(1, (ax * bx + ay * by + az * bz) / (la * lb))));
+        cnt++;
+      }
+    }
+    return cnt ? sum / cnt / D : 0;
+  };
+  rig.keepWakeOut = (bb) => {
+    const w = rig.wake, L = w.len;
+    const X = Float64Array.from(w.x), Y = Float64Array.from(w.y), Z = Float64Array.from(w.z);
+    const k0 = angle(w, L);
+    orig(bb);
+    steps++;
+    kinkBefore = Math.max(kinkBefore, k0);
+    kinkAfter = Math.max(kinkAfter, angle(w, L));
+    for (let k = 0; k < w.x.length; k++) {
+      const d = Math.hypot(w.x[k] - X[k], w.y[k] - Y[k], w.z[k] - Z[k]);
+      if (d > 1e-9) { pushed++; maxPush = Math.max(maxPush, d); }
+    }
+  };
+  for (let i = 0; i < 30 * 30; i++) b.step(1 / 30);
+  console.log('\nВыталкивание из паруса за %d шагов: %d узлов (%s за шаг), ' +
+    'наибольший перенос %s м\n  излом до %s°, после %s°\n',
+    steps, pushed, (pushed / steps).toFixed(1), maxPush.toFixed(3),
+    kinkBefore.toFixed(1), kinkAfter.toFixed(1));
+  check('выталкивает единицы узлов, а не всю пелену', pushed / steps < 20,
+    (pushed / steps).toFixed(1) + ' за шаг');
+  check('переносит меньше, чем узел проходит за шаг', maxPush < 0.35,
+    maxPush.toFixed(3) + ' м');
+  check('и не рисует излома, которого не было', kinkAfter < kinkBefore + 2,
+    kinkBefore.toFixed(1) + '° -> ' + kinkAfter.toFixed(1) + '°');
+}
+
 // --- выключение и сброс --------------------------------------------------------
 {
   const b = run(true, 5 * 30);

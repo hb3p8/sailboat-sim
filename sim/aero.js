@@ -78,6 +78,9 @@ export const NCHORD = 3;
 // шестнадцати узлах (5.1 полухорды) Ф(6) ломается — 0.98 вместо 0.85.
 const WAKE_LEN = 24;
 const SAIL_KEEP = 0.2;
+// Запас от обшивки. Меньше паруса: корпус узкий, и лишний отодвинул бы пелену
+// от воды заметнее, чем стоит.
+const HULL_KEEP = 0.05;
 const NEAR = [0, 0, 0];
 
 // Ближайшая точка треугольника к точке и расстояние до неё. Обычная задача:
@@ -1329,6 +1332,93 @@ export class Rig {
     }
   }
 
+  // Где корпус — ОДНА функция на двоих: и для выталкивания, и для проверки.
+  //
+  // Прошлый заход на это провалился именно здесь: правка считала корпус с
+  // креном, замер — без, и доказать, что стало лучше, было нечем. Теперь обе
+  // стороны зовут `hullProbe`, и спорить им не о чем.
+  //
+  // Точка подаётся в МИРОВЫХ осях, ответ — в осях корпуса: внутри ли, и куда
+  // ближайшая точка обшивки. Крен учитывается, дифферент нет: он в разы меньше и
+  // на полуметровой обшивке не виден.
+  hullProbe(b, X, Y, Z, out) {
+    const S = this.p.sections;
+    if (!S || !S.x_m) return false;
+    const xs = S.x_m, poly = S.poly;
+    if (!this.hullR) {
+      let x0 = 1e9, x1 = -1e9, r = 0;
+      for (let i = 0; i < xs.length; i++) { x0 = Math.min(x0, xs[i]); x1 = Math.max(x1, xs[i]); }
+      this.hullX = (x0 + x1) / 2;
+      for (let i = 0; i < xs.length; i++) {
+        for (const p of poly[i]) r = Math.max(r, Math.hypot(xs[i] - this.hullX, p[0], p[1]));
+      }
+      this.hullR = r + 0.5;
+    }
+    const c = Math.cos(b.psi), sn = Math.sin(b.psi);
+    const rx = X - b.x, ry = Y - b.y;
+    const bx = rx * c + ry * sn, y0 = -rx * sn + ry * c, z0 = Z - b.zc;
+    if ((bx - this.hullX) ** 2 + y0 * y0 + z0 * z0 > this.hullR * this.hullR) return false;
+    if (bx <= xs[0] || bx >= xs[xs.length - 1]) return false;
+    const cp = Math.cos(b.phi), sp = Math.sin(b.phi);
+    const by = y0 * cp + z0 * sp, bz = -y0 * sp + z0 * cp;
+    let si = 0, sd = 1e9;
+    for (let j = 0; j < xs.length; j++) {
+      const d = Math.abs(xs[j] - bx);
+      if (d < sd) { sd = d; si = j; }
+    }
+    const P = poly[si];
+    let inside = false, best = 1e9, byy = by, bzz = bz;
+    for (let a = 0, j = P.length - 1; a < P.length; j = a++) {
+      const yi = P[a][0], zi = P[a][1], yj = P[j][0], zj = P[j][1];
+      if ((zi > bz) !== (zj > bz) && by < (yj - yi) * (bz - zi) / (zj - zi) + yi) inside = !inside;
+      const ey = yj - yi, ez = zj - zi, l2 = ey * ey + ez * ez;
+      let t = l2 > 1e-12 ? ((by - yi) * ey + (bz - zi) * ez) / l2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const py = yi + ey * t, pz = zi + ez * t;
+      const d = Math.hypot(by - py, bz - pz);
+      if (d < best) { best = d; byy = py; bzz = pz; }
+    }
+    if (!inside) return false;
+    // Наружу — в мировые оси, чтобы вызывающему не пересчитывать.
+    const oy = byy * cp - bzz * sp, oz = byy * sp + bzz * cp;
+    out[0] = b.x + bx * c - oy * sn - X;
+    out[1] = b.y + bx * sn + oy * c - Y;
+    out[2] = oz + b.zc - Z;
+    return true;
+  }
+
+  // Пелена сквозь корпус не проходит.
+  //
+  // По РЁБРАМ, а не по узлам, и это главное: внутрь корпуса попадают не узлы.
+  // Шкотовый угол стакселя сидит в восьмидесяти сантиметрах над водой, палуба у
+  // борта — в семидесяти пяти, и поперечные рёбра пелены скользят по ней, проходя
+  // сквозь обшивку МЕЖДУ узлами. Узловая проверка на этом молчала — ноль
+  // срабатываний за тысячу восемьсот шагов.
+  //
+  // Ребро правится сдвигом ОБОИХ концов: середина от этого едет ровно на тот же
+  // вектор, а излома не появляется.
+  hullOut(b) {
+    const w = this.wake, L = w.len;
+    const o = this._hullV || (this._hullV = [0, 0, 0]);
+    const fix = (p, q) => {
+      const mx = (w.x[p] + w.x[q]) / 2, my = (w.y[p] + w.y[q]) / 2,
+            mz = (w.z[p] + w.z[q]) / 2;
+      if (!this.hullProbe(b, mx, my, mz, o)) return;
+      const l = Math.hypot(o[0], o[1], o[2]) || 1;
+      const k = (l + HULL_KEEP) / l;
+      for (const n of [p, q]) {
+        w.x[n] += o[0] * k; w.y[n] += o[1] * k; w.z[n] += o[2] * k;
+      }
+    };
+    for (let f = 0; f < w.fil; f++) {
+      const b0 = f * L;
+      for (let i = 0; i + 1 < w.n; i++) fix(b0 + i, b0 + i + 1);
+      if (f + 1 < w.fil && w.ring[f]) {
+        for (let i = 1; i < w.n; i++) fix(b0 + i, b0 + i + L);
+      }
+    }
+  }
+
   // Свежее кольцо — в МАТРИЦУ, а не в правую часть.
   //
   // Оно несёт ту самую циркуляцию, которую решают, и в этом всё дело. Отдать
@@ -1552,6 +1642,7 @@ export class Rig {
       out[2] = p[2];
     }, vel, gring);
     this.keepWakeOut(b);
+    this.hullOut(b);
     // Свежий ряд возвращается на место: снос пелены считается по ПОЛНОМУ полю,
     // вынут он был только на время решения системы. Ядра — после выталкивания:
     // они меряются по расстоянию между нитями, а оно только что изменилось.

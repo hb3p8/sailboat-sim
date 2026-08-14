@@ -513,7 +513,7 @@ console.log('\nРешётка против сечения: подъёмная с
       ['полный бейдевинд', 50, 17, 8], ['крутой бакштаг', 60, 20, 16]]) {
     const b = new Boat(PACK);
     Object.assign(b.o, { windSpeed: 6, windDir: twa * D, sheet: sheet * D,
-                         twist: twist * D, crewHike: 1, crewMass: 240 });
+                         twist: twist * D, crewHike: -1, crewMass: 240 });
     b.u = 3; b.phi = 12 * D;
     for (let i = 0; i < 60 * 30; i++) {
       b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * -b.psi - 0.9 * b.r)));
@@ -616,7 +616,7 @@ console.log('\nПарусность в потоке\n');
   const hold = (sheet) => {
     const b = new Boat(PACK);
     b.o.windSpeed = 6; b.o.windDir = 45 * D; b.o.sheet = sheet * D;
-    b.o.twist = 8 * D; b.o.crewHike = 1; b.o.crewMass = 219.9;
+    b.o.twist = 8 * D; b.o.crewHike = -1; b.o.crewMass = 219.9;
     b.u = 3; b.phi = 18 * D;
     for (let i = 0; i < 70 * 30; i++) {
       b.o.rudder = Math.max(-25 * D, Math.min(25 * D, -(2.5 * (0 - b.psi) - 0.9 * b.r)));

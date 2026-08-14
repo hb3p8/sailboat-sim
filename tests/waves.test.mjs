@@ -114,7 +114,7 @@ check('добавка растёт как квадрат высоты волны
   const run = (twa, sheet, twist, fetch) => {
     const b = new Boat(PACK);
     b.o.windSpeed = 6; b.o.windDir = twa * D; b.o.sheet = sheet * D;
-    b.o.twist = twist * D; b.o.crewHike = 1; b.o.crewMass = 240;
+    b.o.twist = twist * D; b.o.crewHike = -1; b.o.crewMass = 240;  // наветренный
     b.o.fetch = fetch; b.u = 3; b.phi = 10 * D;
     for (let i = 0; i < 90 * 30; i++) {
       b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D,

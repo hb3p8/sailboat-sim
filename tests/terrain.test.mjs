@@ -232,7 +232,7 @@ check('пакет читается и считается готовым', t.read
   const run = (x, y, over) => {
     const b = new Boat(PACK_P, t);
     Object.assign(b.o, { windSpeed: 8, windDir: 30 * D, sheet: 14 * D, twist: 8 * D,
-                         crewHike: 1, crewMass: 240, fetchOverride: over, fetch: 3000 });
+                         crewHike: -1, crewMass: 240, fetchOverride: over, fetch: 3000 });
     b.x = x; b.y = y; b.psi = 30 * D - 45 * D; b.u = 3; b.phi = 12 * D;
     for (let i = 0; i < 50 * 30; i++) b.step(1 / 30);
     return b;
@@ -297,8 +297,9 @@ check('пакет читается и считается готовым', t.read
   // Лодка, направленная в берег, обязана остановиться и не пройти сквозь.
   {
     const b = new Boat(PACK_P, t);
+    // Курс к ветру ровно фордевинд: экипаж сидит в лодке, а не на борту.
     Object.assign(b.o, { windSpeed: 8, windDir: 90 * D, sheet: 24 * D,
-                         crewHike: 1, crewMass: 240 });
+                         crewHike: 0, crewMass: 240 });
     b.x = ox; b.y = oy; b.psi = -Math.PI / 2; b.u = 4;   // носом на юг, к берегу
     let worst = 1e9;
     for (let i = 0; i < 400 * 30; i++) {
@@ -352,7 +353,7 @@ check('пакет читается и считается готовым', t.read
       const b = new Boat(PACK_P, t);
       Object.assign(b.o, { windSpeed: 8, windDir: 90 * D, sheet: 24 * D,
                            fetchOverride: true, fetch: 0,
-                           crewHike: 1, crewMass: 240 });
+                           crewHike: -1, crewMass: 240 });
       b.x = ox; b.y = y0; b.psi = 0; b.u = 4;
       for (let i = 0; i < 60 * 30; i++) {
         b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * (0 - b.psi) - 0.9 * b.r)));
@@ -567,7 +568,7 @@ check('пакет читается и считается готовым', t.read
   const run = cur => {
     const b = new Boat(PACK_P, t);
     Object.assign(b.o, { windSpeed: 8, windDir: 90 * D, sheet: 24 * D,
-                         current: cur, crewHike: 1, crewMass: 240 });
+                         current: cur, crewHike: -1, crewMass: 240 });
     b.x = ox; b.y = oy; b.psi = 0; b.u = 4;
     for (let i = 0; i < 90 * 30; i++) {
       b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * (0 - b.psi) - 0.9 * b.r)));
@@ -681,8 +682,12 @@ check('пакет читается и считается готовым', t.read
   // сам заворот держится своих девятнадцати.
   const run = k => {
     const b = new Boat(PACK_P, t);
+    // Ветер здесь стоит под углом к реке, и наветренный борт зависит от её оси:
+    // при TWA больше 180° он меняется на противоположный.
+    const twa = ((along + 60) % 360 + 360) % 360;
     Object.assign(b.o, { windSpeed: 8, windDir: (along + 60) * D, sheet: 24 * D,
-                         chan: k, current: 0, crewHike: 1, crewMass: 240 });
+                         chan: k, current: 0, crewMass: 240,
+                         crewHike: twa > 180 ? 1 : -1 });
     b.x = ox; b.y = oy; b.psi = 0; b.u = 4;
     for (let i = 0; i < 40 * 30; i++) {
       b.o.rudder = Math.max(-25 * D, Math.min(25 * D, -(2.5 * (0 - b.psi) - 0.9 * b.r)));

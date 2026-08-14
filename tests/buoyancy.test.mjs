@@ -193,7 +193,8 @@ console.log('\nВолна под корпусом\n');
   const DEG = Math.PI / 180;
   const run = (hs, tp, wind) => {
     const b = new Boat(PACK);
-    b.o.windSpeed = wind; b.o.windDir = 100 * DEG; b.o.crewHike = 1;
+    // Экипаж на наветренном борту: TWA положительный, значит на левом (−1).
+    b.o.windSpeed = wind; b.o.windDir = 100 * DEG; b.o.crewHike = -1;
     b.u = 2;
     const w = 2 * Math.PI / tp, k = w * w / G, amp = hs / 2;
     const o = { phi: 0, th: 0, zlo: 9, zhi: -9, bad: false };

@@ -36,7 +36,7 @@ function run(wake, steps, drive, forces) {
   if (forces !== undefined) b.o.wakeForces = forces;
   b.o.windSpeed = 8; b.o.windDir = 100 * D; b.psi = 55 * D;
   b.o.sheet = 14 * D; b.o.twist = 8 * D;
-  b.o.crewHike = 1; b.o.crewMass = 219.9; b.u = 4;
+  b.o.crewHike = -1; b.o.crewMass = 219.9; b.u = 4;
   b.wind.o.gust = 0.2; b.wind.o.shift = 9 * D;
   for (let i = 0; i < steps; i++) {
     if (drive) drive(b, i / 30);
@@ -285,7 +285,7 @@ console.log('\nЛодка с пеленой для картинки и без н
   b.o.freeWake = true;
   b.o.windSpeed = 8; b.o.windDir = 100 * D; b.psi = -75 * D;   // TWA 175°
   b.o.sheet = 80 * D; b.o.jibSheet = 80 * D;
-  b.o.crewHike = 1; b.o.crewMass = 219.9; b.u = 3;
+  b.o.crewHike = 0; b.o.crewMass = 219.9; b.u = 3;
   b.wind.o.gust = 0.2; b.wind.o.shift = 9 * D;
   for (let i = 0; i < 20 * 30; i++) b.step(1 / 30);
 
@@ -338,14 +338,22 @@ console.log('\nЛодка с пеленой для картинки и без н
   // Проверяется `rcSp` — то ядро, которым пелена видит САМУ СЕБЯ. У паруса своё,
   // `rc`, и оно намеренно МЕНЬШЕ: пол по соседу съедал бы разгонный вихрь у
   // кромки, от которого зависит весь нестационарный отклик.
+  // Сосед берётся по ТОПОЛОГИИ (`ring`), как и в самом ограничителе, а не по
+  // сегодняшней силе нити. Проверка когда-то повторяла старую, уже исправленную
+  // в коде ошибку: нить с нулевой разностью циркуляций из соседей выпадала, и
+  // требование выходило строже кода — пол ставился по БЛИЖНЕМУ соседу, а
+  // мерилось расстояние до дальнего. Поймалось это не сразу: пока экипаж
+  // откренивал автоматически, лодка на полном курсе шла ровнее и такие пары не
+  // сходились. Тринадцать нарушений из трёхсот, и все — на миллиметр.
+  const sheet = (f, nf) => (nf < f ? w.ring[nf] : w.ring[f]);
   let tight = 0;
   for (let f = 0; f < w.fil; f++) {
-    if (!w.g[f]) continue;
+    if (!(f > 0 && w.ring[f - 1]) && !w.ring[f]) continue;
     for (let k = 0; k < w.n; k++) {
       const a = f * L + k;
       let d = Infinity;
       for (const nf of [f - 1, f + 1]) {
-        if (nf < 0 || nf >= w.fil || !w.g[nf]) continue;
+        if (nf < 0 || nf >= w.fil || !sheet(f, nf)) continue;
         const c = nf * L + k;
         d = Math.min(d, Math.hypot(w.x[c] - w.x[a], w.y[c] - w.y[a], w.z[c] - w.z[a]));
       }
@@ -385,7 +393,7 @@ console.log('\nЛодка с пеленой для картинки и без н
   const set = (b, twa) => {
     b.o.windSpeed = 8; b.o.windDir = 100 * D; b.psi = (100 - twa) * D;
     b.o.sheet = 85 * D; b.o.jibSheet = 85 * D; b.o.twist = 8 * D;
-    b.o.crewHike = 1; b.o.crewMass = 219.9; b.u = 3;
+    b.o.crewHike = 0; b.o.crewMass = 219.9; b.u = 3;
     b.wind.o.gust = 0; b.wind.o.shift = 0;    // разнос ищем, а не порывы
     return b;
   };
@@ -422,14 +430,22 @@ console.log('\nЛодка с пеленой для картинки и без н
 
   // Поворот через фордевинд: курс проходит все углы насквозь, и если гашение
   // где-то прыгает, видно это здесь.
+  //
+  // Экипаж в манёвре ПЕРЕСАЖИВАЕТСЯ: он больше не переходит сам (physics.js,
+  // `crewHike` знаковый), а поворот с экипажем, оставшимся под ветром, — это
+  // проверка не гашения, а того, как лодка ложится. Пересадка идёт по борту, с
+  // которого дует, и занимает своё время.
   {
     const b = set(new Boat(PACK), 150);
     b.o.freeWake = true; b.o.wakeForces = true;
     b.o.sheet = 80 * D; b.o.jibSheet = 80 * D;
+    b.o.crewHike = -1;                  // наветренный борт первого галса
     let g = 0;
     for (let i = 0; i < 40 * 30; i++) {
       const t = i / 30;
       b.o.rudderTarget = (t > 5 && t < 13) ? 10 * D : 0;
+      const twa = ((b.o.windDir - b.psi) / D % 360 + 360) % 360;
+      b.o.crewHike = twa < 180 ? -1 : 1;
       b.step(1 / 30);
       g = Math.max(g, maxG(b));
     }
@@ -446,7 +462,7 @@ console.log('\nЛодка с пеленой для картинки и без н
     b.o.freeWake = true; b.o.wakeForces = true;
     b.o.windSpeed = 8; b.o.windDir = 100 * D; b.psi = 55 * D;
     b.o.sheet = 14 * D; b.o.twist = 8 * D;
-    b.o.crewHike = 1; b.o.crewMass = 219.9; b.u = 4;
+    b.o.crewHike = -1; b.o.crewMass = 219.9; b.u = 4;
     b.wind.o.gust = 0; b.wind.o.shift = 0;
     for (let i = 0; i < 20 * 30; i++) b.step(1 / 30);
     let full = 0, live = 0, aMax = 0;
@@ -699,7 +715,7 @@ console.log('\nЛодка с пеленой для картинки и без н
   const b = new Boat(PACK);
   b.o.windSpeed = 8; b.o.windDir = 100 * D; b.psi = 55 * D;
   b.o.sheet = 16 * D; b.o.jibSheet = 16 * D; b.o.twist = 8 * D;
-  b.o.crewHike = 1; b.o.crewMass = 219.9; b.u = 4;
+  b.o.crewHike = -1; b.o.crewMass = 219.9; b.u = 4;
   b.wind.o.gust = 0.2; b.wind.o.shift = 9 * D;
   const rig = b.rig, orig = rig.keepWakeOut.bind(rig);
   let pushed = 0, steps = 0, maxPush = 0, kinkBefore = 0, kinkAfter = 0;
@@ -760,7 +776,7 @@ console.log('\nЛодка с пеленой для картинки и без н
   const b = new Boat(PACK);
   b.o.windSpeed = 8; b.o.windDir = 100 * D; b.psi = 55 * D;
   b.o.sheet = 16 * D; b.o.jibSheet = 16 * D; b.o.twist = 8 * D;
-  b.o.crewHike = 1; b.o.crewMass = 219.9; b.u = 4;
+  b.o.crewHike = -1; b.o.crewMass = 219.9; b.u = 4;
   b.wind.o.gust = 0.2;
   let inside = 0, checked = 0;
   const o = [0, 0, 0];

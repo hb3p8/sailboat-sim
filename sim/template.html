@@ -284,8 +284,8 @@
     box-shadow: 0 0 10px rgba(255, 207, 90, .45);
   }
 
-  /* Экипаж: ступенями от диаметральной к борту. */
-  #gcrew { right: 10px; bottom: 92px; width: 118px; }
+  /* Экипаж: ступенями от борта до борта, середина — диаметральная. */
+  #gcrew { right: 10px; bottom: 92px; width: 138px; }
   #gcrew .row { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
   #gcrew .dot {
     flex: 1; height: 18px; display: flex; align-items: center;
@@ -296,6 +296,8 @@
     background: rgba(226, 238, 252, .45);
     box-shadow: 0 1px 4px rgba(0, 8, 18, .6);
   }
+  /* Борта крупнее: на них попадают пальцем в спешке, на промежуточные — нет. */
+  #gcrew .dot.end span { width: 13px; height: 13px; }
   #gcrew .dot.on span {
     background: var(--accent); box-shadow: 0 0 8px rgba(255, 207, 90, .55);
   }
@@ -336,7 +338,7 @@
   <div id="gcrew" class="pane">
     <div class="cap">экипаж</div>
     <div class="row" id="gcrewrow"></div>
-    <div class="ends"><span>в ДП</span><span>на борту</span></div>
+    <div class="ends"><span>левый</span><span>ДП</span><span>правый</span></div>
   </div>
 
   <div id="gtiller" class="pane">
@@ -359,8 +361,8 @@
     <input id="wind" type="range" min="1" max="16" step="0.5" value="6"></label>
   <label><span class="cap"><span>Направление ветра</span><span id="v-winddir"></span></span>
     <input id="winddir" type="range" min="0" max="359" step="1" value="100"></label>
-  <label><span class="cap"><span>Откренивание экипажем</span><span id="v-hike"></span></span>
-    <input id="hike" type="range" min="0" max="1" step="0.05" value="0"></label>
+  <label><span class="cap"><span>Экипаж</span><span id="v-hike"></span></span>
+    <input id="hike" type="range" min="-1" max="1" step="0.05" value="0"></label>
   <label><span class="cap"><span>Парусность</span><span id="v-sailscale"></span></span>
     <input id="sailscale" type="range" min="0.6" max="2.2" step="0.05" value="1"></label>
   <label><span class="cap"><span>Порывистость</span><span id="v-gust"></span></span>
@@ -547,7 +549,10 @@ const BUILD = /*__BUILD__*/ null;
   const fmt = {
     wind: v => (+v).toFixed(1) + ' м/с (' + (v * 1.94384).toFixed(0) + ' уз)',
     winddir: v => (+v).toFixed(0) + '°',
-    hike: v => (+v * 100).toFixed(0) + '%',
+    // Знак — это борт, и подписывается он бортом, а не минусом: «-60%» на
+    // ползунке посадки читается как «откренивает на минус шестьдесят».
+    hike: v => (Math.abs(+v) < 0.001 ? 'в ДП'
+      : (+v < 0 ? 'левый борт ' : 'правый борт ') + (Math.abs(+v) * 100).toFixed(0) + '%'),
     sailscale: v => '×' + (+v).toFixed(2),
     gust: v => (+v === 0 ? 'ровный' : '±' + (+v * 100).toFixed(0) + '%'),
     twist: v => (+v).toFixed(0) + '°',

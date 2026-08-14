@@ -46,8 +46,10 @@ function sail(twaDeg, sheetDeg, opts = {}) {
   b.o.windDir = twaDeg * D;          // курс ноль, значит истинный ветер = TWA
   b.o.sheet = sheetDeg * D;
   b.o.twist = opts.twist ?? 0;
-  b.o.crewHike = opts.hike ?? 0;
-  b.o.crewMass = b.o.crewHike > 0 ? 240 : 0;
+  // `hike` — величина откренивания, борт берётся от галса: экипаж в модели
+  // больше не пересаживается сам.
+  b.o.crewHike = -Math.sign(twaDeg || 1) * (opts.hike ?? 0);
+  b.o.crewMass = b.o.crewHike !== 0 ? 240 : 0;
   // Старт с ходом и уже с креном. Прямостоящая лодка на полном ходу в
   // бейдевинд — состояние, которого на воде не бывает: парус там работает на
   // полную, и её резко уваливает раньше, чем она успевает накрениться.
@@ -367,7 +369,7 @@ const byStep = [];
 for (const hz of [30, 240]) {
   const b = new Boat(PACK);
   b.o.windSpeed = 9; b.o.windDir = 140 * D; b.o.sheet = 72 * D;
-  b.o.twist = 8 * D; b.o.crewHike = 1; b.o.crewMass = 240;
+  b.o.twist = 8 * D; b.o.crewHike = -1; b.o.crewMass = 240;   // наветренный борт
   b.wind.o.gust = 0.45; b.wind.o.shift = 0.45 * 45 * D;
   b.u = 3.2; b.o.rudder = 0; b.o.rudderTarget = null;
   let lo = 9e9, hi = -9e9, sum = 0, n = 0, peak = 0;
@@ -459,7 +461,7 @@ console.log('\nКиль и руль: скос от киля и стык с ко�
 {
   const b = new Boat(PACK);
   b.o.windSpeed = 6; b.o.windDir = 45 * D; b.o.sheet = 14 * D; b.o.twist = 8 * D;
-  b.o.crewHike = 1; b.o.crewMass = 240;
+  b.o.crewHike = -1; b.o.crewMass = 240;      // наветренный борт
   b.u = 3; b.phi = 12 * D;
   for (let i = 0; i < 60 * 30; i++) {
     b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * -b.psi - 0.9 * b.r)));
@@ -594,7 +596,7 @@ console.log('\nБесконечная вода: акватория выключ�
   const run = terrain => {
     const b = new Boat(PACK, terrain);
     b.o.windSpeed = 7; b.o.windDir = 55 * D; b.o.sheet = 18 * D;
-    b.o.twist = 8 * D; b.o.crewHike = 1; b.o.crewMass = 240;
+    b.o.twist = 8 * D; b.o.crewHike = -1; b.o.crewMass = 240;  // наветренный борт
     b.wind.o.gust = 0.25; b.wind.o.shift = 8 * D;
     b.u = 3.5; b.phi = 10 * D;
     for (let i = 0; i < 90 * 30; i++) {

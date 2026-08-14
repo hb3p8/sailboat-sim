@@ -36,7 +36,7 @@ const CASES = [
     name: 'бейдевинд, экипаж на борту',
     setup: b => {
       b.o.windSpeed = 8; b.o.windDir = 100 * D; b.psi = 100 * D - 45 * D;
-      b.o.sheet = 16 * D; b.o.crewHike = 1; b.o.crewMass = 219.9; b.u = 4;
+      b.o.sheet = 16 * D; b.o.crewHike = -1; b.o.crewMass = 219.9; b.u = 4;
       b.wind.o.gust = 0.2; b.wind.o.shift = 9 * D;
     },
   },
@@ -60,7 +60,7 @@ const CASES = [
     setup: b => {
       b.o.windSpeed = 12; b.o.windDir = 40 * D; b.psi = 40 * D - 110 * D;
       b.o.sheet = 45 * D; b.o.fetch = 8000; b.o.fetchOverride = true;
-      b.o.crewHike = 0.6; b.o.crewMass = 219.9; b.u = 4;
+      b.o.crewHike = -0.6; b.o.crewMass = 219.9; b.u = 4;   // наветренный борт
       b.wind.o.gust = 0.3; b.wind.o.shift = 13 * D;
     },
     drive: (b, t) => {
@@ -72,7 +72,7 @@ const CASES = [
     name: 'парусность и твист на ходу',
     setup: b => {
       b.o.windSpeed = 7; b.o.windDir = 200 * D; b.psi = 200 * D - 60 * D;
-      b.o.sheet = 22 * D; b.o.crewHike = 1; b.o.crewMass = 219.9; b.u = 4;
+      b.o.sheet = 22 * D; b.o.crewHike = -1; b.o.crewMass = 219.9; b.u = 4;
     },
     drive: (b, t) => {
       b.o.sailScale = t > 10 ? 1.25 : 0.85;

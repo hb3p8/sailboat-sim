@@ -326,9 +326,16 @@ check('в свежий ветер откренивание даёт больше
 
 // --- поворот оверштаг ---------------------------------------------------------
 
+// Экипаж в повороте ПЕРЕСАЖИВАЕТСЯ, и это теперь часть манёвра.
+//
+// Раньше он переходил сам: физика сажала его туда, куда требовал кренящий
+// момент, и на смене галса он оказывался на новом борту в тот же миг, когда
+// момент менял знак. Теперь борт задаётся снаружи (`o.crewHike` знаковый), и
+// поворот без пересадки — это поворот с экипажем под ветром. Здесь он
+// перебирается ровно тогда, когда лодка проходит левентик, как это и делают.
 const tk = new Boat(PACK);
 tk.o.windSpeed = 6; tk.o.windDir = 45 * D; tk.o.sheet = 13 * D;
-tk.o.crewHike = 1; tk.o.crewMass = 240;
+tk.o.crewHike = -1; tk.o.crewMass = 240;      // наветренный борт первого галса
 tk.u = 3.0; tk.phi = 18 * D;
 for (let i = 0; i < 60 * 30; i++) {
   const err = wrapPi(0 - tk.psi);
@@ -341,6 +348,10 @@ let minSpeed = 99, secs = 0;
 for (let i = 0; i < 60 * 30; i++) {
   const err = wrapPi(target - tk.psi);
   tk.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * err - 0.9 * tk.r)));
+  // Пересадка по фактическому курсу к ветру, а не по таймеру: перешли линию
+  // ветра — экипаж пошёл на новый борт, а сама пересадка занимает своё время
+  // (HIKE_TAU в физике), и провал хода на ней виден.
+  tk.o.crewHike = wrapPi(tk.o.windDir - tk.psi) > 0 ? -1 : 1;
   tk.step(1 / 30);
   minSpeed = Math.min(minSpeed, tk.telemetry.speedKn);
   if (Math.abs(err) < 3 * D && !secs) secs = (i + 1) / 30;
@@ -419,7 +430,7 @@ const stuck = out.telemetry.speedKn;
 // циркуляции, того запаса не стало. Дело не в потолке: на любом разумном шкоте
 // лодка выходит за пять-девять секунд и до правки, и после.
 out.o.windDir = 50 * D; out.o.sheet = 24 * D;
-out.o.crewHike = 1; out.o.crewMass = 240;
+out.o.crewHike = -1; out.o.crewMass = 240;
 let recovered = 0;
 for (let i = 0; i < 60 * 30; i++) {
   const err = wrapPi(0 - out.psi);

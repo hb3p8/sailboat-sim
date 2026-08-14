@@ -38,7 +38,7 @@ for (const c of CASES) {
   const b = new Boat(PACK);
   b.o.windSpeed = c.tws; b.o.windDir = 100 * D; b.psi = 100 * D - c.twa * D;
   b.o.sheet = c.sheet * D; b.o.draft = c.draft; b.o.twist = c.twist * D;
-  b.o.crewHike = 1; b.o.crewMass = 219.9; b.u = 4;
+  b.o.crewHike = -1; b.o.crewMass = 219.9; b.u = 4;   // наветренный борт
   for (let i = 0; i < 900; i++) b.step(1 / 30);
   const st = b.telemetry.strips;
   const loc = [];

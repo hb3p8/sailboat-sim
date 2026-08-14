@@ -35,8 +35,12 @@ export function steady(pack, spec) {
   b.o.windDir = (spec.twa ?? 45) * D;      // курс ноль, значит истинный = TWA
   b.o.sheet = (spec.sheet ?? 20) * D;
   b.o.twist = (spec.twist ?? 0) * D;
-  b.o.crewHike = spec.hike ?? 0;
-  b.o.crewMass = b.o.crewHike > 0 ? 240 : 0;
+  // `hike` в постановке — это ВЕЛИЧИНА откренивания; борт из неё не следует.
+  // В модели экипаж больше не пересаживается сам (physics.js, `crewHike` теперь
+  // знаковый), поэтому наветренный борт выбирается здесь: курс ноль, значит
+  // истинный ветер равен TWA, и при положительном TWA наветренный — левый.
+  b.o.crewHike = -Math.sign(b.o.windDir || 1) * (spec.hike ?? 0);
+  b.o.crewMass = b.o.crewHike !== 0 ? 240 : 0;
   if (spec.fetch != null) b.o.fetch = spec.fetch;
   if (spec.draft != null) b.o.draft = spec.draft;
   // Старт с ходом и уже с креном: прямостоящая лодка на полном ходу в

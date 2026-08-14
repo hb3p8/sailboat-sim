@@ -43,8 +43,8 @@ for (let i = 0; i < SECONDS * HZ; i++) {
   src.o.windSpeed = 6 + 4 * Math.min(1, Math.max(0, (t - 4) / 6));
   src.wind.o.gust = t > 10 ? 0.35 : 0.15;
   src.wind.o.shift = src.wind.o.gust * 45 * D;
-  src.o.crewHike = t > 7 ? 1 : 0;
-  src.o.crewMass = src.o.crewHike > 0 ? 240 : 0;
+  src.o.crewHike = t > 7 ? -1 : 0;      // на седьмой секунде экипаж выходит на борт
+  src.o.crewMass = src.o.crewHike !== 0 ? 240 : 0;
   src.o.sheet = (18 + 10 * Math.sin(t / 5)) * D;
   src.o.twist = (6 + 12 * Math.max(0, Math.sin(t / 7))) * D;
   src.o.sailScale = t > 18 ? 1.3 : 1.0;

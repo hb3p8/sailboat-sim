@@ -23,7 +23,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
-import { fieldIndex, restoreFrom, applyFrom } from '../sim/trace.js';
+import { fieldIndex, replayTrace, replayToEnd } from '../sim/trace.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const D = Math.PI / 180;
@@ -66,27 +66,29 @@ console.log('Условия: ветер ' + (dump.wind ? dump.wind.speed.toFixed
 if (frames.length > 1) {
   const boat = new Boat(PACK);
   applyOptions(boat);
-  restoreFrom(boat, frames[0], F);
 
+  // Проход по записи — общий с батареей (`sim/trace.js`), а не свой. Он же
+  // умеет начинать сверку с опорного кадра, где записана пелена: своим циклом
+  // тут выходило сравнение модели С ПАМЯТЬЮ и модели, стартовавшей с пустой
+  // пеленой, то есть расхождение сообщалось о том, чего в модели нет.
   let worst = { speed: 0, heel: 0, psi: 0, at: 0 };
-  for (let i = 1; i < frames.length; i++) {
-    // Органы берём из ТОГО кадра, который проверяем: в симуляторе их
-    // выставляют перед шагом, а записывают после, значит записанное значение
-    // и есть то, с которым шаг считался.
-    applyFrom(boat, frames[i], F);
-    boat.step(1 / (tr.hz || 30));
-    const want = frames[i], t = boat.telemetry;
+  const from = replayTrace(boat, tr, F, (i, b, want) => {
+    const t = b.telemetry;
     const d = {
       speed: Math.abs(t.speedKn - want[F.speedKn]),
       heel: Math.abs(t.heelDeg - want[F.heelDeg]),
-      psi: Math.abs(boat.psi - want[F.psi]) / D,
+      psi: Math.abs(b.psi - want[F.psi]) / D,
     };
     if (d.speed + d.heel + d.psi > worst.speed + worst.heel + worst.psi) {
       worst = Object.assign(d, { at: want[F.t] });
     }
-  }
+  });
   const secs = (frames[frames.length - 1][F.t] - frames[0][F.t]).toFixed(1);
   console.log('\nЗапись: ' + frames.length + ' кадров, ' + secs + ' с');
+  console.log(from
+    ? 'Сверка с опорного кадра ' + from + ' (' + frames[from][F.t].toFixed(1) +
+      ' с): до него пелены в записи нет.'
+    : 'Опорных кадров в записи нет — сверка с самого начала, пелена пустая.');
   console.log('Наибольшее расхождение с записью: скорость ' +
     worst.speed.toFixed(3) + ' уз, крен ' + worst.heel.toFixed(3) +
     '°, курс ' + worst.psi.toFixed(3) + '°');
@@ -135,11 +137,16 @@ if (frames.length > 1) {
 if (after > 0) {
   const boat = new Boat(PACK);
   applyOptions(boat);
-  if (frames.length) restoreFrom(boat, frames[frames.length - 1], F);
+  // Догнать конец записи: от последнего опорного кадра и остаток шагами. Один
+  // последний кадр не годится — пелены в нём нет, и продолжение пошло бы с
+  // чужим скрытым состоянием.
+  let warm = false;
+  if (frames.length) warm = replayToEnd(boat, tr, F);
   else Object.assign(boat, dump.boat || {});
   boat.o.rudderTarget = null;
 
-  console.log('\nПродолжение с конца записи, ' + after + ' с, органы не трогаем:');
+  console.log('\nПродолжение с конца записи, ' + after + ' с, органы не трогаем' +
+    (warm ? ' (пелена догнана от опорного кадра):' : ' (опорных кадров нет, пелена пустая):'));
   console.log('   время   узлы   крен    TWA   дрейф   α');
   const n = Math.round(after * 30);
   for (let i = 0; i < n; i++) {

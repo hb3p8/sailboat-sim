@@ -232,6 +232,64 @@ export function applyFrom(boat, frame, index) {
   if (index.shift != null) boat.wind.o.shift = frame[index.shift];
 }
 
+// Проход по записи — ОДИН на всех, кто её воспроизводит.
+//
+// Раньше он жил в батарее, а `scripts/replay.mjs` — инструмент, ради которого
+// опорные кадры и заводились, — крутил свой цикл и про `trace.keys` не знал
+// вовсе. Выходило хуже, чем «не пользуется»: сверка начиналась с пустой пеленой,
+// расходилась на этом и сообщала расхождение как о поведении модели.
+//
+// `onFrame(i, boat, frame)` зовётся только на кадрах ПОСЛЕ опорного: до него
+// лодка догоняет запись с пустой пеленой, и сверять там нечего.
+// Возвращает номер кадра, с которого началась сверка.
+export function replayTrace(boat, trace, index, onFrame) {
+  const frames = trace.frames || [];
+  if (frames.length < 2) return 0;
+  // Самый ранний уцелевший снимок: чем раньше начата сверка, тем больше записи
+  // проверено. До него пелены нет, и это единственная причина ждать.
+  const key = (trace.keys || [])[0] || null;
+  const from = key ? key.at : 0;
+  const dt = 1 / (trace.hz || 30);
+  restoreFrom(boat, frames[0], index);
+  boat.o.rudderTarget = null;          // руль ведём по записи, а не авторулевым
+  for (let i = 1; i < frames.length; i++) {
+    // Органы берём из ТОГО кадра, который проверяем: в симуляторе их
+    // выставляют перед шагом, а записывают после.
+    applyFrom(boat, frames[i], index);
+    boat.step(dt);
+    // Опорный кадр — настоящий рестарт: и лодка, и пелена целиком. Только
+    // пелена без состояния лодки помогает мало, это мерено.
+    if (key && i === from) {
+      restoreFrom(boat, frames[i], index);
+      wakeRestore(boat, key.wake);
+    }
+    if (i > from && onFrame) onFrame(i, boat, frames[i]);
+  }
+  return from;
+}
+
+// Довести лодку до конца записи, чтобы продолжать с её состояния.
+//
+// Восстановить один последний кадр недостаточно: в кадре нет пелены, а модель
+// со свободной пеленой помнит и её. Поэтому — от последнего опорного кадра и
+// остаток записи шагами.
+export function replayToEnd(boat, trace, index) {
+  const frames = trace.frames || [];
+  if (!frames.length) return false;
+  const keys = trace.keys || [];
+  const key = keys.length ? keys[keys.length - 1] : null;
+  if (!key) { restoreFrom(boat, frames[frames.length - 1], index); return false; }
+  const dt = 1 / (trace.hz || 30);
+  restoreFrom(boat, frames[key.at], index);
+  boat.o.rudderTarget = null;
+  wakeRestore(boat, key.wake);
+  for (let i = key.at + 1; i < frames.length; i++) {
+    applyFrom(boat, frames[i], index);
+    boat.step(dt);
+  }
+  return true;
+}
+
 export function fieldIndex(fields) {
   const ix = {};
   (fields || TRACE_FIELDS).forEach((name, i) => { ix[name] = i; });

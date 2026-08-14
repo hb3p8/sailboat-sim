@@ -969,12 +969,32 @@ function updateFlow() {
   const lat = boat.rig.lattice;
   // Пелена в силах — значит и линии тока рисуются по ней, а не по прямым лучам.
   const wf = !!(boat.o.wakeForces && boat.rig.wake && boat.rig.wake.n > 1);
+  // И тем же ЯДРОМ, каким её видит парус.
+  //
+  // Пелена держит два ядра: своё, с полом по соседу, — им она видит саму себя,
+  // и мелкое — им её видит парус. После шага она упакована первым, и линии тока
+  // брали именно его: топология была уже от свободного листа, а ядро всё ещё
+  // чужое, местами на десятки сантиметров крупнее. У свёрнутых нитей это ровно
+  // то место, где картинка и должна показывать особенность.
+  //
+  // Поэтому перед запросом пелена переупаковывается ядром паруса, а после —
+  // обратно своим. Переупаковка — чистая функция состояния, следующий шаг
+  // физики получает ровно то же, что получил бы без отладки (это и проверяется
+  // батареей: включённый вид не двигает лодку ни на разряд). Стоит она сотых
+  // долей миллисекунды против тринадцати на сам обход точек.
+  if (wf) boat.rig.wake.pack(false);
   const bc = Math.cos(boat.psi), bs = Math.sin(boat.psi);
   const aw = boat.apparentWind();
   const V = Math.hypot(aw.x, aw.y);
   const p = flowGeo.attributes.position.array;
   const c = flowGeo.attributes.color.array;
-  if (V < 0.3) { flowGeo.setDrawRange(0, 0); return; }
+  // Ранний выход тоже обязан вернуть ядро на место: оставленное чужим, оно
+  // ушло бы в самоиндукцию следующего шага.
+  if (V < 0.3) {
+    flowGeo.setDrawRange(0, 0);
+    if (wf) boat.rig.wake.pack(true);
+    return;
+  }
   const ux = aw.x / V, uy = aw.y / V;          // куда дует
   const px = -uy, py = ux;                     // поперёк потока
   const rigX = rig.ce_x_m, rigZ = rig.ce_height_m;
@@ -1073,6 +1093,7 @@ function updateFlow() {
   }
   flowGeo.attributes.position.needsUpdate = true;
   flowGeo.attributes.color.needsUpdate = true;
+  if (wf) boat.rig.wake.pack(true);      // ядро обратно на своё, для самоиндукции
 }
 
 // Отладочных видов теперь два, и клавиша одна: G крутит их по кругу — выключено,

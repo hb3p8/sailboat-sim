@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
-import { Recorder, fieldIndex, restoreFrom, applyFrom, wakeRestore } from '../sim/trace.js';
+import { Recorder, fieldIndex, restoreFrom, replayTrace } from '../sim/trace.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PACK = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
@@ -96,31 +96,23 @@ check('поля лежат на своих местах, а не по сосед
 // толку мало: до него лодка идёт с пустой пеленой, успевает разойтись, и
 // поставленная на место пелена этого уже не исправит. Проверено: только пелена
 // давала 0.047° по крену, состояние вместе с ней — на порядок меньше.
-const key = (tr.keys || [])[0] || null;
-const from = key ? key.at : 0;
+// Проход — тот самый, которым воспроизводит `scripts/replay.mjs`. Своей копии
+// здесь стояло достаточно, чтобы батарея была зелёной, а инструмент при этом
+// опорных кадров не читал вовсе.
 const boat = new Boat(PACK);
-restoreFrom(boat, frames[0], F);
-boat.o.rudderTarget = null;
 let worst = { speed: 0, heel: 0, psi: 0, drive: 0, at: 0 };
-for (let i = 1; i < frames.length; i++) {
-  applyFrom(boat, frames[i], F);
-  boat.step(1 / tr.hz);
-  if (key && i === from) {
-    restoreFrom(boat, frames[i], F);
-    wakeRestore(boat, key.wake);
-  }
-  if (i <= from) continue;
-  const w = frames[i], t = boat.telemetry;
+const from = replayTrace(boat, tr, F, (i, b, w) => {
+  const t = b.telemetry;
   const d = {
     speed: Math.abs(t.speedKn - w[F.speedKn]),
     heel: Math.abs(t.heelDeg - w[F.heelDeg]),
-    psi: Math.abs(boat.psi - w[F.psi]) / D,
+    psi: Math.abs(b.psi - w[F.psi]) / D,
     drive: Math.abs(t.driveN - w[F.driveN]),
   };
   if (d.speed + d.heel + d.psi > worst.speed + worst.heel + worst.psi) {
     worst = Object.assign(d, { at: w[F.t] });
   }
-}
+});
 console.log('Наибольшее расхождение: скорость ' + worst.speed.toExponential(1) +
   ' уз, крен ' + worst.heel.toExponential(1) + '°, курс ' +
   worst.psi.toExponential(1) + '°, тяга ' + worst.drive.toExponential(1) + ' Н\n');

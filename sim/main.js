@@ -47,7 +47,8 @@ const SKY = new Color(SKY_PACK && SKY_PACK.horizon ? SKY_PACK.horizon : 0xa8c4d8
 // камеры и сам рельеф.
 const terrain = new Terrain(TERRAIN_PACK);
 const FAR_WATER = terrain.ready;
-scene.fog = new Fog(SKY, FAR_WATER ? 900 : 110, FAR_WATER ? 14000 : 420);
+const sceneFog = new Fog(SKY, FAR_WATER ? 900 : 110, FAR_WATER ? 14000 : 420);
+scene.fog = sceneFog;
 const CAM_FOV = 52;
 const camera = new PerspectiveCamera(CAM_FOV, 1, FAR_WATER ? 0.5 : 0.15,
                                      FAR_WATER ? 20000 : 2000);
@@ -106,7 +107,15 @@ const sun = new DirectionalLight(0xfff2dc, 1.5);
 // так. Без карты остаётся прежнее положение: сцена должна светиться и когда
 // сервера нет.
 const SUN_DIR = (SKY_PACK && SKY_PACK.sun)
-  ? new Vector3(SKY_PACK.sun[0], SKY_PACK.sun[1], SKY_PACK.sun[2]).normalize()
+  // `?sunhigh` поднимает солнце к полудню, не трогая небо. Нужен он ровно для
+  // одного: проверить тени. При настоящем солнце этой карты — четыре градуса над
+  // горизонтом — теням падать почти некуда, и «тени нет» и «теней не бывает»
+  // выглядят одинаково. С поднятым солнцем разница видна мгновенно, и вопрос
+  // закрывается за один кадр вместо часа рассуждений. Небо при этом остаётся
+  // прежним и с солнцем расходится — на то он и отладочный.
+  ? (location.search.includes('sunhigh')
+      ? new Vector3(-0.5, 0.75, -0.43).normalize()
+      : new Vector3(SKY_PACK.sun[0], SKY_PACK.sun[1], SKY_PACK.sun[2]).normalize())
   : new Vector3(toSceneX(-70), 80, toSceneZ(50)).normalize();
 // Горизонтальная часть направления: по ней ложится тень, по ней же сдвигается
 // коробка теней.
@@ -137,6 +146,33 @@ scene.add(sun);
 // выходит на первых же ста метрах и тень пропадает.
 scene.add(sun.target);
 
+// Отладка теней: «тень чёрная». Смысл в том, чтобы вопрос «есть тень или нет»
+// перестал быть вопросом вкуса. При низком солнце скользящий свет сам по себе
+// кладёт на палубу тёмное, и отличить его от тени на глаз нельзя — я на этом
+// уже ошибся, приняв одно за другое.
+//
+// Режим гасит ВСЁ, кроме солнца: небо как источник, полусферический свет, фон.
+// Что не освещено солнцем напрямую — становится чёрным. Тень тогда не «темнее»,
+// а именно чёрная, и её край видно с точностью до пикселя.
+//
+// Первое же включение и окупило затею: чёрной стала вся лодка целиком. Значит
+// дело не в мягкости тени, а в том, что с этой стороны на неё вообще не падает
+// солнце, — и заодно нашлось, что флаг «отбрасывает тень» не достался ни одной
+// части лодки (см. boatCastsShadow). Вместе с `?sunhigh` это вопрос одного кадра.
+let hardShadow = false;
+let skyTex = null;
+
+function setHardShadow(on) {
+  hardShadow = on;
+  skyFill.intensity = on ? 0 : 0.5;
+  sun.intensity = on ? 3.2 : 1.5;
+  scene.environmentIntensity = on ? 0 : 0.9;
+  // Фон ровным серым: на снимке неба чёрную тень не разглядеть у горизонта, а
+  // серое даёт ей опору для глаза.
+  scene.background = on ? new Color(0x6a7480) : (skyTex || SKY);
+  scene.fog = on ? null : sceneFog;
+}
+
 // Небо картой, а не одним цветом. Грузится с сервера, как экипаж и карта
 // акватории: полтораста килобайт незачем нести в файле, который открывают
 // двойным кликом. Пока не пришло — фон остаётся ровным цветом, и это не
@@ -148,9 +184,11 @@ scene.add(sun.target);
 new TextureLoader().load('../assets/sky.jpg', tex => {
   tex.mapping = EquirectangularReflectionMapping;
   tex.colorSpace = SRGBColorSpace;
+  skyTex = tex;
   scene.background = tex;
   scene.environment = tex;
   scene.environmentIntensity = 0.9;
+  if (hardShadow) setHardShadow(true);   // режим включили до загрузки неба
 }, undefined, () => {
   console.warn('assets/sky.jpg не открылся — небо остаётся ровным цветом');
 });
@@ -1158,11 +1196,19 @@ for (const [name, node] of [['цвета', seaMat.colorNode],
 
 const boatGroup = new Group();
 scene.add(boatGroup);
-// Отбрасывает тень только лодка. Ставится это здесь и на всю группу разом:
-// корпус, риг, паруса и фигурки — одно тело, и разбирать его по частям незачем.
-// Всё остальное в сцене тень не отбрасывает и не принимает: карта акватории
-// снята с этого нарочно (см. загрузку GLB), а вода только принимает.
-boatGroup.traverse(o => { if (o.isMesh) o.castShadow = true; });
+
+// Отбрасывает тень только лодка. Всё остальное в сцене тень не отбрасывает и не
+// принимает: карта акватории снята с этого нарочно (см. загрузку GLB), а вода
+// только принимает.
+//
+// Зовётся это НЕ ЗДЕСЬ, а после того, как лодка собрана, и ещё раз — когда
+// приедут фигурки. Первый заход стоял ровно тут, сразу за `scene.add`, и флаг не
+// достался ни одной части: корпус добавляется тридцатью строками ниже, паруса
+// полутора сотнями, экипаж вообще приходит с сервера. Обход пустой группы
+// отработал молча, теней не было, и выглядело это как «тени не поддерживаются».
+function boatCastsShadow() {
+  boatGroup.traverse(o => { if (o.isMesh) o.castShadow = true; });
+}
 
 function meshFrom(data, colour, rough, metal) {
   const g = new BufferGeometry();
@@ -1823,6 +1869,9 @@ new GLTFLoader()
       crewGroup.add(g);
       crewFigs.push(g);
     }
+    // Фигурки приехали с сервера — им флаг тени надо поставить отдельно: к
+    // моменту, когда его ставили всей лодке, их ещё не было.
+    boatCastsShadow();
   }, undefined, err => console.warn('фигурка экипажа не загрузилась:', err));
 
 // Плечо: какой момент экипаж создаёт сейчас, делённый на его вес. Груз на левом
@@ -2869,6 +2918,9 @@ addEventListener('resize', resize);
 // это надёжнее, чем окно.
 if (typeof ResizeObserver !== 'undefined') new ResizeObserver(resize).observe(stage);
 resize();
+
+// Лодка собрана целиком — теперь и флаг тени есть кому достаться.
+boatCastsShadow();
 
 function frame() {
   // Замер держит кадр за собой целиком — см. benchPaused в bench.js. Часы при

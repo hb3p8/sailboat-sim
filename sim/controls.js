@@ -26,6 +26,8 @@ addEventListener('keydown', e => {
     trackN = 0;
   }
   if (e.code === 'KeyH') { autopilot = !autopilot; apHeading = boat.psi; }
+  // Тени: чёрная тень вместо мягкой. Отладочный вид, см. setHardShadow.
+  if (e.code === 'KeyT') setHardShadow(!hardShadow);
   if (e.code === 'KeyC') cycleCam();
   if (e.code === 'KeyG') setDebug(debugMode + 1);
   // Подсказки прячутся по умолчанию: карточка длинная и закрывала собой

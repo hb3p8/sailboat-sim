@@ -162,6 +162,14 @@ def main():
             "/*__MARKS__*/ null",
             json.dumps(json.load(open(marks_path, encoding="utf-8")),
                        ensure_ascii=False, separators=(",", ":")))
+    # Небо: сама карта грузится с сервера, а положение солнца вклеивается. Оно
+    # крошечное и нужно ДО загрузки — от него стоит источник света, и без
+    # сервера сцена обязана освещаться так же, как с ним.
+    sky_path = os.path.join(ROOT, "assets", "sky.json")
+    if os.path.exists(sky_path):
+        html = html.replace(
+            "/*__SKY__*/ null",
+            json.dumps(json.load(open(sky_path)), separators=(",", ":")))
     html = html.replace("/*__THREE__*/", three)
     # Порядок важен: physics.js берёт WindField из wind.js, а импорты при
     # вклейке снимаются — значит поле ветра должно быть объявлено раньше.

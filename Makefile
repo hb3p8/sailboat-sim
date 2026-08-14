@@ -1,7 +1,7 @@
 PY ?= python3
 VENV := .venv/bin/python
 
-.PHONY: all extract hull viewer export physics sim terrain terrain-pack terrain-glb crew serve test slow all-tests fit clean
+.PHONY: all extract hull viewer export physics sim terrain terrain-pack terrain-glb crew sky serve test slow all-tests fit clean
 
 all: viewer export sim
 
@@ -87,6 +87,15 @@ assets/crew.glb: scripts/build_crew.py models/lego_sailor.glb
 	$(VENV) scripts/build_crew.py
 
 crew: assets/crew.glb
+
+# Небо. Исходник — Radiance HDR на пятнадцать мегабайт, в репозитории его нет
+# (см. .gitignore): большой динамический диапазон нужен тому, кто светит этой
+# картой сцену, а у нас светит аналитическое солнце. В сборку идут только
+# перепакованная карта и положение солнца, снятое с неё же.
+assets/sky.jpg assets/sky.json: scripts/build_sky.py assets/sky_clouds.hdr
+	$(VENV) scripts/build_sky.py
+
+sky: assets/sky.jpg
 
 # Локальный сервер. Нужен просмотрщику акватории: поля физики он читает по
 # частям, а разметку пишет обратно на диск, и ни того, ни другого `file://` не

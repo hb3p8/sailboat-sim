@@ -22,7 +22,12 @@ const stage = document.getElementById('stage');
 const hud = document.getElementById('hud');
 
 const scene = new Scene();
-const SKY = new Color(0xa8c4d8);
+// Цвет неба у горизонта. Им красится туман, им же остаётся фон, пока карта не
+// пришла, и в него уходит вода там, где отражению нечего показать. Берётся он с
+// САМОЙ КАРТЫ (scripts/build_sky.py считает средний по полосе вокруг горизонта):
+// туман, покрашенный не тем небом, над которым стоит, выдаёт себя стыком на
+// дальнем берегу — берег растворяется не в тот цвет, что над ним.
+const SKY = new Color(SKY_PACK && SKY_PACK.horizon ? SKY_PACK.horizon : 0xa8c4d8);
 // Туман отодвинут: порывы на воде — языки по сотне метров, и в прежние
 // сорок пять метров чистой воды не помещалось даже одного.
 // Туман и дальняя плоскость камеры зависят от того, есть ли на что смотреть.
@@ -69,6 +74,11 @@ function gpuTrouble() {
     'потом закрыть и открыть Safari заново.';
 }
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+// Тени — только от лодки и только на воду. Карту акватории они не трогают
+// нарочно: пятнадцать километров в одну карту теней не влезают ничем полезным,
+// а лодка со своим ригом влезает целиком, и тень от паруса на воде — это то, по
+// чему видно, куда стоит солнце.
+renderer.shadowMap.enabled = true;
 // Фон задаётся сценой, а не setClearColor: у WebGPU-рендерера очистка цветом
 // до неба не доходит, и небо остаётся чёрным.
 scene.background = SKY;
@@ -82,10 +92,68 @@ scene.background = SKY;
 let wakeDark = false;
 stage.appendChild(renderer.domElement);
 
-scene.add(new HemisphereLight(0xe8f4ff, 0x2b4a63, 2.4));
-const sun = new DirectionalLight(0xfff2dc, 2.6);
-sun.position.set(toSceneX(-70), 80, toSceneZ(50));
+// Полусферический свет остался, но приглушён впятеро: он был подпоркой на месте
+// неба, а теперь небо есть настоящее и светит само — картой окружения. Оставлять
+// обоих в полную силу значит светить сцену дважды, что и вышло на первом заходе:
+// лодка выбелилась до потери обводов, борт с парусом слились в одно белое пятно.
+const skyFill = new HemisphereLight(0xe8f4ff, 0x2b4a63, 0.5);
+scene.add(skyFill);
+const sun = new DirectionalLight(0xfff2dc, 1.5);
+// Солнце стоит там, где оно НА КАРТЕ НЕБА, а не где было удобно. Направление
+// снято с самого файла при сборке (scripts/build_sky.py) и вклеено сюда числом:
+// нарисованный диск и источник света обязаны совпасть, иначе блик на воде лежит
+// не под солнцем — а это глаз ловит мгновенно, даже не понимая, что именно не
+// так. Без карты остаётся прежнее положение: сцена должна светиться и когда
+// сервера нет.
+const SUN_DIR = (SKY_PACK && SKY_PACK.sun)
+  ? new Vector3(SKY_PACK.sun[0], SKY_PACK.sun[1], SKY_PACK.sun[2]).normalize()
+  : new Vector3(toSceneX(-70), 80, toSceneZ(50)).normalize();
+// Горизонтальная часть направления: по ней ложится тень, по ней же сдвигается
+// коробка теней.
+const SUN_FLAT = new Vector3(SUN_DIR.x, 0, SUN_DIR.z).normalize();
+sun.position.copy(SUN_DIR).multiplyScalar(300);
+sun.castShadow = true;
+// Коробка теней размером с лодку с запасом, а не со сцену. Размер тут спорит сам
+// с собой: солнце над горизонтом на четыре градуса, и тень девятиметровой мачты
+// вытягивается на сто тридцать метров. Коробка в лодку такую тень обрезает у
+// самого борта — первый заход так и кончился, тени не было видно вовсе. Коробка
+// во всю тень размазывает карту так, что от паруса остаётся серое пятно.
+//
+// Взято среднее: восемьдесят метров и сдвиг коробки ПО ТЕНИ, а не по лодке.
+// Лодка стоит у ближнего края, тень уходит вглубь, и её читаемая часть — первые
+// полсотни метров, где ещё различимы мачта и парус, — попадает целиком.
+const SHADOW_BOX = 80;
+const SHADOW_AHEAD = 55;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -SHADOW_BOX;
+sun.shadow.camera.right = SHADOW_BOX;
+sun.shadow.camera.top = SHADOW_BOX;
+sun.shadow.camera.bottom = -SHADOW_BOX;
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 900;
+sun.shadow.bias = -0.0012;
 scene.add(sun);
+// Источник светит НА ЛОДКУ: коробка теней едет вместе с ней, иначе лодка из неё
+// выходит на первых же ста метрах и тень пропадает.
+scene.add(sun.target);
+
+// Небо картой, а не одним цветом. Грузится с сервера, как экипаж и карта
+// акватории: полтораста килобайт незачем нести в файле, который открывают
+// двойным кликом. Пока не пришло — фон остаётся ровным цветом, и это не
+// заглушка, а полноправный вид: страница без сервера так и работает.
+//
+// Карта идёт и в ОКРУЖЕНИЕ. Отражение воды считает зеркальный проход, но всё,
+// что он не поймал, — и матовые поверхности корпуса с парусом — берут свет
+// отсюда, а не из ровной полусферы. Ради этого небо и снималось.
+new TextureLoader().load('../assets/sky.jpg', tex => {
+  tex.mapping = EquirectangularReflectionMapping;
+  tex.colorSpace = SRGBColorSpace;
+  scene.background = tex;
+  scene.environment = tex;
+  scene.environmentIntensity = 0.9;
+}, undefined, () => {
+  console.warn('assets/sky.jpg не открылся — небо остаётся ровным цветом');
+});
 
 // ------------------------------------------------------------------- вода
 //
@@ -181,6 +249,10 @@ const seaCell = new Float32Array((SEG + 1) * (SEG + 1));
 seaGeo.setAttribute('seaCell', new Float32BufferAttribute(seaCell, 1));
 const seaMat = new MeshStandardNodeMaterial({ roughness: 0.28, metalness: 0.12 });
 const sea = new Mesh(seaGeo, seaMat);
+// Вода тень ПРИНИМАЕТ, но не отбрасывает: отбрасывать ей нечего — под ней
+// ничего нет, — а принять тень паруса она обязана, иначе лодка висит над водой
+// без всякой связи с ней.
+sea.receiveShadow = true;
 sea.frustumCulled = false;
 // Вода рисуется ПОСЛЕДНЕЙ из непрозрачных. Отражения экранного пространства
 // (ниже) читают снимок уже нарисованной сцены, и вода в этом снимке оказаться не
@@ -1086,6 +1158,11 @@ for (const [name, node] of [['цвета', seaMat.colorNode],
 
 const boatGroup = new Group();
 scene.add(boatGroup);
+// Отбрасывает тень только лодка. Ставится это здесь и на всю группу разом:
+// корпус, риг, паруса и фигурки — одно тело, и разбирать его по частям незачем.
+// Всё остальное в сцене тень не отбрасывает и не принимает: карта акватории
+// снята с этого нарочно (см. загрузку GLB), а вода только принимает.
+boatGroup.traverse(o => { if (o.isMesh) o.castShadow = true; });
 
 function meshFrom(data, colour, rough, metal) {
   const g = new BufferGeometry();
@@ -2862,6 +2939,15 @@ function frame() {
   // Порядок поворотов YXZ означает, что дифферент применяется первым, в осях
   // самой лодки, — то есть так, как он и получается.
   boatGroup.position.set(toSceneX(ix), heaveY(izc), toSceneZ(iy));
+  // Солнце едет за лодкой, оставаясь в своём направлении: коробка теней
+  // маленькая, и без этого лодка выходит из неё на первой же сотне метров.
+  // Сначала цель, потом источник — и источник ставится ОТ ЦЕЛИ по направлению на
+  // солнце. Наоборот нельзя: сдвинешь цель, не сдвинув источник, и свет
+  // перестанет идти оттуда, где нарисовано солнце, — а вся затея была ровно про
+  // то, чтобы они совпадали.
+  sun.target.position.copy(boatGroup.position)
+     .addScaledVector(SUN_FLAT, -SHADOW_AHEAD);
+  sun.position.copy(sun.target.position).addScaledVector(SUN_DIR, 300);
   boatGroup.rotation.order = 'YXZ';
   boatGroup.rotation.y = headingRotY(ipsi);
   boatGroup.rotation.x = heelRotX(iphi);

@@ -1,0 +1,12 @@
+{
+ "sun": [
+  -0.80152,
+  0.07229,
+  -0.59358
+ ],
+ "horizon": "#dac8c6",
+ "sun_altitude_deg": 4.15,
+ "sun_azimuth_deg": 216.52,
+ "source": "sky_clouds.hdr",
+ "exposure": 0.450521
+}

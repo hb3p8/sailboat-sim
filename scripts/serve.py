@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Локальный сервер для страниц проекта.
 
-    python3 scripts/serve.py [--port 8020] [--no-open]
+    python3 scripts/serve.py [--port 8020] [--no-open] [--lan]
 
 Нужен ровно для двух вещей, которых самодостаточная страница не умеет.
 
@@ -19,6 +19,11 @@
 и никакой другой. Слушается только петля: наружу это не смотрит и смотреть не
 должно.
 
+Исключение — `--lan`, и оно нужно ровно за одним: потрогать игровой интерфейс на
+настоящем телефоне. Тогда слушается вся сеть, а запись разметки выключается —
+писать на диск по просьбе неизвестно кого нельзя, а отдавать файлы репозитория
+в домашний Wi-Fi можно.
+
 **Отдавать ассеты.** Сюда переехало всё, что весит и что незачем вклеивать:
 фигурки экипажа и то, что появится дальше. Модели лежат в `assets/`, распаковщик
 Draco — в `viewer/vendor/draco/`.
@@ -33,6 +38,7 @@ import http.server
 import json
 import os
 import re
+import socket
 import socketserver
 import sys
 import threading
@@ -167,6 +173,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_PUT(self):
+        # Наружу — только чтение. Разметка пишется на диск без всякой проверки,
+        # кто просит; законно это ровно до тех пор, пока просить может одна эта
+        # машина. Открыли сеть (`--lan`) — запись закрывается, и переключателя
+        # «открыть сеть И писать» здесь нет нарочно.
+        if getattr(self.server, "read_only", False):
+            self._json(403, {"error": "сервер открыт в сеть, запись выключена"})
+            return
         if self.path.split("?")[0] != MARKS_URL:
             self._json(404, {"error": "писать сюда нельзя"})
             return
@@ -187,21 +200,53 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
+    read_only = False
+
+
+def lan_address():
+    """Свой адрес в локальной сети — тот, что набирают на телефоне.
+
+    Через UDP-сокет, а не через `gethostbyname(gethostname())`: последнее на
+    маке отдаёт `127.0.0.1` чаще, чем что-то полезное. Соединение здесь
+    ненастоящее — датаграммный сокет ничего не шлёт, он только заставляет
+    систему выбрать маршрут наружу и показать, с какого адреса тот пойдёт.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 53))
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--port", type=int, default=8020)
     ap.add_argument("--no-open", action="store_true", help="не открывать браузер")
+    ap.add_argument("--lan", action="store_true",
+                    help="слушать всю сеть, чтобы открыть с телефона; "
+                         "запись разметки при этом выключается")
     a = ap.parse_args()
 
-    # Только петля. Разметка пишется на диск без всякой проверки, кто просит, —
-    # это законно ровно до тех пор, пока просить может только эта машина.
-    with Server(("127.0.0.1", a.port), Handler) as srv:
-        url = "http://127.0.0.1:%d/viewer/terrain.html" % a.port
+    # По умолчанию — только петля (см. do_PUT о том, почему). `--lan` открывает
+    # сеть и тем же движением закрывает запись: отдаётся корень репозитория, и
+    # всякий в этой сети сможет его ЧИТАТЬ. Для домашнего Wi-Fi это разумная
+    # цена за то, чтобы потрогать игровой интерфейс пальцем; в чужой сети
+    # включать не стоит.
+    host = "0.0.0.0" if a.lan else "127.0.0.1"
+    with Server((host, a.port), Handler) as srv:
+        srv.read_only = a.lan
+        shown = (lan_address() or host) if a.lan else "127.0.0.1"
+        url = "http://%s:%d/viewer/terrain.html" % (shown, a.port)
         print("сервер на %s" % url)
-        print("пишется только %s; Ctrl-C чтобы остановить"
-              % os.path.relpath(MARKS, ROOT))
+        if a.lan:
+            print("с телефона: http://%s:%d/sim/index.html" % (shown, a.port))
+            print("запись разметки выключена: сеть открыта")
+        else:
+            print("пишется только %s; Ctrl-C чтобы остановить"
+                  % os.path.relpath(MARKS, ROOT))
         if not a.no_open:
             threading.Timer(0.4, lambda: webbrowser.open(url)).start()
         try:

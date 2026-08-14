@@ -199,15 +199,15 @@
 
   /* Лента курса и число под ней. */
   #gcomp { position: absolute; left: 0; right: 0; top: 0; pointer-events: none; }
-  #gcomp canvas { display: block; width: 100%; height: 34px; }
+  #gcomp canvas { display: block; width: 100%; height: 40px; }
   #ghead {
-    position: absolute; left: 0; right: 0; top: 32px;
+    position: absolute; left: 0; right: 0; top: 38px;
     text-align: center; font-size: 16px; letter-spacing: .04em;
   }
 
   /* Два показания по верхним углам. */
-  #gspeed { left: 10px; top: 52px; }
-  #gwind { right: 10px; top: 52px; }
+  #gspeed { left: 10px; top: 58px; }
+  #gwind { right: 10px; top: 58px; }
   #gspeed, #gwind { width: 62px; text-align: center; }
   #gspeed b, #gwind b {
     display: block; font-size: 24px; line-height: 1.05; margin-top: 1px;
@@ -246,6 +246,7 @@
     display: flex; align-items: flex-end; gap: 6px;
   }
   #gtiller .body { flex: 1; }
+  #gtiller .cap b { color: var(--accent); font-weight: 700; }
   .hslider {
     position: relative; height: 26px; margin-top: 2px;
     border-radius: 13px; background: rgba(6, 14, 26, .34);
@@ -256,8 +257,19 @@
     position: absolute; inset: 0; display: flex; align-items: center;
     justify-content: space-between; padding: 0 8px; opacity: .45;
   }
-  .hslider .ticks i { display: block; width: 1px; height: 6px; background: #fff; }
-  .hslider .ticks i.mid { height: 12px; }
+  /* Деления шкалы румпеля стоят по месту, а не раскладываются flex'ом: шкала
+     градусная, и её отметки обязаны попадать в свои градусы. */
+  .hslider .ticks { display: block; padding: 0; }
+  .hslider .ticks i {
+    position: absolute; top: 50%; width: 1px; height: 6px; margin: -3px 0 0 -0.5px;
+    background: #fff;
+  }
+  .hslider .ticks i.lab { height: 10px; margin-top: -5px; }
+  .hslider .ticks i.mid { height: 16px; margin-top: -8px; opacity: .9; }
+  .hslider .ticks i[data-deg]::after {
+    content: attr(data-deg); position: absolute; left: 50%; top: 7px;
+    transform: translateX(-50%); font-size: 8px; opacity: .75;
+  }
   .hslider .knob {
     position: absolute; top: -2px; bottom: -2px; width: 34px; margin-left: -17px;
     border-radius: 9px; background: rgba(38, 50, 68, .92);
@@ -344,7 +356,7 @@
   <div id="gtiller" class="pane">
     <div class="arrow" id="gtl">‹</div>
     <div class="body">
-      <div class="cap">румпель</div>
+      <div class="cap">румпель <b id="gtillv">0°</b></div>
       <div class="hslider" id="gtill"><div class="ticks"></div><div class="knob"></div></div>
     </div>
     <div class="arrow" id="gtr">›</div>

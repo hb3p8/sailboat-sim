@@ -240,6 +240,15 @@ const BENCH_PARTS = [
   ['без воды и лодки', () => { sea.visible = false; boatGroup.visible = false; }],
   ['без лодки и парусов', () => { boatGroup.visible = false; }],
   ['без берега', () => { if (terrainScene) terrainScene.visible = false; }],
+  // Берег по дальности, тремя мерками. Отвечает на то, чего от отсечения вообще
+  // ждать: если цена берега сидит в БЛИЖНИХ кусках, отсекать дальние
+  // бессмысленно, сколько ни настраивай.
+  // Лоды. Строка меряет не «сколько стоит берег», а сколько вернуло ИХ
+  // ВКЛЮЧЕНИЕ: снимается не кусок сцены, а его плотность.
+  ['берег без лодов', () => { terrainLodOn = false; terrainLod(); }],
+  ['берег ближе 2 км', () => terrainCull(2000)],
+  ['берег ближе 800 м', () => terrainCull(800)],
+  ['берег ближе 300 м', () => terrainCull(300)],
   // Дальность: туман к носу и ближняя дальняя плоскость. Геометрию это не
   // снимает, но отсекает всё, что дальше, — то есть отвечает ровно на вопрос
   // «а если рисовать ближе».
@@ -287,6 +296,8 @@ function benchMirrorScale(scale) {
 }
 
 function benchPartsRestore() {
+  terrainCull(0);
+  terrainLodOn = true; terrainLod();
   seaRefPlanar.value = 1;
   sun.castShadow = true;
   sun.shadow.autoUpdate = true;

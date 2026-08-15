@@ -2471,10 +2471,19 @@ function saveDump() {
 // Ручка на загруженный берег: контрастный вид пелены его снимает, а достать
 // его больше неоткуда — он приходит в сцену изнутри загрузчика.
 let terrainScene = null;
+// `?terrain=<имя>` берёт другой файл карты — тот же рельеф, но нарезанный иначе.
+// Нужно для замера: размер куска выбирался на настольной машине, где кадр
+// упирался в число объектов, а на телефоне дорога геометрия, и сравнивать
+// нарезки надо ОДНОЙ И ТОЙ ЖЕ сборкой страницы, иначе сравниваются сборки.
+const TERRAIN_FILE = (() => {
+  const w = new URLSearchParams(location.search).get('terrain');
+  return w && /^[\w-]{1,24}$/.test(w) ? '../assets/terrain' + w + '.glb'
+                                       : '../assets/terrain.glb';
+})();
 if (terrain.ready) {
   new GLTFLoader()
     .setDRACOLoader(new DRACOLoader().setDecoderPath('../viewer/vendor/draco/'))
-    .load('../assets/terrain.glb', gltf => {
+    .load(TERRAIN_FILE, gltf => {
       // Материалы приходят из файла, но туман — свойство сцены, а не карты, и
       // three включает его только тем материалам, у которых поднят fog. У
       // импортированных он поднят по умолчанию, так что трогать нечего; а вот
@@ -2497,11 +2506,108 @@ if (terrain.ready) {
       scene.add(gltf.scene);
       console.log('акватория: %d кусков, %s тыс. треугольников',
                   gltf.scene.children.length, (tris / 1000).toFixed(0));
+      terrainChunks(gltf.scene);
     }, undefined, () => {
       console.warn('assets/terrain.glb не открылся — берега не будет. ' +
                    'Страница без сервера так и работает; с сервером — ' +
                    'проверьте `make terrain-glb`.');
     });
+}
+
+// Куски карты со своими границами и уровнями детализации.
+//
+// УРОВНИ НЕ ДОБАВЛЯЮТ УЗЛОВ В СЦЕНУ, и в этом всё дело. Первая попытка лодов
+// собиралась через THREE.LOD — три узла на кусок вместо одного, — и вышла
+// медленнее полной карты (1.86 мс против 1.41): кадр на настольной машине
+// упирается в число объектов, а не в треугольники, и лишние узлы съедали
+// сэкономленную геометрию. Здесь у куска остаётся ОДИН меш, а прореженные сетки
+// лежат рядом и подставляются ему по дальности. Объектов в кадре столько же,
+// сколько было.
+//
+// В файле уровни приходят отдельными узлами (`land_x_y`, `land_x_y_l1`,
+// `land_x_y_l2`) — иначе их не сложить в glTF. Лишние узлы отсюда же и
+// вынимаются из сцены сразу после загрузки.
+const terrainParts = [];
+function terrainChunks(root) {
+  const box = new Box3(), c = new Vector3();
+  const extra = new Map();      // основа имени -> сетки уровней
+  const drop = [];
+  for (const o of root.children) {
+    const m = /^(.*)_l(\d+)$/.exec(o.name || '');
+    if (m && o.isMesh) { 
+      let a = extra.get(m[1]);
+      if (!a) extra.set(m[1], a = []);
+      a[+m[2]] = o.geometry;
+      drop.push(o);
+    }
+  }
+  for (const o of drop) root.remove(o);
+  for (const o of root.children) {
+    if (!o.isMesh && !o.children.length) continue;
+    box.setFromObject(o);
+    if (!isFinite(box.min.x)) continue;
+    box.getCenter(c);
+    const size = box.getSize(new Vector3());
+    const geoms = [o.geometry].concat((extra.get(o.name) || []).slice(1));
+    terrainParts.push({
+      o, geoms, lod: 0,
+      cx: c.x, cz: c.z, r: 0.5 * Math.hypot(size.x, size.z),
+    });
+  }
+  const rs = terrainParts.map(p => p.r).sort((a, b) => a - b);
+  const withLod = terrainParts.filter(p => p.geoms.length > 1).length;
+  console.log('куски карты: %d (с уровнями %d), радиус от %s до %s м (медиана %s)',
+              terrainParts.length, withLod, rs[0].toFixed(0),
+              rs[rs.length - 1].toFixed(0), rs[rs.length >> 1].toFixed(0));
+}
+
+// Докуда держать полную сетку и докуда среднюю, м. Меряется от БЛИЖНЕГО КРАЯ
+// куска: кусок в три километра поперёк, стоящий серединой за горизонтом, ближним
+// краем упирается в нос лодки, и по середине его уровень выбирать нельзя.
+//
+// Числа взяты от того, что видно. Полная сетка — 20 м на ячейку; на дальности
+// 600 м ячейка занимает около полутора градусов, прореживание вдвое там ещё
+// заметно по кромке склона. Дальше 2.5 км ячейка уходит под треть градуса, и
+// прореживание вчетверо неотличимо, тем более сквозь туман.
+const LOD_NEAR = 600, LOD_FAR = 2500;
+let terrainLodOn = true;
+
+let terrainLodForce = -1;      // -1 — по дальности; 0…2 — держать этот уровень
+
+function terrainLod() {
+  if (!terrainParts.length) return;
+  const ex = camera.position.x, ez = camera.position.z;
+  for (const p of terrainParts) {
+    if (p.geoms.length < 2) continue;
+    const d = Math.hypot(p.cx - ex, p.cz - ez) - p.r;
+    const want = terrainLodForce >= 0 ? terrainLodForce
+      : !terrainLodOn ? 0 : d < LOD_NEAR ? 0 : d < LOD_FAR ? 1 : 2;
+    const k = Math.min(want, p.geoms.length - 1);
+    if (k !== p.lod) { p.lod = k; p.o.geometry = p.geoms[k]; }
+  }
+}
+
+// Держать уровень насильно: `sv20lod(2)` кладёт грубую сетку даже под нос
+// лодки. Нужно ровно затем, чтобы посмотреть на швы: по дальности грубые куски
+// стоят за туманом, и щель между уровнями там не разглядеть — а она либо есть,
+// либо её нет, и выяснять это надо вблизи. `sv20lod(-1)` возвращает по дальности.
+window.sv20lod = k => { terrainLodForce = k; terrainLod(); return 'уровень ' + k; };
+
+// Отсечение кусков карты по дальности. `far` в метрах; 0 — показать все.
+// Мерка — РАССТОЯНИЕ ДО БЛИЖНЕГО КРАЯ куска, а не до его середины: кусок в
+// три километра поперёк, стоящий серединой за горизонтом, ближним краем может
+// упираться в нос лодки.
+function terrainCull(far) {
+  if (!terrainParts.length) return 0;
+  let hidden = 0;
+  const ex = camera.position.x, ez = camera.position.z;
+  for (const p of terrainParts) {
+    const d = Math.hypot(p.cx - ex, p.cz - ez) - p.r;
+    const on = !far || d <= far;
+    p.o.visible = on;
+    if (!on) hidden++;
+  }
+  return hidden;
 }
 
 // ---------------------------------------------------------------- ввод
@@ -3172,6 +3278,9 @@ function frame() {
   if (benchFrozen()) { benchAim(camera); benchQuiet(); }
 
   updateCrew();
+  // Уровень детализации берега — по нынешнему месту камеры. Кусков полсотни, и
+  // считать это каждый кадр дешевле, чем городить расписание.
+  terrainLod();
   const tDraw = performance.now();
   perf.scene = smooth(perf.scene, tDraw - tScene);
   if (orthoView) renderOrtho(bx, bz, fx, fz, sx, sz);
@@ -3378,6 +3487,37 @@ if (typeof BUILD !== 'undefined' && BUILD) {
       ', ' + plural((MARKS && MARKS.buoys) ? MARKS.buoys.length : 0, 'буй', 'буя', 'буёв')
                  : 'без разметки');
 }
+// Куски карты наружу: сколько их, какие у них рамки и сколько из них
+// действительно уходит в отрисовку. Последнее — единственный способ отличить
+// «отбраковка работает» от «отбраковка думает, что работает».
+window.sv20terrain = () => {
+  const before = renderer.info.render.drawCalls;
+  renderer.render(scene, camera);
+  const all = renderer.info.render.drawCalls - before;
+  const keep = [];
+  for (const p of terrainParts) p.o.visible = false;
+  const b2 = renderer.info.render.drawCalls;
+  renderer.render(scene, camera);
+  const without = renderer.info.render.drawCalls - b2;
+  for (const p of terrainParts) p.o.visible = true;
+  const rs = terrainParts.map(p => p.r).sort((a, b) => a - b);
+  const gs = terrainParts.map(p => {
+    const g = p.o.geometry;
+    if (g && !g.boundingSphere) g.computeBoundingSphere();
+    return g && g.boundingSphere ? g.boundingSphere.radius : -1;
+  }).sort((a, b) => a - b);
+  return {
+    кусков: terrainParts.length,
+    рамкаМир: [+rs[0].toFixed(0), +rs[rs.length >> 1].toFixed(0), +rs[rs.length - 1].toFixed(0)],
+    сфераГеом: [+gs[0].toFixed(0), +gs[gs.length >> 1].toFixed(0), +gs[gs.length - 1].toFixed(0)],
+    вызововВсего: all,
+    вызововБезКарты: without,
+    вызововНаКарту: all - without,
+    отбраковкаВключена: terrainParts.every(p => p.o.frustumCulled !== false),
+    дальняяПлоскость: camera.far,
+    туман: scene.fog ? [scene.fog.near, scene.fog.far] : null,
+  };
+};
 // Тот же дамп доступен из консоли — удобно, когда файл забирать некуда:
 // copy(JSON.stringify(sv20dump()))
 window.sv20dump = dumpState;

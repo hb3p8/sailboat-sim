@@ -76,6 +76,7 @@ function perfHead() {
       волнаРаз: ocean && ocean.every != null ? ocean.every : null,
       пеленаДеление: boat && boat.o ? (boat.o.wakeSlice | 0) : null,
       интерфейсМоб: typeof MOBILE_UI !== 'undefined' ? !!MOBILE_UI : null,
+      карта: typeof TERRAIN_FILE !== 'undefined' ? TERRAIN_FILE.split('/').pop() : null,
     },
   };
 }

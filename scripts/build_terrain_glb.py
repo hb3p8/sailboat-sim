@@ -84,6 +84,15 @@ DST = os.path.join(ROOT, "assets", "terrain.glb")
 # Ячеек в куске сетки. Число мерено, а не взято на глаз, — см. заголовок.
 CHUNK = 144
 
+# Прореживание уровней: 1 — полная сетка (20 м), 2 — 40 м, 4 — 80 м.
+#
+# Уровни пекутся ОТДЕЛЬНЫМИ СЕТКАМИ ОДНОГО И ТОГО ЖЕ КУСКА, а не отдельными
+# узлами сцены — страница подменяет мешу геометрию по дальности, и число
+# объектов в кадре остаётся прежним. Прошлая попытка лодов делалась через
+# THREE.LOD, то есть втрое больше узлов, и вышла медленнее (1.86 мс против
+# 1.41): кадр на настольной машине упирается именно в узлы. Здесь этой платы нет.
+LODS = (1, 2, 4)
+
 # Цвета. Земля красится по высоте над урезом, дно под водой — своим цветом:
 # иначе мель читается как суша, и вся береговая черта теряет смысл.
 LAND_RAMP = [(0.0, 0x4d6b4a), (6.0, 0x6f8352), (18.0, 0x8b9159),
@@ -413,25 +422,94 @@ def building_meshes(pack, keep_urban):
 # как (x, z, -y). Здесь это делается один раз, при записи вершин, — тем же
 # отображением, что и в sim/axes.js.
 
-def land_chunk(ix0, iy0, nx, ny):
-    j, i = np.meshgrid(np.arange(ny), np.arange(nx), indexing="ij")
-    x = X0 + (ix0 + i) * STEP
-    y = Y0 + (iy0 + j) * STEP
-    z = HEIGHT[iy0:iy0 + ny, ix0:ix0 + nx]
-    pos = np.stack([x, z, -y], -1).reshape(-1, 3)
+def land_chunk(ix0, iy0, nx, ny, stride=1):
+    """Кусок рельефа. `stride` — прореживание: 2 это вчетверо меньше треугольников.
 
-    wet = SDF[iy0:iy0 + ny, ix0:ix0 + nx] > 128
-    col = land_tint((z - LEVEL).ravel())
-    col[wet.ravel()] = srgb_to_linear(hex_rgb(BED))
+    КРАЙ КУСКА ВСЕГДА ПОЛНОЙ ПЛОТНОСТИ, прореживается только середина. Соседние
+    куски выбирают уровень каждый по своей дальности, и если проредить край,
+    два соседа на разных уровнях разойдутся по стыку — сквозь щель видно небо, и
+    на воде это читается сразу.
 
-    a = (j[:-1, :-1] * nx + i[:-1, :-1]).ravel()
-    b, d, e = a + 1, a + nx, a + nx + 1
-    # Намотка против часовой при взгляде сверху. Проверять это надо на бумаге:
-    # «очевидный» порядок обхода даёт нормали вниз, вся суша уходит в отбраковку
-    # задних граней, и экран показывает пустую воду, а не вывернутый рельеф.
-    idx = np.stack([a, b, d, b, e, d], -1).ravel().astype(np.uint32)
-    return pos.astype(np.float32), col.astype(np.float32), idx
+    Обычное лекарство от этого — юбка, вертикальная стенка по периметру. Здесь
+    она была сделана и выброшена: глубина юбки обязана покрывать то, на сколько
+    прореженная поверхность отходит от полной, а на здешнем рельефе с перепадом
+    в полтораста метров это десятки метров. Стенка такой высоты стоит на границе
+    куска поперёк реки и загораживает пол-экрана. Проверено взглядом: при
+    насильном уровне 2 (`sv20lod(2)`) кадр закрывало бежевой стеной целиком.
 
+    Раз край общий и точный, щели нет ни при каких сочетаниях уровней, и никакой
+    юбки не нужно. Платится за это переходной полосой треугольников вдоль края:
+    ячейка на границе разбивается веером от своего внутреннего угла на мелкий
+    край. Считается это по ячейкам, а не сеткой, — их немного, а ошибиться в
+    намотке проще, чем сэкономить.
+    """
+    if stride <= 1:
+        j, i = np.meshgrid(np.arange(ny), np.arange(nx), indexing="ij")
+        x = X0 + (ix0 + i) * STEP
+        y = Y0 + (iy0 + j) * STEP
+        z = HEIGHT[iy0:iy0 + ny, ix0:ix0 + nx]
+        pos = np.stack([x, z, -y], -1).reshape(-1, 3)
+        wet = SDF[iy0:iy0 + ny, ix0:ix0 + nx] > 128
+        col = land_tint((z - LEVEL).ravel())
+        col[wet.ravel()] = srgb_to_linear(hex_rgb(BED))
+        a = (j[:-1, :-1] * nx + i[:-1, :-1]).ravel()
+        b, d, e = a + 1, a + nx, a + nx + 1
+        # Намотка против часовой при взгляде сверху. Проверять это надо на
+        # бумаге: «очевидный» порядок обхода даёт нормали вниз, вся суша уходит в
+        # отбраковку задних граней, и экран показывает пустую воду.
+        idx = np.stack([a, b, d, b, e, d], -1).ravel().astype(np.uint32)
+        return pos.astype(np.float32), col.astype(np.float32), idx
+
+    z_all = HEIGHT[iy0:iy0 + ny, ix0:ix0 + nx]
+    wet_all = SDF[iy0:iy0 + ny, ix0:ix0 + nx] > 128
+
+    ii = list(range(0, nx - 1, stride)) + [nx - 1]
+    jj = list(range(0, ny - 1, stride)) + [ny - 1]
+
+    vid = {}
+    pos, col = [], []
+
+    def vert(i, j):
+        k = vid.get((i, j))
+        if k is not None:
+            return k
+        k = len(pos)
+        vid[(i, j)] = k
+        z = float(z_all[j, i])
+        pos.append((X0 + (ix0 + i) * STEP, z, -(Y0 + (iy0 + j) * STEP)))
+        col.append(srgb_to_linear(hex_rgb(BED)) if wet_all[j, i]
+                   else land_tint(np.array([z - LEVEL]))[0])
+        return k
+
+    def edge(i0, j0, i1, j1, fine):
+        """Точки ребра от (i0,j0) до (i1,j1) БЕЗ последней; fine — дробить ли."""
+        if not fine:
+            return [(i0, j0)]
+        n = max(abs(i1 - i0), abs(j1 - j0))
+        si = (i1 - i0) // n if i1 != i0 else 0
+        sj = (j1 - j0) // n if j1 != j0 else 0
+        return [(i0 + si * t, j0 + sj * t) for t in range(n)]
+
+    idx = []
+    for l in range(len(jj) - 1):
+        for k in range(len(ii) - 1):
+            i0, i1 = ii[k], ii[k + 1]
+            j0, j1 = jj[l], jj[l + 1]
+            # Дробится только то ребро, что лежит на кромке куска.
+            ring = (edge(i0, j0, i1, j0, j0 == 0)
+                    + edge(i1, j0, i1, j1, i1 == nx - 1)
+                    + edge(i1, j1, i0, j1, j1 == ny - 1)
+                    + edge(i0, j1, i0, j0, i0 == 0))
+            v = [vert(i, j) for i, j in ring]
+            # Веер от первой вершины. Ячейка в плане прямоугольная, значит
+            # выпуклая, и веер из любой её вершины покрывает её целиком.
+            for t in range(1, len(v) - 1):
+                idx += [v[0], v[t], v[t + 1]]
+
+    pos = np.array(pos, np.float32)
+    col = np.array(col, np.float32)
+    idx = np.array(idx, np.uint32)
+    return pos, col, idx
 
 
 def cover_chunk(ix0, iy0, nx, ny, mask):
@@ -537,6 +615,10 @@ def main():
     ap.add_argument("--no-cull", action="store_true",
                     help="оставить весь покров (для сравнения)")
     ap.add_argument("--no-draco", action="store_true")
+    ap.add_argument("--out", default=None,
+                    help="куда писать; по умолчанию assets/terrain.glb. Нужно, "
+                         "чтобы держать рядом вариант с другим куском и сравнивать "
+                         "их на телефоне одной и той же сборкой страницы")
     args = ap.parse_args()
 
     if not os.path.exists(PACK):
@@ -627,28 +709,37 @@ def main():
               % (n, ", ".join("%s %d (%.0f %%)" % (k, v, 100 * v / max(n, 1))
                               for k, v in src.items())))
 
-    tris = {"земля": 0, "лес": 0, "застройка": 0}
+    tris = {"земля": 0, "лес": 0, "застройка": 0, "лоды": 0}
     for iy0 in range(0, NY - 1, CHUNK):
         for ix0 in range(0, NX - 1, CHUNK):
             nx = min(CHUNK + 1, NX - ix0)
             ny = min(CHUNK + 1, NY - iy0)
             if nx < 2 or ny < 2:
                 continue
-            pos, col, idx = land_chunk(ix0, iy0, nx, ny)
-            tris["земля"] += len(idx) // 3
             # ЛЕС ЕДЕТ В ТОТ ЖЕ БУФЕР, ЧТО И ЗЕМЛЯ. Кадр упирается в число
             # объектов, а не в геометрию (см. заголовок), — значит каждый
             # сэкономленный узел дороже сэкономленного треугольника. Материал у
             # них теперь общий: цвет леса кладётся в вершины, как и цвет земли.
-            got = cover_chunk(ix0, iy0, nx, ny, keep & (cls == 1))
-            if got is not None:
-                tris["лес"] += len(got[1]) // 3
-                idx = np.concatenate([idx, got[1] + len(pos)])
-                pos = np.concatenate([pos, got[0]])
-                col = np.concatenate([
-                    col, np.repeat(srgb_to_linear(hex_rgb(COVER_COLOUR[1]))[None],
-                                   len(got[0]), 0).astype(np.float32)])
-            add_mesh("land_%d_%d" % (ix0, iy0), pos, idx, 0, col)
+            cover = cover_chunk(ix0, iy0, nx, ny, keep & (cls == 1))
+            # Уровни детализации ОДНОГО КУСКА, каждый отдельной сеткой. Лес во
+            # всех одинаков: он и есть силуэт дальнего берега, прореживать его
+            # значит стирать опушку, а треугольников в нём десятая часть.
+            for lod, stride in enumerate(LODS):
+                pos, col, idx = land_chunk(ix0, iy0, nx, ny, stride)
+                if lod == 0:
+                    tris["земля"] += len(idx) // 3
+                if cover is not None:
+                    if lod == 0:
+                        tris["лес"] += len(cover[1]) // 3
+                    idx = np.concatenate([idx, cover[1] + len(pos)])
+                    pos = np.concatenate([pos, cover[0]])
+                    col = np.concatenate([
+                        col, np.repeat(srgb_to_linear(hex_rgb(COVER_COLOUR[1]))[None],
+                                       len(cover[0]), 0).astype(np.float32)])
+                name = "land_%d_%d" % (ix0, iy0) + ("" if lod == 0 else "_l%d" % lod)
+                n = add_mesh(name, pos, idx, 0, col)
+                if lod:
+                    tris["лоды"] += n
             # Застройка своим узлом: у неё свой цвет и своя геометрия.
             if houses is not None:
                 got = houses.get((ix0, iy0))
@@ -683,8 +774,11 @@ def main():
     glb += struct.pack("<II", len(js), 0x4E4F534A) + js
     glb += struct.pack("<II", len(blob), 0x004E4942) + blob
 
-    os.makedirs(os.path.dirname(DST), exist_ok=True)
-    tmp = DST + ".tmp"
+    dst = args.out or DST
+    if not os.path.isabs(dst):
+        dst = os.path.join(ROOT, dst)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    tmp = dst + ".tmp"
     open(tmp, "wb").write(glb)
     print("кусков %d, треугольников %s — %.1f МБ без Draco"
           % (len(nodes),
@@ -692,25 +786,25 @@ def main():
              len(glb) / 1048576))
 
     if args.no_draco:
-        os.replace(tmp, DST)
+        os.replace(tmp, dst)
         return
     # Draco — единственное, чего нет под рукой в Python. Инструмент официальный и
     # зовётся через npx: в репозитории его нет и ставить заранее не нужно.
-    cmd = ["npx", "--yes", "@gltf-transform/cli@4", "draco", tmp, DST]
+    cmd = ["npx", "--yes", "@gltf-transform/cli@4", "draco", tmp, dst]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     except FileNotFoundError:
-        os.replace(tmp, DST)
+        os.replace(tmp, dst)
         print("npx не найден — оставлено без Draco", file=sys.stderr)
         return
     if r.returncode != 0:
-        os.replace(tmp, DST)
+        os.replace(tmp, dst)
         print("gltf-transform не отработал, оставлено без Draco:\n"
               + (r.stderr or r.stdout)[-800:], file=sys.stderr)
         return
     os.remove(tmp)
-    print("%s — %.1f МБ" % (os.path.relpath(DST, ROOT),
-                            os.path.getsize(DST) / 1048576))
+    print("%s — %.1f МБ" % (os.path.relpath(dst, ROOT),
+                            os.path.getsize(dst) / 1048576))
 
 
 if __name__ == "__main__":

@@ -316,6 +316,8 @@ async function benchScene() {
       for (const p of BENCH_PARTS) await benchPartBlock(p[1]);
     for (let r = 0; r < rounds; r++) {
       if (out) out.textContent = 'круг ' + (r + 1) + '/' + rounds + '…';
+      benchNote('Разбираю кадр по частям: круг ' + (r + 1) + ' из ' + rounds +
+                '\nНе трогать, около двух минут');
       for (let i = 0; i < BENCH_PARTS.length; i++)
         ms[i].push(await benchPartBlock(BENCH_PARTS[i][1]));
     }
@@ -340,6 +342,8 @@ async function benchScene() {
       случай: benchFrozen() ? BENCH_CASES[BENCH_N].name : 'живая сцена',
       осушение: benchDrained,
     });
+    benchNote('Готово: ' + base.toFixed(2) + ' мс на кадр, таблица отправлена.\n' +
+              'Можно уходить со страницы.');
   } finally {
     benchPartsRestore();
     benchBusy = false;
@@ -401,11 +405,33 @@ async function benchRun() {
   }
 }
 
+// Надпись поверх кадра. На телефоне ни консоли, ни отладочной панели под рукой
+// нет, а замер идёт две минуты: без надписи непонятно ни что он начался, ни
+// когда можно уходить со страницы. Оттого же и заводится она на лету, а не в
+// разметке: нужна она только тут.
+function benchNote(text) {
+  let el = document.getElementById('benchnote');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'benchnote';
+    el.style.cssText = 'position:fixed;left:50%;top:12px;transform:translateX(-50%);' +
+      'z-index:99;background:rgba(0,0,0,.78);color:#fff;padding:8px 14px;border-radius:8px;' +
+      'font:13px/1.4 system-ui,sans-serif;text-align:center;pointer-events:none;max-width:90vw;' +
+      'white-space:pre-line';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+}
+
 {
   const b = document.getElementById('bench');
   if (b) b.addEventListener('click', benchRun);
   const p = document.getElementById('benchparts');
   if (p) p.addEventListener('click', benchScene);
+  // Запуск АДРЕСОМ: `?benchparts`. Заведено после того, как замер с телефона
+  // не состоялся — кнопка живёт в отладочной панели, а на экране в 414 точек
+  // до неё не дотянуться. Открыл ссылку, подождал, ушёл со страницы.
+  if (location.search.includes('benchparts')) setTimeout(benchScene, 3000);
   if (benchFrozen()) {
     const c = BENCH_CASES[BENCH_N];
     console.log('скамья: случай ' + BENCH_N + ' «' + c.name + '», ветер ' +

@@ -109,6 +109,23 @@ function perfSend(final) {
     .finally(() => { perfSending = false; });
 }
 
+// Таблица со скамьи уходит той же дорогой, отдельным отсчётом с пометкой.
+//
+// Заведено ради телефона. Разобрать кадр по частям на нём можно — кнопка та же,
+// — а вот прочитать вывод консоли уже нельзя, и переписывать десять строк с
+// экрана от руки бессмысленно. Так таблица оказывается в той же ленте, что и
+// профиль сессии, и читается тем же `scripts/perf_report.py`.
+function perfLogBench(name, rows, extra) {
+  if (!perfLogOn) return;
+  const rec = { скамья: name, строки: rows };
+  if (extra) for (const k in extra) rec[k] = extra[k];
+  fetch('/api/perf', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session: perfSession, head: perfHead(), samples: [rec] }),
+  }).catch(() => { /* нет сервера — нет и отправки */ });
+}
+
 // Зовётся из кадрового цикла. Сама решает, пора ли снимать и пора ли слать.
 function perfLogTick() {
   if (!perfLogOn) return;

@@ -159,6 +159,16 @@ async function benchDrain() {
   if (benchDrained) await q.onSubmittedWorkDone();
 }
 
+// Метки времени, которые собирает прибор кадра, копятся на каждый render, а
+// разбирает их кадровый цикл — на замере он остановлен, и пул меток
+// переполняется. Разбор идёт ВНЕ замера: он сам по себе ждёт видеокарту, и
+// внутри замера мерился бы вместе с кадром.
+async function benchResolve() {
+  if (renderer.trackTimestamp && renderer.resolveTimestampsAsync) {
+    try { await renderer.resolveTimestampsAsync('render'); } catch (e) { /* прибор не обязателен */ }
+  }
+}
+
 // Один блок кадров в выбранном режиме. Возвращает время на кадр.
 async function benchBlock(mode) {
   seaRefPlanar.value = mode[1];
@@ -166,7 +176,9 @@ async function benchBlock(mode) {
   const t0 = performance.now();
   for (let i = 0; i < BENCH_BLOCK; i++) renderer.render(scene, camera);
   await benchDrain();
-  return (performance.now() - t0) / BENCH_BLOCK;
+  const dt = (performance.now() - t0) / BENCH_BLOCK;
+  await benchResolve();
+  return dt;
 }
 
 // Число вызовов отрисовки за кадр — свидетель того, что проход вообще был. Без
@@ -181,6 +193,157 @@ function benchDraws() {
   const d0 = renderer.info.render.drawCalls;
   renderer.render(scene, camera);
   return renderer.info.render.drawCalls - d0;
+}
+
+// --- из чего складывается кадр ------------------------------------------------
+//
+// Второй замер на той же скамье и тем же способом: сцена заморожена, кадр
+// рисуется много раз подряд вне развёртки, очередь осушается, случаи чередуются
+// кругами. Меряется не «сколько стоит вода», а СКОЛЬКО СЭКОНОМИТ ЕЁ СНЯТИЕ —
+// это разные числа, и второе честнее: кусок, снятый из кадра, освобождает не
+// только свою работу, но и то, что за ним пряталось.
+//
+// Отсюда и порядок в таблице: доля, которую вернёт каждое снятие. Сумма долей
+// не обязана давать сто процентов, и это не ошибка замера, а свойство глубины:
+// вода, снятая целиком, открывает берег, который под ней не рисовался.
+const BENCH_PARTS = [
+  ['как есть', () => {}],
+  // Второй свидетель, ранним местом в списке. Первый (он в конце) показал, что
+  // одинаковый кадр меряется на 10% дороже, если стоит последним, — и показал
+  // это дважды подряд, то есть это не шум, а зависимость от места. Пара
+  // свидетелей по краям очерчивает эту зависимость и служит меркой: разница
+  // между строками имеет смысл только если она больше, чем расхождение между
+  // ними.
+  ['как есть (свидетель 2)', () => {}],
+  ['без зеркала', () => { seaRefPlanar.value = 0; }],
+  ['без теней', () => { sun.castShadow = false; }],
+  ['без воды', () => { sea.visible = false; }],
+  // Вода И лодка разом — проверка на СКЛАДЫВАЕМОСТЬ. Заводилась под догадку,
+  // что снятие лодки открывает дорогую воду за ней и потому не экономит; догадка
+  // не подтвердилась, а строка осталась полезной. Лодка стоит 0.35 мс с водой
+  // позади и 0.31 мс без воды, а снятия складываются: 0.85 + 0.35 ≈ 1.04. Значит
+  // за лодкой ничего дорогого не прячется и вычитать строки друг из друга можно.
+  ['без воды и лодки', () => { sea.visible = false; boatGroup.visible = false; }],
+  ['без лодки и парусов', () => { boatGroup.visible = false; }],
+  ['без берега', () => { if (terrainScene) terrainScene.visible = false; }],
+  // Дальность: туман к носу и ближняя дальняя плоскость. Геометрию это не
+  // снимает, но отсекает всё, что дальше, — то есть отвечает ровно на вопрос
+  // «а если рисовать ближе».
+  ['дальность 300 м', () => {
+    if (scene.fog) { scene.fog.near = 60; scene.fog.far = 300; }
+    camera.far = 320; camera.updateProjectionMatrix();
+  }],
+  // СВИДЕТЕЛЬ. Тот же самый кадр, что и в первой строке, замеренный последним.
+  // Он ничего не говорит о сцене и нужен целиком про замер: две одинаковые
+  // строки обязаны сойтись. Разойдутся — значит числа в таблице определяются
+  // местом в списке, а не тем, что из кадра сняли, и читать её нельзя.
+  ['как есть (свидетель)', () => {}],
+];
+
+function benchPartsRestore() {
+  seaRefPlanar.value = 1;
+  sun.castShadow = true;
+  sea.visible = true;
+  boatGroup.visible = true;
+  if (terrainScene) terrainScene.visible = true;
+  if (scene.fog) { scene.fog.near = FAR_WATER ? 900 : 110; scene.fog.far = FAR_WATER ? 14000 : 420; }
+  camera.far = FAR_WATER ? 20000 : 2000; camera.updateProjectionMatrix();
+}
+
+// Прогрев ВНУТРИ блока, и без него замер врёт в разы.
+//
+// Отражения переключались числом в uniform — сцена при этом не менялась, и
+// прогрев нужен был только на разгон видеокарты. Здесь снимаются целые куски:
+// спрятал воду, погасил тень — и три.js пересобирает конвейеры и наборы
+// привязок под новый состав кадра. Первый же замер это и показал: «без теней»
+// вышло 74.9 мс против 3.6 «как есть», то есть в двадцать раз ДОРОЖЕ, а «без
+// воды» — 24.9. Ни то ни другое не цена куска, это цена пересборки.
+//
+// Поэтому после каждого переключения кадр рисуется несколько раз впустую, и
+// только потом идёт замер.
+const BENCH_SETTLE = 8;   // кадров на пересборку конвейеров
+
+// Разбег ОТ ОБЩЕГО СОСТОЯНИЯ. Прогрева нового состояния мало: за ним тянется
+// след предыдущего. Два свидетеля — один и тот же кадр в начале списка и в
+// конце — разошлись на 0.5 мс (3.07 против 3.68), и лесенка вниз после дорогих
+// строк была видна прямо в таблице: 4.89, 4.70, 4.08, 3.68, 3.25, 3.07.
+//
+// Круговой сдвиг строк это НЕ лечит, и попытка записана как отрицательный
+// результат: по кольцу у каждой строки один и тот же сосед впереди, сдвиг
+// меняет только с какой начинать. Расхождение свидетелей после сдвига осталось
+// прежним — 3.17 против 3.63.
+//
+// Лечится тем, что история делается ОДИНАКОВОЙ: перед каждым замером
+// прогоняется базовый кадр, и только с него — переключение и замер. Тогда любая
+// строка стартует из одного и того же состояния видеокарты, независимо от того,
+// что мерялось до неё.
+const BENCH_ZERO = 8;     // кадров базового состояния перед каждым замером
+
+async function benchPartBlock(apply) {
+  benchPartsRestore();
+  for (let i = 0; i < BENCH_ZERO; i++) renderer.render(scene, camera);
+  apply();
+  for (let i = 0; i < BENCH_SETTLE; i++) renderer.render(scene, camera);
+  await benchDrain();
+  const t0 = performance.now();
+  for (let i = 0; i < BENCH_BLOCK; i++) renderer.render(scene, camera);
+  await benchDrain();
+  const dt = (performance.now() - t0) / BENCH_BLOCK;
+  await benchResolve();
+  return dt;
+}
+
+// Медиана по кругам, а не среднее. Один заглохший круг — чужая работа на
+// машине, сборка мусора, промах кэша конвейеров — стоит вдесятеро дороже
+// обычного, и в среднем он перекрашивает всю строку. Свидетель это и поймал:
+// на большом холсте две одинаковые строки разошлись на 12%, при том что каждая
+// сама по себе повторялась от запуска к запуску с точностью до сотых.
+function benchMedian(a) {
+  const b = a.slice().sort((x, y) => x - y);
+  return b.length % 2 ? b[(b.length - 1) / 2] : (b[b.length / 2 - 1] + b[b.length / 2]) / 2;
+}
+
+const BENCH_PART_ROUNDS = 0;    // 0 — столько кругов, сколько строк
+
+async function benchScene() {
+  if (benchBusy) return;
+  benchBusy = true;
+  const out = document.getElementById('v-bench');
+  try {
+    const ms = BENCH_PARTS.map(() => []);
+    const rounds = BENCH_PART_ROUNDS || BENCH_PARTS.length;
+    for (let w = 0; w < BENCH_WARM; w++)
+      for (const p of BENCH_PARTS) await benchPartBlock(p[1]);
+    for (let r = 0; r < rounds; r++) {
+      if (out) out.textContent = 'круг ' + (r + 1) + '/' + rounds + '…';
+      for (let i = 0; i < BENCH_PARTS.length; i++)
+        ms[i].push(await benchPartBlock(BENCH_PARTS[i][1]));
+    }
+    const base = benchMedian(ms[0]);
+    const rows = BENCH_PARTS.map((p, i) => [p[0], benchMedian(ms[i])]);
+    if (out) out.textContent = base.toFixed(2) + ' мс' +
+      (benchDrained ? '' : ' — БЕЗ ОСУШЕНИЯ');
+    console.log('из чего кадр (случай: %s, осушение: %s):',
+                benchFrozen() ? BENCH_CASES[BENCH_N].name : 'живая сцена', benchDrained);
+    for (const [name, t] of rows) {
+      const save = base - t;
+      console.log('  %s%s мс%s', name.padEnd(22), t.toFixed(2),
+                  name === 'как есть' ? '' :
+                  '   снятие вернёт ' + save.toFixed(2) + ' мс (' +
+                  (100 * save / base).toFixed(0) + '%)');
+    }
+    if (!benchDrained) {
+      console.warn('до очереди видеокарты не достучались: числа выше — это ' +
+                   'скорость записи команд, а не цена кадра.');
+    }
+    perfLogBench('из чего кадр', rows.map(r => [r[0], +r[1].toFixed(3)]), {
+      случай: benchFrozen() ? BENCH_CASES[BENCH_N].name : 'живая сцена',
+      осушение: benchDrained,
+    });
+  } finally {
+    benchPartsRestore();
+    benchBusy = false;
+  }
 }
 
 let benchBusy = false;
@@ -241,6 +404,8 @@ async function benchRun() {
 {
   const b = document.getElementById('bench');
   if (b) b.addEventListener('click', benchRun);
+  const p = document.getElementById('benchparts');
+  if (p) p.addEventListener('click', benchScene);
   if (benchFrozen()) {
     const c = BENCH_CASES[BENCH_N];
     console.log('скамья: случай ' + BENCH_N + ' «' + c.name + '», ветер ' +

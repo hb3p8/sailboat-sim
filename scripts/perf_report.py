@@ -47,7 +47,7 @@ def pct(a, p):
 
 
 def load(path):
-    head, rows = None, []
+    head, rows, benches = None, [], []
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -59,9 +59,26 @@ def load(path):
                 continue
             if "head" in o:
                 head = o["head"]
+            elif "скамья" in o:
+                # Замер скамьи — не отсчёт хода: у него нет ни времени, ни к/с, и
+                # в окна с медианами он попадать не должен.
+                benches.append(o)
             else:
                 rows.append(o)
-    return head, rows
+    return head, rows, benches
+
+
+def print_bench(b):
+    rows = b.get("строки") or []
+    base = rows[0][1] if rows else 0
+    print("\n%s (случай «%s»%s):\n"
+          % (b.get("скамья", "скамья"), b.get("случай", "?"),
+             "" if b.get("осушение", True) else ", БЕЗ ОСУШЕНИЯ"))
+    for name, t in rows:
+        save = base - t
+        tail = "" if not base or name == rows[0][0] else \
+            "   снятие вернёт %5.2f мс (%3.0f%%)" % (save, 100 * save / base)
+        print("  %-24s %6.2f мс%s" % (name, t, tail))
 
 
 def main():
@@ -79,8 +96,8 @@ def main():
                 print("   " + os.path.relpath(f, ROOT))
             print()
 
-    head, rows = load(path)
-    if not rows:
+    head, rows, benches = load(path)
+    if not rows and not benches:
         raise SystemExit("в ленте нет отсчётов: " + path)
 
     print("сессия %s — %d отсчётов" % (os.path.relpath(path, ROOT), len(rows)))
@@ -94,6 +111,11 @@ def main():
                  head.get("dpr", "?"), "да" if head.get("пелена") else "нет"))
         print("  " + (head.get("агент") or "")[:96])
     print()
+
+    if not rows:
+        for b in benches:
+            print_bench(b)
+        return
 
     t0 = rows[0].get("t", 0)
     print("Ход сессии, медиана в окне по %d с:\n" % WINDOW)
@@ -127,6 +149,9 @@ def main():
         print("  %5.0f с   кадр %6.1f мс   физ %5.1f (шагов %.1f)   ГП %6.1f + счёт %5.1f"
               % (r.get("t", 0) - t0, r.get("кадр", 0), r.get("физ", 0),
                  r.get("шагов", 0), r.get("гп", 0), r.get("счёт", 0)))
+
+    for b in benches:
+        print_bench(b)
 
 
 if __name__ == "__main__":

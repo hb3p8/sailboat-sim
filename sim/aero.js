@@ -38,11 +38,36 @@ export function jibSheetOf(o) {
   return o.jibSheet != null ? o.jibSheet : o.sheet + (o.jibTrim || 0);
 }
 
-// Шкот генакера. Своя ручка, а не поправка к гроту: у летящего паруса шкот и
-// есть его настройка, и связывать его с гротом нечем.
-export function gennakerSheetOf(o) {
-  return o.genSheet != null ? o.genSheet : 40 * Math.PI / 180;
+// Шкот генакера — ДЛИНА, а не угол, и это не мелочь записи.
+//
+// У грота и стакселя шкот задаётся углом потому, что там есть чем этот угол
+// держать: гик ходит по погону, шкотовый угол стакселя — по каретке. У генакера
+// держать нечем: он летит, и его шкотовый угол ходит по ДУГЕ вокруг оси
+// галс—фал. Выбрал шкот — угол пришёл к диаметральной, потравил — ушёл наружу и
+// вперёд. Настройка тут длина снасти, а угол выноса — её следствие.
+//
+// Решается замкнуто. Шкотовый угол на дуге радиуса SFL вокруг оси, обух в
+// (x, y, z); подставив и раскрыв квадраты, получаем
+//
+//     A·cos θ + y·sin θ = (A² + f² + y² + dz² − L²) / (2f),
+//
+// а левая часть это R·cos(θ − φ) при R = hypot(A, y), φ = atan2(y, A). Отсюда θ
+// одним арккосинусом, без поиска и без итераций.
+export function gennakerSetOf(o, gen) {
+  if (!gen || !gen.sheet_lead_m) return o.genSheet != null ? o.genSheet : 40 * Math.PI / 180;
+  const lead = gen.sheet_lead_m, f = gen.foot_m;
+  const L = o.genSheetLen != null ? o.genSheetLen
+          : (gen.sheet_min_m + gen.sheet_max_m) / 2;
+  const A = gen.tack[0] - lead[0], y = lead[1], dz = gen.tack[1] - lead[2];
+  const R = Math.hypot(A, y), phi = Math.atan2(y, A);
+  const c = (A * A + f * f + y * y + dz * dz - L * L) / (2 * f * R);
+  // За пределами досягаемости шкота парус упирается в свои же концы: короче
+  // прямой не выбрать, длиннее — не вытравить.
+  return phi + Math.acos(Math.max(-1, Math.min(1, c)));
 }
+
+// Тот же угол наружу для отрисовки и приборов.
+export function gennakerSheetOf(o, gen) { return gennakerSetOf(o, gen); }
 
 // Полосок на парус. Шесть хватает: профиль ветра по высоте гладкий, и на
 // восьми ответ отличается меньше чем на процент, а считать нужно каждый кадр.
@@ -556,7 +581,10 @@ export class Rig {
     // minSet — наоборот, есть: острее галсового угла парус не выбрать, он упрётся
     // сам в себя, и это тот же довод, что у стакселя, только плечо другое.
     if (this.gennakerUp && rig.gennaker && rig.gennaker.luff) {
-      sails.push(Object.assign({ maxSheet: 110 * DEG, minSet: 12 * DEG,
+      // maxSheet здесь — не настройка, а тот же предел геометрии, из которого
+      // считается длина шкота: дальше ста десяти градусов парус не несёт.
+      // minSet не нужен вовсе: короче прямой шкот не выбирается сам собой.
+      sails.push(Object.assign({ maxSheet: 110 * DEG, minSet: 0,
                                  gennaker: true,
                                  design: DESIGN_CAMBER.gennaker }, rig.gennaker));
     }
@@ -736,7 +764,7 @@ export class Rig {
     // Генакер: свой шкот, а твист свой лишь настолько, насколько провисает его
     // же шкот. Отдельной ручки твиста у него нет и быть не должно — задняя
     // шкаторина у летящего паруса раскрывается сама, шкотом и галсовой оттяжкой.
-    const genSheet = gennakerSheetOf(b.o);
+    const genSheet = gennakerSetOf(b.o, this.p.rig.gennaker);
     sheetOf[0] = b.o.sheet; sheetOf[1] = jibSheetOf(b.o); sheetOf[2] = genSheet;
     twistOf[0] = twist; twistOf[1] = twistJib;
     twistOf[2] = b.o.twist + FREE_TWIST * slackOfSheet(genSheet);

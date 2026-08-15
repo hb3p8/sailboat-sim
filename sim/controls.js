@@ -114,7 +114,7 @@ function readControls(dt) {
       // убран, и поднять его нечем, пока не убран генакер.
       ui.jibup.disabled = !!o.gennakerUp;
       if (o.gennakerUp) ui.jibup.checked = false;
-      o.genSheet = parseFloat(ui.gensheet.value) * D;
+      o.genSheetLen = parseFloat(ui.gensheet.value);
     }
     o.jibUp = ui.jibup.checked;
     // Переключатель физики паруса живёт не в состоянии лодки, а рядом с

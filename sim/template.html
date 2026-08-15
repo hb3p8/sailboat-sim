@@ -446,8 +446,10 @@
   <label><span class="cap">
       <span><input id="genup" type="checkbox"> Поднят · шкот</span>
       <span id="v-gensheet"></span></span>
-    <input id="gensheet" type="range" min="10" max="110" step="1" value="40"></label>
-  <div id="gennote">Подъём убирает стаксель — так его и носят. Клавиша <b>N</b>.</div>
+    <input id="gensheet" type="range" min="3" max="7" step="0.1" value="4.5"></label>
+  <div id="gennote">Шкот задаётся ДЛИНОЙ: шкотовый угол ходит по дуге, и парус
+    вытравливается по потоку, пока брас его не остановит. Подъём убирает
+    стаксель — так его и носят. Клавиша <b>N</b>.</div>
 
   <h2>Модель</h2>
   <label class="flat"><span class="cap">
@@ -617,6 +619,7 @@ const BUILD = /*__BUILD__*/ null;
     twist: v => (+v).toFixed(0) + '°',
     mainsheet: v => (+v).toFixed(0) + '°',
     jibsheet: v => (+v).toFixed(0) + '°',
+    gensheet: v => (+v).toFixed(1) + ' м',
     jibtwist: v => (+v).toFixed(0) + '°',
     jibdraft: v => (+v).toFixed(0) + '%',
     draft: v => (+v).toFixed(0) + '%',

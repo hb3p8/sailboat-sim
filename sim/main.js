@@ -1401,7 +1401,7 @@ function shapeSails(side, dt) {
   // Та же формула, что в physics.sailForces: парус держится шкотом до своего
   // предела, дальше сваливается по потоку.
   const setOf = sail => {
-    const own = sail.gennaker ? gennakerSheetOf(boat.o)
+    const own = sail.gennaker ? gennakerSetOf(boat.o, rig.gennaker)
               : sail.mast ? boat.o.sheet : jibSheetOf(boat.o);
     const trim = Math.max(sail.minSet || 0, own);
     const held = Math.min(trim, awa);
@@ -2418,7 +2418,7 @@ function syncPanelFromBoat() {
   set('mainup', o.mainUp !== false);
   set('jibup', o.jibUp !== false);
   set('genup', !!o.gennakerUp);
-  set('gensheet', Math.round(gennakerSheetOf(o) / D));
+  set('gensheet', o.genSheetLen != null ? o.genSheetLen : 4.5);
   set('oldsail', false);
   set('fetch', o.fetch / 1000);
   set('fetchover', o.fetchOverride);

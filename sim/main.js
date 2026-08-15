@@ -1217,7 +1217,10 @@ function sailMesh(colour) {
 }
 const mainSail = sailMesh(0xf7f9fb);
 const jibSail = sailMesh(0xeef2f6);
-boatGroup.add(mainSail, jibSail);
+// Генакер — своим цветом. Не ради красоты: у него и пузо втрое, и стоит он
+// впереди, и путать его с гротом на картинке не должно быть возможности.
+const genSail = sailMesh(0xffd9a8);
+boatGroup.add(mainSail, jibSail, genSail);
 
 // Колдунчики.
 //
@@ -1288,11 +1291,13 @@ function telltaleMesh() {
   m.frustumCulled = false;
   return m;
 }
-const telltales = [telltaleMesh(), telltaleMesh()];
-boatGroup.add(telltales[0], telltales[1]);
+// По ленточке на парус, включая генакер: массив на три, а не на два. Раньше их
+// было два, и третий парус ронял отрисовку на чтении `undefined.geometry`.
+const telltales = [telltaleMesh(), telltaleMesh(), telltaleMesh()];
+boatGroup.add(telltales[0], telltales[1], telltales[2]);
 // Борт, на котором стоят колдунчики сейчас. Перекрашиваются они не каждый кадр,
 // а когда парус перешёл: буфер цвета мал, но и трогать его без нужды незачем.
-let tellLee = [0, 0];
+let tellLee = [0, 0, 0];
 
 // Ленточка лёгкая, но не безынерционная: она отзывается за доли секунды, а не
 // мгновенно. Без этого запаздывания колдунчик дёргается на каждом порыве и на
@@ -1396,7 +1401,8 @@ function shapeSails(side, dt) {
   // Та же формула, что в physics.sailForces: парус держится шкотом до своего
   // предела, дальше сваливается по потоку.
   const setOf = sail => {
-    const own = sail.mast ? boat.o.sheet : jibSheetOf(boat.o);
+    const own = sail.gennaker ? gennakerSheetOf(boat.o)
+              : sail.mast ? boat.o.sheet : jibSheetOf(boat.o);
     const trim = Math.max(sail.minSet || 0, own);
     const held = Math.min(trim, awa);
     const over = Math.min(1, Math.max(0, (own - sail.maxSheet) / (25 * D)));
@@ -1427,8 +1433,11 @@ function shapeSails(side, dt) {
   // переставляется каждый кадр — по тому, поставлен он или убран.
   mainSail.visible = !wakeDark && boat.o.mainUp !== false;
   jibSail.visible = !wakeDark && boat.o.jibUp !== false;
+  // Генакера в риге нет вовсе, когда он не поднят: подъём перестраивает риг, а
+  // не гасит флаг (`Boat.setGennaker`). Значит и полотну неоткуда взяться.
+  genSail.visible = !wakeDark && boat.rig.sails.length > 2;
   boat.rig.sails.forEach((sail, k) => {
-    const mesh = k === 0 ? mainSail : jibSail;
+    const mesh = k === 0 ? mainSail : k === 1 ? jibSail : genSail;
     const a = mesh.geometry.attributes.position.array;
     const col = mesh.geometry.attributes.color.array;
     const base = k * 6;
@@ -1444,7 +1453,10 @@ function shapeSails(side, dt) {
       const h = zLo + f * (zHi - zLo);
       const xLuff = luffAt(h), chord = Math.max(0, xLuff - leechAt(h));
       if (k === 0 && r === 0) bmK = chord / rig.boom_m;
-      const sh = setOf(sail) + (sail.mast ? twistMain : twistJib) * Math.pow(f, 1.3);
+      const twistOwn = sail.gennaker
+        ? (boat.rig.twistEffGen != null ? boat.rig.twistEffGen : twistMain)
+        : sail.mast ? twistMain : twistJib;
+      const sh = setOf(sail) + twistOwn * Math.pow(f, 1.3);
       // Пузо берётся у ближайшей по высоте полоски: их шесть на парус, строк
       // сетки одиннадцать.
       const g = strips[base + Math.min(5, Math.round(f * 5))] || {};

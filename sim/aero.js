@@ -740,6 +740,9 @@ export class Rig {
     sheetOf[0] = b.o.sheet; sheetOf[1] = jibSheetOf(b.o); sheetOf[2] = genSheet;
     twistOf[0] = twist; twistOf[1] = twistJib;
     twistOf[2] = b.o.twist + FREE_TWIST * slackOfSheet(genSheet);
+    // Наружу — для отрисовки: нарисованный парус обязан стоять так же, как
+    // посчитанный, иначе картинка врёт ровно там, где на неё и смотрят.
+    this.twistEffGen = twistOf[2];
     let load = 0;
 
     // --- проход первый: геометрия и углы атаки без учёта скоса.

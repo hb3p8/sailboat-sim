@@ -2903,26 +2903,75 @@ const FREE_CAM = 5;
 // ездит под руками. Целится в середину рига, а не в корпус.
 const freeCam = { az: 2.2, el: 0.22, dist: 16, drag: null };
 
+const CAM_NEAR = 3, CAM_FAR = 90;
+const camDist = d => Math.max(CAM_NEAR, Math.min(CAM_FAR, d));
+
+// ЩИПОК ПРИБЛИЖАЕТ КАМЕРУ, а не страницу. На телефоне это единственный способ
+// подойти к лодке: колеса там нет, а из шести видов палец доступен только этому
+// — переключают их клавишей.
+//
+// Пальцы считаются здесь, а не в обработчике касаний, по одной причине: щипок и
+// облёт — один и тот же жест на разном числе пальцев, и разводить их надо в
+// общем месте. Пришёл второй палец — облёт обрывается на полуслове, иначе он
+// продолжит крутить камеру по «средней» точке разъезжающихся пальцев, и лодка
+// улетает за экран прежде, чем успеваешь приблизиться. Ушёл второй — облёт
+// начинается заново от оставшегося, а не от того места, где его бросили: без
+// этого камера прыгает на всю разницу за один кадр.
+const camTouch = new Map();          // указатель -> где он сейчас
+let pinchWas = 0;                    // расстояние между пальцами на прошлом шаге
+
+function pinchSpan() {
+  const p = [...camTouch.values()];
+  return p.length < 2 ? 0 : Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+}
+
 stage.addEventListener('pointerdown', e => {
   if (camMode !== FREE_CAM) return;
+  camTouch.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (camTouch.size >= 2) { freeCam.drag = null; pinchWas = pinchSpan(); return; }
   freeCam.drag = { x: e.clientX, y: e.clientY };
   // Захват указателя не обязателен и на некоторых событиях недоступен —
   // например у синтетических. Без него вращение всё равно работает.
   try { stage.setPointerCapture(e.pointerId); } catch (err) { /* не беда */ }
 });
 stage.addEventListener('pointermove', e => {
+  if (camTouch.has(e.pointerId))
+    camTouch.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (camTouch.size >= 2) {
+    // Отношение, а не разность: раздвинуть пальцы вдвое значит подойти вдвое
+    // ближе и с двух метров, и с двадцати. В разности тот же жест у лодки почти
+    // ничего не менял бы, а издали проносил бы её мимо.
+    const now = pinchSpan();
+    if (pinchWas > 0 && now > 0) freeCam.dist = camDist(freeCam.dist * pinchWas / now);
+    pinchWas = now;
+    return;
+  }
   if (!freeCam.drag) return;
   freeCam.az += (e.clientX - freeCam.drag.x) * 0.008;
   freeCam.el += (e.clientY - freeCam.drag.y) * 0.006;
   freeCam.el = Math.max(-0.5, Math.min(1.4, freeCam.el));
   freeCam.drag = { x: e.clientX, y: e.clientY };
 });
-addEventListener('pointerup', () => { freeCam.drag = null; });
+const camDrop = e => {
+  camTouch.delete(e.pointerId);
+  pinchWas = pinchSpan();
+  // Один палец остался — облёт продолжается им, от его сегодняшнего места.
+  const rest = [...camTouch.values()][0];
+  freeCam.drag = (camTouch.size === 1 && camMode === FREE_CAM)
+    ? { x: rest.x, y: rest.y } : null;
+};
+addEventListener('pointerup', camDrop);
+addEventListener('pointercancel', camDrop);
 stage.addEventListener('wheel', e => {
   if (camMode !== FREE_CAM) return;
   e.preventDefault();
-  freeCam.dist = Math.max(3, Math.min(90, freeCam.dist * Math.exp(e.deltaY * 0.001)));
+  freeCam.dist = camDist(freeCam.dist * Math.exp(e.deltaY * 0.001));
 }, { passive: false });
+// Safari щипок на странице считает своим делом и `user-scalable=no` не слушает
+// с десятого iOS: масштаб приходится отнимать у него отдельным событием. В
+// других браузерах этих событий просто нет, и обработчик ничего не стоит.
+for (const ev of ['gesturestart', 'gesturechange', 'gestureend'])
+  stage.addEventListener(ev, e => e.preventDefault());
 let camMode = FREE_CAM;
 function cycleCam() {
   camMode = (camMode + 1) % CAMS.length;

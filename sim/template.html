@@ -1,5 +1,11 @@
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Масштаб страницы заперт нарочно. Щипок здесь приближает камеру к лодке, и
+     если оставить браузеру его собственное толкование, жест уедет туда: канва
+     растянется пикселями, интерфейс разъедется за края, а лодка останется того
+     же размера. Safari на это указание давно не смотрит — там же щипок отнимают
+     руками, см. sim/main.js. -->
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>SV20 — симулятор управления</title>
 <style>
   :root {
@@ -12,7 +18,9 @@
     margin: 0; overflow: hidden; background: #9fb8cc; color: var(--fg);
     font: 13px/1.45 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
-  #stage { position: fixed; inset: 0; }
+  /* Сцена не отдаёт браузеру ни прокрутку, ни щипок: и то, и другое здесь
+   * значит другое — вращение камеры и приближение. */
+  #stage { position: fixed; inset: 0; touch-action: none; }
   #stage canvas { display: block; }
   #crash {
     position: fixed; inset: 0 0 auto 0; z-index: 9; padding: 10px 14px;
@@ -224,8 +232,10 @@
     border: 1px solid rgba(255, 255, 255, .22);
     box-shadow: 0 1px 6px rgba(0, 8, 18, .45);
   }
+  /* Заливка растёт СВЕРХУ вниз, вслед за ручкой: шкот выбирают вниз, и
+     закрашенным должно быть то, что уже выбрано. */
   .vslider .fill {
-    position: absolute; left: 2px; right: 2px; bottom: 2px;
+    position: absolute; left: 2px; right: 2px; top: 2px;
     border-radius: 11px; background: rgba(120, 175, 255, .40);
   }
   .vslider .knob {

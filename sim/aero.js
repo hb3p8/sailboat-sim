@@ -1720,6 +1720,9 @@ export class Rig {
       this.lqx = new Float64Array(N); this.lqy = new Float64Array(N);
       this.lqz = new Float64Array(N); this.lvx = new Float64Array(N);
       this.lvy = new Float64Array(N); this.lvz = new Float64Array(N);
+      // Наведённое решёткой тоже придерживается между шагами — значит и оно
+      // обязано стареть вместе с узлом, а не оставаться в слоте.
+      w.aged.push(this.lvx, this.lvy, this.lvz);
     }
     // Кого считаем на этом шаге. Выбор делается ЗДЕСЬ и один раз: тем же
     // набором пелена посчитает и своё поле, иначе в скорость узла сложились бы
@@ -1727,6 +1730,13 @@ export class Rig {
     w.slice = Math.max(1, b.o.wakeSlice | 0);
     w.pickSlice();
     lat.packBound(true);
+    if (!this.ltx || this.ltx.length < this.lqx.length) {
+      const N = this.lqx.length;
+      this.ltx = new Float64Array(N); this.lty = new Float64Array(N);
+      this.ltz = new Float64Array(N);
+    }
+    // Плотная раскладка — только вход и выход одного вызова поля; хранится
+    // посчитанное по МЕСТУ УЗЛА (`f * len + i`), см. `FreeWake.selfInduce`.
     if (w.selN < 0) {
       for (let f = 0; f < w.fil; f++) {
         for (let i = 0; i < w.n; i++) {
@@ -1737,18 +1747,19 @@ export class Rig {
           this.lqz[j] = w.z[k];
         }
       }
-      lat.fieldBound(this.lqx, this.lqy, this.lqz, P, this.lvx, this.lvy, this.lvz);
+      lat.fieldBound(this.lqx, this.lqy, this.lqz, P, this.ltx, this.lty, this.ltz);
+      for (let f = 0; f < w.fil; f++) {
+        for (let i = 0; i < w.n; i++) {
+          const k = f * w.len + i, j = f * w.n + i;
+          this.lvx[k] = this.ltx[j]; this.lvy[k] = this.lty[j]; this.lvz[k] = this.ltz[j];
+        }
+      }
     } else {
       // Та же работа, но только по выбранным узлам, и ответ раскладывается по
       // их местам. Непосчитанные держат прошлое значение — в этом вся затея.
       const m = w.selN, sel = w.sel;
-      if (!this.ltx || this.ltx.length < this.lqx.length) {
-        const N = this.lqx.length;
-        this.ltx = new Float64Array(N); this.lty = new Float64Array(N);
-        this.ltz = new Float64Array(N);
-      }
       for (let q = 0; q < m; q++) {
-        const j = sel[q], f = (j / w.n) | 0, k = f * w.len + (j - f * w.n);
+        const k = sel[q];
         const rx = w.x[k] - b.x, ry = w.y[k] - b.y;
         this.lqx[q] = rx * c + ry * sn;
         this.lqy[q] = -rx * sn + ry * c;
@@ -1756,8 +1767,8 @@ export class Rig {
       }
       lat.fieldBound(this.lqx, this.lqy, this.lqz, m, this.ltx, this.lty, this.ltz);
       for (let q = 0; q < m; q++) {
-        const j = sel[q];
-        this.lvx[j] = this.ltx[q]; this.lvy[j] = this.lty[q]; this.lvz[j] = this.ltz[q];
+        const k = sel[q];
+        this.lvx[k] = this.ltx[q]; this.lvy[k] = this.lty[q]; this.lvz[k] = this.ltz[q];
       }
     }
     const vel = (X, Y, Z, out, j) => {

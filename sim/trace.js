@@ -134,12 +134,17 @@ export function wakeSnapshot(boat) {
   for (let i = 0; i < w.len; i++) a[k++] = r4(w.tdx[i]);
   for (let i = 0; i < w.len; i++) a[k++] = r4(w.tdy[i]);
   for (let i = 0; i < w.len; i++) a[k++] = r4(w.tdz[i]);
-  return { fil: w.fil, len: w.len, n: w.n, core: w.core, a };
+  // Деление работы пишется в снимок: воспроизведение обязано идти тем же путём,
+  // каким запись снималась, — делёный и точный расходятся по силам, и молча
+  // подменять один другим значит сверять разные модели.
+  return { fil: w.fil, len: w.len, n: w.n, core: w.core, slice: w.slice, a };
 }
 
 export function wakeRestore(boat, snap) {
   const w = boat.rig && boat.rig.wake;
   if (!w || !snap || snap.fil !== w.fil || snap.len !== w.len) return false;
+  // Старые записи про деление не знают — там оно было точным.
+  if (boat.o) boat.o.wakeSlice = snap.slice != null ? snap.slice : 1;
   const N = w.fil * w.len, a = snap.a;
   let k = 0;
   for (let i = 0; i < N; i++) w.x[i] = a[k++];
@@ -151,6 +156,9 @@ export function wakeRestore(boat, snap) {
   for (let i = 0; i < w.len; i++) w.tdy[i] = a[k++];
   for (let i = 0; i < w.len; i++) w.tdz[i] = a[k++];
   w.n = snap.n;
+  // Придержанные скорости — от прежней жизни пелены, и к восстановленным узлам
+  // они не относятся. Ближайший шаг посчитает всех заново.
+  w.invalidate();
   w.spaceCore(); w.edges(); w.pack(true);
   return true;
 }

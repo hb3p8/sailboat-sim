@@ -3164,10 +3164,33 @@ const perfEl = document.getElementById('perf');
 const gperfEl = document.getElementById('gperf');
 const ms = v => v.toFixed(1);
 
+// Номер сборки на экран. По порядковому номеру коммита, а не по хэшу: с
+// телефона хэши глазом не сравнить, а «r742 против r741» читается сразу — и
+// отвечает ровно на тот вопрос, ради которого спрашивают: свежее ли то, что я
+// вижу, того, что я видел минуту назад. Шестимегабайтную страницу браузер
+// кэширует охотно, и без этого числа «правка не подействовала» и «открыто
+// вчерашнее» неразличимы.
+//
+// Звёздочка — сборка с несохранёнными правками: такой номер ничего не
+// обозначает, и знать об этом надо сразу.
+//
+// Читается лениво, при первом же выводе: `BUILD` вклеивается в общую область
+// вместе с разметкой, и трогать его на верхнем уровне модуля — та самая
+// временная мёртвая зона, на которой страница уже однажды падала целиком.
+let revText = null;
+function rev() {
+  if (revText === null) {
+    revText = (typeof BUILD !== 'undefined' && BUILD && BUILD.rev)
+      ? 'r' + BUILD.rev + (BUILD.dirty ? '*' : '') : 'r?';
+  }
+  return revText;
+}
+
 function updatePerf() {
   const gpu = perf.gpu + perf.gpuCompute;
   if (perfEl) {
     perfEl.textContent =
+      rev() + '\n' +
       'кадр   ' + ms(perf.frame) + ' мс   ' + perf.fps.toFixed(0) + ' к/с\n' +
       'физика ' + ms(perf.phys) + '   шагов ' + perf.steps.toFixed(1) + '\n' +
       'сцена  ' + ms(perf.scene) + '\n' +
@@ -3180,7 +3203,7 @@ function updatePerf() {
     // Двумя строками, а не одной: одна не помещается на телефоне поперёк, а
     // ломать её посередине числа нельзя — читать становится нечего.
     gperfEl.textContent =
-      perf.fps.toFixed(0) + ' к/с · кадр ' + ms(perf.frame) + ' мс\n' +
+      rev() + ' · ' + perf.fps.toFixed(0) + ' к/с · кадр ' + ms(perf.frame) + ' мс\n' +
       'физ ' + ms(perf.phys) + ' · сцена ' + ms(perf.scene) +
       ' · рис ' + ms(perf.draw) + '\n' +
       'ГП ' + ms(perf.gpu) + ' + счёт ' + ms(perf.gpuCompute);
@@ -3241,7 +3264,8 @@ function plural(n, one, few, many) {
 if (typeof BUILD !== 'undefined' && BUILD) {
   const t = BUILD.built.replace('T', ' ').slice(0, 16);
   document.getElementById('stamp').innerHTML =
-    'сборка ' + t + (BUILD.dirty ? ' <em>с правками</em>' : '') + '<br>' +
+    'сборка ' + (BUILD.rev ? 'r' + BUILD.rev + ' · ' : '') + BUILD.commit + ' · ' + t +
+    (BUILD.dirty ? ' <em>с правками</em>' : '') + '<br>' +
     (terrain.ready ? 'акватория ' + TERRAIN_PACK.hash + ', ' : 'бесконечная вода, ') +
     (STARTS.length ? 'разметка: ' + plural(STARTS.length, 'старт', 'старта', 'стартов') +
       ', ' + plural((MARKS && MARKS.buoys) ? MARKS.buoys.length : 0, 'буй', 'буя', 'буёв')

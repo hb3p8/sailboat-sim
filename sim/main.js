@@ -46,9 +46,28 @@ scene.fog = new Fog(SKY, FAR_WATER ? 900 : 110, FAR_WATER ? 14000 : 420);
 const CAM_FOV = 52;
 const camera = new PerspectiveCamera(CAM_FOV, 1, FAR_WATER ? 0.5 : 0.15,
                                      FAR_WATER ? 20000 : 2000);
-// WebGPU. Если его нет, рендерер сам откатывается на WebGL2 — код при этом
-// один и тот же, TSL компилируется и туда и туда.
+// WebGPU. Если его нет, рендерер сам откатывается на WebGL2 — код при этом один
+// и тот же, TSL компилируется и туда и туда. Но не весь: волна считается
+// вычислительным шейдером с рабочей памятью группы, а этого в WebGL2 нет
+// вовсе, и падает там не вода, а вся страница.
+//
+// Сообщение при этом получается про `getScopedArray` — то есть про следствие,
+// на четыре слоя ниже причины. Причин же всего две, и обе снаружи страницы:
+// адрес не защищённый или браузер не умеет. Разбирается это здесь, чтобы
+// человек с телефона читал, что ему делать, а не имя метода в сборщике шейдеров.
 const renderer = new WebGPURenderer({ antialias: true });
+
+function gpuTrouble() {
+  if (navigator.gpu) return null;
+  if (!window.isSecureContext) {
+    return 'WebGPU не выдаётся по этому адресу: браузер даёт его только в ' +
+      'защищённом контексте — по https или на localhost. Откройте страницу с ' +
+      'сервера, поднятого с --lan (он включает https сам), либо по localhost.';
+  }
+  return 'Этот браузер не умеет WebGPU. На iOS до 26 его включают руками: ' +
+    'Настройки → Safari → Дополнения → Экспериментальные функции → WebGPU, ' +
+    'потом закрыть и открыть Safari заново.';
+}
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 // Фон задаётся сценой, а не setClearColor: у WebGPU-рендерера очистка цветом
 // до неба не доходит, и небо остаётся чёрным.
@@ -3117,5 +3136,6 @@ shapeSails(rigSideZ(1));
 renderer.init().then(() => { resize(); frame(); }).catch(err => {
   const box = document.getElementById('crash');
   box.hidden = false;
-  box.textContent = 'Не удалось поднять рендерер: ' + (err && err.message || err);
+  box.textContent = gpuTrouble() ||
+    ('Не удалось поднять рендерер: ' + (err && err.message || err));
 });

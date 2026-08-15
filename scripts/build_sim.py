@@ -132,7 +132,10 @@ def main():
     build = {"rev": _git("rev-list", "--count", "HEAD"),
              "commit": _git("rev-parse", "--short", "HEAD"),
              "branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
-             "dirty": bool(_git("status", "--porcelain")),
+             # Только ОТСЛЕЖИВАЕМЫЕ файлы. С учётом неотслеживаемых любая
+             # записка, лежащая рядом и не добавленная в индекс, делала сборку
+             # «с правками» навсегда — и звёздочка переставала что-либо значить.
+             "dirty": bool(_git("status", "--porcelain", "--untracked-files=no")),
              "built": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
 
     tpl = tpl.replace("/*__BUILD__*/ null",

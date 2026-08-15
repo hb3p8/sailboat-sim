@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Локальный сервер для страниц проекта.
 
-    python3 scripts/serve.py [--port 8020] [--no-open] [--lan]
+    python3 scripts/serve.py [--port 8020] [--no-open] [--lan] [--tls]
 
 Нужен ровно для двух вещей, которых самодостаточная страница не умеет.
 
@@ -24,6 +24,14 @@
 писать на диск по просьбе неизвестно кого нельзя, а отдавать файлы репозитория
 в домашний Wi-Fi можно.
 
+**Для симулятора одного `--lan` мало, нужен ещё `--tls`.** Симулятор рисует через
+WebGPU, а его браузер выдаёт только в ЗАЩИЩЁННОМ контексте: `https://` или
+`localhost`. Обычный `http://` на адрес вида 192.168.х.х защищённым не считается,
+`navigator.gpu` там не существует вовсе, three.js откатывается на WebGL2 — и
+падает на первом же вычислительном шейдере волны. Выглядит это как
+«builder.getScopedArray is not a function» и к телефону отношения не имеет:
+то же самое в любом браузере по тому же адресу.
+
 **Отдавать ассеты.** Сюда переехало всё, что весит и что незачем вклеивать:
 фигурки экипажа и то, что появится дальше. Модели лежат в `assets/`, распаковщик
 Draco — в `viewer/vendor/draco/`.
@@ -40,8 +48,11 @@ import os
 import re
 import socket
 import socketserver
+import ssl
+import subprocess
 import sys
 import threading
+import time
 import webbrowser
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -203,22 +214,83 @@ class Server(socketserver.ThreadingTCPServer):
     read_only = False
 
 
-def lan_address():
-    """Свой адрес в локальной сети — тот, что набирают на телефоне.
+def lan_addresses():
+    """Адреса, по которым эту машину видно из своей сети.
 
-    Через UDP-сокет, а не через `gethostbyname(gethostname())`: последнее на
-    маке отдаёт `127.0.0.1` чаще, чем что-то полезное. Соединение здесь
-    ненастоящее — датаграммный сокет ничего не шлёт, он только заставляет
-    систему выбрать маршрут наружу и показать, с какого адреса тот пойдёт.
+    Спрашивается ДВУМЯ способами, и это не перестраховка: каждый по отдельности
+    врёт, и врёт по-разному.
+
+    Маршрут наружу (датаграммный сокет ничего не шлёт, он только заставляет
+    систему выбрать путь и показать, с какого адреса тот пойдёт) отдаёт адрес
+    того интерфейса, через который машина ходит в интернет. Поднят VPN — это
+    будет туннель, и вышло у меня ровно так: `169.254.19.0` на `utun4`, то есть
+    самоназначенный адрес, по которому с телефона не открывается ничего.
+
+    Имя машины (`hb3p8.local` -> `getaddrinfo`) отдаёт адрес в своей сети, тот
+    самый `192.168.1.62`, — но на машине без mDNS не отдаёт ничего.
+
+    Поэтому берутся оба, выбрасываются петля и самоназначенные `169.254.*`, а
+    что осталось — печатается ЦЕЛИКОМ. Какая из двух сетей та, в которой стоит
+    телефон, знает человек, а не скрипт.
     """
+    found = []
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 53))
-        return s.getsockname()[0]
+        found.append(s.getsockname()[0])
     except OSError:
-        return None
+        pass
     finally:
         s.close()
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            found.append(info[4][0])
+    except OSError:
+        pass
+    out = []
+    for ip in found:
+        if ip.startswith("127.") or ip.startswith("169.254."):
+            continue
+        if ip not in out:
+            out.append(ip)
+    return out
+
+
+CERT_DIR = os.path.join(ROOT, "out", "dev-cert")
+
+
+def dev_cert(names):
+    """Самоподписанный сертификат для локальной разработки.
+
+    Лежит в `out/`, то есть не коммитится и переживает пересборку. Годен год;
+    просроченный или выписанный на другой адрес перевыпускается сам — адрес в
+    сети меняется вместе с сетью, а сертификат обязан его называть, иначе
+    браузер не пустит и после согласия.
+
+    Ключ пишется с правами 600: это ключ, пусть и одноразовый.
+    """
+    cert = os.path.join(CERT_DIR, "cert.pem")
+    key = os.path.join(CERT_DIR, "key.pem")
+    san = ",".join(["DNS:localhost", "IP:127.0.0.1"] +
+                   ["IP:%s" % n for n in names])
+    stamp = os.path.join(CERT_DIR, "for.txt")
+    fresh = (os.path.exists(cert) and os.path.exists(key)
+             and os.path.exists(stamp)
+             and open(stamp).read() == san
+             and time.time() - os.path.getmtime(cert) < 300 * 86400)
+    if not fresh:
+        os.makedirs(CERT_DIR, exist_ok=True)
+        cmd = ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+               "-keyout", key, "-out", cert, "-days", "365",
+               "-subj", "/CN=sv20 dev", "-addext", "subjectAltName=" + san]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SystemExit("не вышло выписать сертификат:\n" + r.stderr)
+        os.chmod(key, 0o600)
+        with open(stamp, "w") as f:
+            f.write(san)
+        print("выписан самоподписанный сертификат на %s" % san)
+    return cert, key
 
 
 def main():
@@ -228,7 +300,18 @@ def main():
     ap.add_argument("--lan", action="store_true",
                     help="слушать всю сеть, чтобы открыть с телефона; "
                          "запись разметки при этом выключается")
+    ap.add_argument("--tls", action="store_true",
+                    help="по https с самоподписанным сертификатом: без него "
+                         "симулятору не дадут WebGPU нигде, кроме localhost")
     a = ap.parse_args()
+
+    # Открыли сеть — значит хотят открыть симулятор с другого устройства, а ему
+    # нужен WebGPU, а тому — защищённый контекст. Поэтому `--lan` включает https
+    # сам: связка «сеть без TLS» не работает никогда, и наступать на неё каждый
+    # раз заново незачем. Отдельно `--tls` остаётся для петли.
+    if a.lan and not a.tls:
+        a.tls = True
+        print("к --lan включён https: без него браузер не выдаст WebGPU")
 
     # По умолчанию — только петля (см. do_PUT о том, почему). `--lan` открывает
     # сеть и тем же движением закрывает запись: отдаётся корень репозитория, и
@@ -236,17 +319,33 @@ def main():
     # цена за то, чтобы потрогать игровой интерфейс пальцем; в чужой сети
     # включать не стоит.
     host = "0.0.0.0" if a.lan else "127.0.0.1"
+    ips = lan_addresses() if a.lan else []
     with Server((host, a.port), Handler) as srv:
         srv.read_only = a.lan
-        shown = (lan_address() or host) if a.lan else "127.0.0.1"
-        url = "http://%s:%d/viewer/terrain.html" % (shown, a.port)
-        print("сервер на %s" % url)
+        proto = "http"
+        if a.tls:
+            cert, key = dev_cert(ips)
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(cert, key)
+            srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+            proto = "https"
+        shown = ips[0] if ips else "127.0.0.1"
+        print("сервер на %s://%s:%d/viewer/terrain.html" % (proto, shown, a.port))
         if a.lan:
-            print("с телефона: http://%s:%d/sim/index.html" % (shown, a.port))
+            if ips:
+                print("с телефона:")
+                for ip in ips:
+                    print("    %s://%s:%d/sim/index.html" % (proto, ip, a.port))
+                if len(ips) > 1:
+                    print("  (адресов несколько — нужен тот, в чьей сети телефон)")
+            else:
+                print("адрес в сети определить не удалось: посмотрите `ifconfig`")
             print("запись разметки выключена: сеть открыта")
         else:
             print("пишется только %s; Ctrl-C чтобы остановить"
                   % os.path.relpath(MARKS, ROOT))
+        if a.tls:
+            print("сертификат самоподписанный: браузер один раз спросит согласия")
         if not a.no_open:
             threading.Timer(0.4, lambda: webbrowser.open(url)).start()
         try:

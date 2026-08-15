@@ -68,6 +68,7 @@ function perfHead() {
     // неизвестно что с неизвестно чем — ровно это и указано в ревью (§10.2).
     качество: {
       pixelRatio: renderer.getPixelRatio ? +renderer.getPixelRatio().toFixed(3) : null,
+      сглаживание: renderer.samples != null ? renderer.samples : null,
       сетка: typeof SEG !== 'undefined' ? SEG : null,
       тень: sun && sun.shadow && sun.shadow.mapSize ? sun.shadow.mapSize.width : null,
       зеркало: typeof seaRefPlanar !== 'undefined' && seaRefPlanar ? seaRefPlanar.value : null,

@@ -243,6 +243,22 @@ const BENCH_PARTS = [
   // Дальность: туман к носу и ближняя дальняя плоскость. Геометрию это не
   // снимает, но отсекает всё, что дальше, — то есть отвечает ровно на вопрос
   // «а если рисовать ближе».
+  // Сглаживания здесь НЕТ, и это отрицательный результат. Число проб входит в
+  // описание конвейера, и переключением его не померить: `renderer._samples = 0`
+  // посреди работы дал −18% при разбросе свидетелей 5%, то есть снятие
+  // сглаживания якобы кадр дорожает. Ни разбег от общего состояния, ни восемь
+  // кадров прогрева этого не сняли — в отличие от теней, где та же болезнь
+  // лечилась заменой переключателя (`shadow.autoUpdate`), заменить тут нечего:
+  // сглаживание живёт в самом конвейере.
+  //
+  // Поэтому оно задаётся ПРИ ЗАПУСКЕ: `?noaa` поднимает рендерер без него.
+  // Сравниваются два прогона по строке «как есть», а число проб пишется в шапку
+  // профиля, чтобы прогоны не перепутать.
+  //
+  // Зеркало вдвое мельче линейно — вчетверо по пикселям. Это не предложение так
+  // и оставить, а ВЕРХНЯЯ ОЦЕНКА: столько вернёт уменьшение зеркального прохода,
+  // и если это доли миллисекунды, дальше трогать его незачем.
+  ['зеркало вчетверо мельче', () => benchMirrorScale(MIRROR_SCALE / 2)],
   ['дальность 300 м', () => {
     if (scene.fog) { scene.fog.near = 60; scene.fog.far = 300; }
     camera.far = 320; camera.updateProjectionMatrix();
@@ -254,10 +270,27 @@ const BENCH_PARTS = [
   ['как есть (свидетель)', () => {}],
 ];
 
+// Размер зеркального прохода. `resolutionScale` читается сборкой узла, а сами
+// мишени заведены под прежний размер — поэтому меняется и то и другое.
+function benchMirrorScale(scale) {
+  const r = seaMirrorTex && seaMirrorTex.reflector;
+  if (!r || !r.renderTargets) return;
+  // Ничего не изменилось — не трогать. Возврат к прежнему размеру идёт перед
+  // КАЖДЫМ замером, и без этой проверки мишень пересоздавалась бы тринадцать раз
+  // за круг вместо одного.
+  if (r.resolutionScale === scale) return;
+  r.resolutionScale = scale;
+  const c = renderer.domElement;
+  const w = Math.max(1, Math.round(c.width * scale));
+  const h = Math.max(1, Math.round(c.height * scale));
+  for (const rt of r.renderTargets.values()) rt.setSize(w, h);
+}
+
 function benchPartsRestore() {
   seaRefPlanar.value = 1;
   sun.castShadow = true;
   sun.shadow.autoUpdate = true;
+  benchMirrorScale(MIRROR_SCALE);
   sea.visible = true;
   boatGroup.visible = true;
   if (terrainScene) terrainScene.visible = true;
@@ -318,7 +351,7 @@ function benchMedian(a) {
   return b.length % 2 ? b[(b.length - 1) / 2] : (b[b.length / 2 - 1] + b[b.length / 2]) / 2;
 }
 
-const BENCH_PART_ROUNDS = 0;    // 0 — столько кругов, сколько строк
+const BENCH_PART_ROUNDS = 10;   // 0 — столько кругов, сколько строк
 
 async function benchScene() {
   if (benchBusy) return;

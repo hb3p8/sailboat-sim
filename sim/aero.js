@@ -1386,12 +1386,27 @@ export class Rig {
       }
       this.hullR = r + 0.5;
     }
-    const c = Math.cos(b.psi), sn = Math.sin(b.psi);
+    // Поворот корпуса считается ОДИН РАЗ НА ПОЗУ, а не на каждую точку. Зовут
+    // эту проверку около шестисот сорока раз за шаг — по ребру пелены, — и
+    // четыре тригонометрии внутри неё стоили заметной доли всей физики: профиль
+    // ставил `hullProbe` на второе место после Био — Савара.
+    //
+    // Кэш по значению, а не по счётчику шагов: поза меняется между вызовами
+    // только когда её меняют, и сравнение двух чисел дешевле любого учёта.
+    // Арифметика от этого не меняется ни на разряд — то же `Math.cos` от того же
+    // числа, — и эталон обязан совпасть побайтово.
+    let f = this._hullF;
+    if (!f || f.psi !== b.psi || f.phi !== b.phi) {
+      f = this._hullF = { psi: b.psi, phi: b.phi,
+                          c: Math.cos(b.psi), sn: Math.sin(b.psi),
+                          cp: Math.cos(b.phi), sp: Math.sin(b.phi) };
+    }
+    const c = f.c, sn = f.sn;
     const rx = X - b.x, ry = Y - b.y;
     const bx = rx * c + ry * sn, y0 = -rx * sn + ry * c, z0 = Z - b.zc;
     if ((bx - this.hullX) ** 2 + y0 * y0 + z0 * z0 > this.hullR * this.hullR) return false;
     if (bx <= xs[0] || bx >= xs[xs.length - 1]) return false;
-    const cp = Math.cos(b.phi), sp = Math.sin(b.phi);
+    const cp = f.cp, sp = f.sp;
     const by = y0 * cp + z0 * sp, bz = -y0 * sp + z0 * cp;
     let si = 0, sd = 1e9;
     for (let j = 0; j < xs.length; j++) {
@@ -1399,18 +1414,31 @@ export class Rig {
       if (d < sd) { sd = d; si = j; }
     }
     const P = poly[si];
-    let inside = false, best = 1e9, byy = by, bzz = bz;
+    // СНАЧАЛА «внутри ли», и только потом «куда ближайшая точка обшивки».
+    //
+    // Раньше оба считались одним проходом, и ближайшая точка — с корнем на
+    // каждое ребро сечения — считалась для всех, кто прошёл габаритную сферу.
+    // А внутрь попадают единицы: пелена сходит с паруса и идёт НАД корпусом,
+    // мимо него. Расчёт для тех, кто снаружи, уходил впустую целиком.
+    let inside = false;
+    for (let a = 0, j = P.length - 1; a < P.length; j = a++) {
+      const zi = P[a][1], zj = P[j][1];
+      if ((zi > bz) !== (zj > bz)
+          && by < (P[j][0] - P[a][0]) * (bz - zi) / (zj - zi) + P[a][0]) inside = !inside;
+    }
+    if (!inside) return false;
+    // Ближайшая точка. Сравнение по КВАДРАТУ расстояния: корень нужен только для
+    // сравнения, а сравниваются они одинаково.
+    let best = Infinity, byy = by, bzz = bz;
     for (let a = 0, j = P.length - 1; a < P.length; j = a++) {
       const yi = P[a][0], zi = P[a][1], yj = P[j][0], zj = P[j][1];
-      if ((zi > bz) !== (zj > bz) && by < (yj - yi) * (bz - zi) / (zj - zi) + yi) inside = !inside;
       const ey = yj - yi, ez = zj - zi, l2 = ey * ey + ez * ez;
       let t = l2 > 1e-12 ? ((by - yi) * ey + (bz - zi) * ez) / l2 : 0;
       t = Math.max(0, Math.min(1, t));
       const py = yi + ey * t, pz = zi + ez * t;
-      const d = Math.hypot(by - py, bz - pz);
+      const dy = by - py, dz = bz - pz, d = dy * dy + dz * dz;
       if (d < best) { best = d; byy = py; bzz = pz; }
     }
-    if (!inside) return false;
     // Наружу — в мировые оси, чтобы вызывающему не пересчитывать.
     const oy = byy * cp - bzz * sp, oz = byy * sp + bzz * cp;
     out[0] = b.x + bx * c - oy * sn - X;

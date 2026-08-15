@@ -38,6 +38,12 @@ export function jibSheetOf(o) {
   return o.jibSheet != null ? o.jibSheet : o.sheet + (o.jibTrim || 0);
 }
 
+// Шкот генакера. Своя ручка, а не поправка к гроту: у летящего паруса шкот и
+// есть его настройка, и связывать его с гротом нечем.
+export function gennakerSheetOf(o) {
+  return o.genSheet != null ? o.genSheet : 40 * Math.PI / 180;
+}
+
 // Полосок на парус. Шесть хватает: профиль ветра по высоте гладкий, и на
 // восьми ответ отличается меньше чем на процент, а считать нужно каждый кадр.
 export const STRIPS = 6;
@@ -132,6 +138,11 @@ function triNear(px, py, pz, V, i0, i1, i2, out) {
 const DESIGN_CAMBER = {
   main: [0.125, 0.075],
   jib: [0.105, 0.065],
+  // Генакер кроится куда глубже обоих: у него нет ни штага, ни гика, он держит
+  // форму только давлением, и мешок ему нужен. Обычные для несимметричных
+  // парусов величины — то же допущение, что и для двух других, и той же
+  // природы: кроя нет и быть не может.
+  gennaker: [0.20, 0.16],
 };
 
 // Итераций нелинейной поправки и её недорелаксация. Шаг ньютоновский, и без
@@ -490,8 +501,12 @@ export class Rig {
   // хорды пришлось на полоску, столько у неё и площади. У грота с серпом это
   // не то же самое, что у треугольника, — серп добавляет площадь наверху, где
   // плечо больше всего.
-  constructor(pack) {
+  constructor(pack, gennakerUp) {
     this.p = pack;
+    // Поднят ли генакер — решается ДО постройки полосок: от этого зависит их
+    // число, число панелей решётки и число нитей пелены. Меняется он
+    // перестройкой рига (`Boat.setGennaker`), а не флагом на ходу.
+    this.gennakerUp = !!gennakerUp;
     // Таблица поляры ставится один раз здесь: она одна на всю программу, и
     // тащить её сквозь каждый вызов коэффициентов сечения незачем. Пакета без
     // неё быть не должно, но если он старый — модель откатится на прежние
@@ -527,13 +542,32 @@ export class Rig {
                       minSet: (jib.sheeting ? jib.sheeting.min_set_deg : 0) * DEG,
                       design: DESIGN_CAMBER.jib }, jib),
     ];
+    // Генакер — третьим, и ТОЛЬКО когда поднят.
+    //
+    // Убранный парус в этой модели изображается флагом `live`: полоски, панели
+    // и нити пелены остаются, просто ничего не считают. Для грота со стакселем
+    // это не жаль — они всегда стоят. Генакер поднят в меньшей части плавания, а
+    // его полоски — это плюс половина решётки и лишние нити пелены НАВСЕГДА,
+    // включая лавировку, где его нет. Поэтому он появляется и исчезает
+    // перестройкой рига (`setGennaker`), а не гашением.
+    //
+    // maxSheet у него больше, чем у обоих: галс вынесен на бушприт вперёд по ДП,
+    // и шкотовый угол ходит по кругу почти свободно — держит его только шкот.
+    // minSet — наоборот, есть: острее галсового угла парус не выбрать, он упрётся
+    // сам в себя, и это тот же довод, что у стакселя, только плечо другое.
+    if (this.gennakerUp && rig.gennaker && rig.gennaker.luff) {
+      sails.push(Object.assign({ maxSheet: 110 * DEG, minSet: 12 * DEG,
+                                 gennaker: true,
+                                 design: DESIGN_CAMBER.gennaker }, rig.gennaker));
+    }
     // Отрисовка строит поверхность парусов по этим же обводам и по тому же
     // закону твиста. Иначе нарисованный парус и посчитанный расходятся, и
     // отладочный вид начинает врать — а он затем и нужен, чтобы не врал.
     this.sails = sails;
     this.strips = [];
     this.stripState = [];
-    for (const s of sails) {
+    for (let si = 0; si < sails.length; si++) {
+      const s = sails[si];
       const zLo = Math.max(s.tack[1], s.clew[1]);
       const zHi = Math.min(s.head[1], s.head_aft[1]);
       const span = zHi - zLo;
@@ -569,7 +603,11 @@ export class Rig {
         const f = span > 1e-9 ? (h - zLo) / span : 0.5;
         a *= norm;
         this.strips.push({
-          area: a, ar: ar, maxSheet: s.maxSheet, minSet: s.minSet, jib: !s.mast,
+          area: a, ar: ar, maxSheet: s.maxSheet, minSet: s.minSet,
+          // Номер паруса, а не признак «стаксель ли». Парусов стало три, и по
+          // этому номеру расходятся шкот, твист, сила на гике и раскладка нитей
+          // пелены. Булев признак здесь стоял ровно до третьего паруса.
+          sail: si, jib: si === 1, gennaker: !!s.gennaker,
           // Порча от мачты и её собственное сопротивление — от геометрии, а
           // значит считаются один раз здесь, а не каждый шаг.
           mastFill: mw ? Math.max(0, 1 - MAST_SPOIL *
@@ -677,6 +715,10 @@ export class Rig {
     out.fyMain = 0; out.setMain = 0;
 
     const rigSide = b.rigSide;
+    // Шкот и твист по номеру паруса — три коротких массива вместо трёх тройных
+    // условий в горячем цикле по полоскам.
+    const sheetOf = this.sheetOf || (this.sheetOf = new Float64Array(3));
+    const twistOf = this.twistOf || (this.twistOf = new Float64Array(3));
     // Натянут ли шкот. Мерой служит угол атаки у нижней шкаторины: пока он
     // велик, парус упирается в шкот и держит форму; как только он падает к
     // нулю, снасть провисает и задняя шкаторина раскрывается сама.
@@ -691,6 +733,13 @@ export class Rig {
     // грот в этом смысле показательнее — он больше и держится дальше.
     this.twistEff = twist;
     this.twistEffJib = twistJib;
+    // Генакер: свой шкот, а твист свой лишь настолько, насколько провисает его
+    // же шкот. Отдельной ручки твиста у него нет и быть не должно — задняя
+    // шкаторина у летящего паруса раскрывается сама, шкотом и галсовой оттяжкой.
+    const genSheet = gennakerSheetOf(b.o);
+    sheetOf[0] = b.o.sheet; sheetOf[1] = jibSheetOf(b.o); sheetOf[2] = genSheet;
+    twistOf[0] = twist; twistOf[1] = twistJib;
+    twistOf[2] = b.o.twist + FREE_TWIST * slackOfSheet(genSheet);
     let load = 0;
 
     // --- проход первый: геометрия и углы атаки без учёта скоса.
@@ -701,8 +750,8 @@ export class Rig {
       const area = st.area * scale;
       // Выбрать острее, чем позволяет погон, нельзя: дальше шкот тянул бы
       // шкотовый угол сквозь каретку.
-      const sheet = Math.max(st.minSet, st.jib ? jibSheetOf(b.o) : b.o.sheet) +
-                    (st.jib ? twistJib : twist) * st.twistF;
+      const sheet = Math.max(st.minSet, sheetOf[st.sail]) +
+                    twistOf[st.sail] * st.twistF;
       const chord = st.chord;
       // Положение полоски в горизонтной системе. Точка приложения — центр
       // давления её хорды, а не мачта: поэтому при потраве шкота парусность
@@ -722,7 +771,10 @@ export class Rig {
       const ve = Math.hypot(w1, w2);
       d.h = st.h; d.z = zi; d.area = area; d.ws = a.ws;
       g.xi = xi; g.yi = yi; g.zi = zi; g.area = area; g.ve = ve; g.chord = chord;
-      g.live = ve >= 0.05 && (st.jib ? b.o.jibUp !== false : b.o.mainUp !== false);
+      // Убранный парус. Генакера в риге просто нет, когда он не поднят, — его
+      // полоски сюда не попадают вовсе.
+      g.live = ve >= 0.05 &&
+        (st.sail === 1 ? b.o.jibUp !== false : st.sail === 0 ? b.o.mainUp !== false : true);
       if (!g.live) {
         d.awaDeg = 0; d.alphaDeg = 0; d.indDeg = 0; d.cl = 0; d.drive = 0; d.side = 0;
         for (let k = 0; k < NCHORD; k++) lat.panels[i * NCHORD + k].speed = 0;
@@ -1167,7 +1219,7 @@ export class Rig {
       const fxi = f1, fyi = f2 * cphi, fzi = f2 * sphi;
       out.fx += fxi; out.fy += fyi; out.fz += fzi;
       // Гик держит только грот, и перекидывает его тоже только грот.
-      if (!this.strips[i].jib) {
+      if (this.strips[i].sail === 0) {
         out.fyMain += fyi;
         if (!out.setMain) out.setMain = g.set;
       }
@@ -1626,6 +1678,20 @@ export class Rig {
     }
   }
 
+  // Сколько нитей нужно пелене: по одной на полоску, плюс одна замыкающая, плюс
+  // по лишней на каждый СТЫК ПАРУСОВ — там нить сходит с нуля.
+  //
+  // Раньше здесь стояло `NS + 2`, посчитанное на один стык: парусов было два.
+  // С генакером их три, стыка два, и число нитей обязано считаться, а не
+  // помниться. Нить — это не запись в массиве, а работа в пелене на каждом
+  // шаге; лишняя стоит своих процентов.
+  wakeFil() {
+    const S = this.strips;
+    let joints = 0;
+    for (let i = 1; i < S.length; i++) if (S[i - 1].sail !== S[i].sail) joints++;
+    return S.length + 1 + joints;
+  }
+
   // Какая полоска стоит за нитью f (или -1, если между f и f+1 паруса нет).
   // Раскладка от состояния не зависит — только от числа полосок и места стыка
   // парусов, — поэтому считается один раз. Тот же обход, что в stepWake, и это
@@ -1633,13 +1699,13 @@ export class Rig {
   // кольцо, а это ошибка на одну по высоте, которую по картинке не увидеть.
   wakeMap() {
     if (this.wakeStrip) return this.wakeStrip;
-    const NS = this.strips.length, fil = NS + 2;
+    const NS = this.strips.length, fil = this.wakeFil();
     const map = this.wakeStrip = new Int16Array(fil).fill(-1);
     let f = 0;
     for (let i = 0; i <= NS && f < fil; i++) {
       const prev = i > 0 ? this.strips[i - 1] : null;
       const cur = i < NS ? this.strips[i] : null;
-      if (prev && cur && prev.jib !== cur.jib) {
+      if (prev && cur && prev.sail !== cur.sail) {
         map[f] = -1; f++;
         if (f < fil) { map[f] = i; f++; }
         continue;
@@ -1676,7 +1742,7 @@ export class Rig {
   // корпус, наведённая ею скорость обратно в мир.
   stepWake(b, dt) {
     const NS = this.strips.length, lat = this.lattice;
-    if (!this.wake) this.wake = new FreeWake(NS + 2, this.wakeLen || WAKE_LEN);
+    if (!this.wake) this.wake = new FreeWake(this.wakeFil(), this.wakeLen || WAKE_LEN);
     const w = this.wake;
     w.core = lat.core;
     // Циркуляции полосок в буфер, а не в новый массив: `stepWake` идёт каждый шаг.
@@ -1708,20 +1774,20 @@ export class Rig {
     for (let i = 0; i <= NS && f < w.fil; i++) {
       const prev = i > 0 ? this.strips[i - 1] : null;
       const cur = i < NS ? this.strips[i] : null;
-      if (prev && cur && prev.jib !== cur.jib) {
-        // Стык двух парусов: у верхней полоски грота своя сходящая нить, у
-        // нижней полоски стакселя своя, а между ними паруса нет — ноль.
+      if (prev && cur && prev.sail !== cur.sail) {
+        // Стык двух парусов: у верхней полоски одного своя сходящая нить, у
+        // нижней полоски следующего своя, а между ними паруса нет — ноль.
         gring[f] = 0; seed[f] = this.shedHi[i - 1];
-        sail[f] = prev.jib ? 1 : 0; f++;
+        sail[f] = prev.sail; f++;
         if (f < w.fil) {
           gring[f] = G[i]; seed[f] = this.shedLo[i];
-          sail[f] = cur.jib ? 1 : 0; f++;
+          sail[f] = cur.sail; f++;
         }
         continue;
       }
       gring[f] = cur ? G[i] : 0;
       seed[f] = cur ? this.shedLo[i] : this.shedHi[i - 1];
-      sail[f] = (cur || prev).jib ? 1 : 0;
+      sail[f] = (cur || prev).sail;
       f++;
     }
     // Хвост незанятых нитей: их не рисуют и они ничего не наводят, но парус им

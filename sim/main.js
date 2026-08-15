@@ -3105,6 +3105,9 @@ function frame() {
   perf.hud = smooth(perf.hud, performance.now() - tHud);
   perf.frame = smooth(perf.frame, performance.now() - tFrame);
   perf.fps = smooth(perf.fps, dt > 0 ? 1 / dt : 0);
+  // Лента профиля на сервер: раз в секунду отсчёт, раз в пять — пачка.
+  // Подробности и выключатель — в perflog.js.
+  perfLogTick();
   perf.calls = renderer.info.render.drawCalls;
   perf.tris = renderer.info.render.triangles;
   // Метки видеокарты: раз в десять кадров, и только когда предыдущий запрос

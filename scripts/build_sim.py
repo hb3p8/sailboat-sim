@@ -33,7 +33,11 @@ GLTF_BUNDLE = "three.gltf.js"
 MODULES = ["util.js", "terrain.js", "axes.js", "wind.js", "vlm.js",
            "membrane.js", "polar.js", "waves.js", "buoyancy.js", "ocean.js", "wake.js",
            "aero.js", "hydro.js", "telemetry.js", "trace.js", "physics.js",
-           "main.js", "debug.js", "mobile.js", "controls.js", "bench.js"]
+           "main.js", "debug.js", "mobile.js", "controls.js", "bench.js",
+           # perflog после main.js: он читает `perf` и `renderer`, объявленные
+           # там. Порядок здесь — это порядок вклейки в общую область, и
+           # обратный дал бы временную мёртвую зону.
+           "perflog.js"]
 
 
 def alias_three_imports(src):

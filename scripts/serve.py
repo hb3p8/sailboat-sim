@@ -64,6 +64,53 @@ MARKS_URL = "/api/marks"
 
 EMPTY = {"starts": [], "buoys": [], "fairway": []}
 
+# --- профиль сессии --------------------------------------------------------
+#
+# Симулятор сам шлёт сюда свои тайминги, пока идёт. Ради этого всё и заведено:
+# посмотреть, как ведёт себя кадр НА ТЕЛЕФОНЕ и В ДИНАМИКЕ, — фотографией
+# экрана этого не увидеть, а профилировщика там нет.
+#
+# Почему это можно, когда `--lan` запись выключает. Запрет на запись — про
+# `data/marks.json`: разметка лежит в репозитории, её правят руками, и потерять
+# её от чужого запроса нельзя. Здесь пишется в `out/`, который не коммитится и
+# восстанавливается сборкой; имя файла собирает СЕРВЕР из даты и очищенного
+# идентификатора сессии, так что подсунуть путь нельзя; размер ограничен и на
+# запрос, и на файл. Худшее, что может сделать чужой в этой сети, — насорить
+# в out/perf, откуда всё и так сметается.
+PERF_URL = "/api/perf"
+PERF_DIR = os.path.join(ROOT, "out", "perf")
+PERF_MAX_BODY = 256 * 1024        # на один запрос
+PERF_MAX_FILE = 8 * 1024 * 1024   # на сессию
+
+
+def perf_path(session):
+    """Файл сессии. Имя собирается здесь, из очищенного идентификатора."""
+    sid = re.sub(r"[^a-z0-9]", "", str(session or "").lower())[:16] or "nosession"
+    return os.path.join(PERF_DIR, time.strftime("%Y%m%d-") + sid + ".jsonl")
+
+
+def perf_append(data):
+    """Дописать пачку отсчётов. Возвращает имя файла и сколько в нём строк."""
+    path = perf_path(data.get("session"))
+    os.makedirs(PERF_DIR, exist_ok=True)
+    if os.path.exists(path) and os.path.getsize(path) > PERF_MAX_FILE:
+        return os.path.relpath(path, ROOT), -1
+    rows = data.get("samples")
+    if not isinstance(rows, list):
+        raise ValueError("нет отсчётов")
+    head = data.get("head")
+    with open(path, "a", encoding="utf-8") as f:
+        # Шапка — первой строкой файла и только один раз: устройство, сборка,
+        # размер холста. Без неё числа не с чем соотнести.
+        if head and os.path.getsize(path) == 0:
+            f.write(json.dumps({"head": head}, ensure_ascii=False) + "\n")
+        for r in rows[:2000]:
+            if isinstance(r, dict):
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    with open(path, encoding="utf-8") as f:
+        n = sum(1 for _ in f)
+    return os.path.relpath(path, ROOT), n
+
 
 def read_marks():
     if not os.path.exists(MARKS):
@@ -182,6 +229,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._json(500, {"error": str(e)})
             return
         super().do_GET()
+
+    def do_POST(self):
+        # Профиль сессии. Пишется и при открытой сети — почему, написано у
+        # PERF_URL; разметка при этом остаётся запрещённой.
+        if self.path.split("?")[0] != PERF_URL:
+            self._json(404, {"error": "сюда не пишут"})
+            return
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > PERF_MAX_BODY:
+            self._json(413, {"error": "слишком большая пачка"})
+            return
+        try:
+            data = json.loads(self.rfile.read(n).decode("utf-8"))
+            path, rows = perf_append(data)
+        except Exception as e:
+            self._json(400, {"error": str(e)})
+            return
+        self._json(200, {"file": path, "rows": rows})
 
     def do_PUT(self):
         # Наружу — только чтение. Разметка пишется на диск без всякой проверки,

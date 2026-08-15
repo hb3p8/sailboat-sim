@@ -117,10 +117,10 @@ const SUN_DIR = (SKY_PACK && SKY_PACK.sun)
       ? new Vector3(-0.5, 0.75, -0.43).normalize()
       : new Vector3(SKY_PACK.sun[0], SKY_PACK.sun[1], SKY_PACK.sun[2]).normalize())
   : new Vector3(toSceneX(-70), 80, toSceneZ(50)).normalize();
-// Горизонтальная часть направления: по ней ложится тень, по ней же сдвигается
-// коробка теней.
-const SUN_FLAT = new Vector3(SUN_DIR.x, 0, SUN_DIR.z).normalize();
-sun.position.copy(SUN_DIR).multiplyScalar(300);
+// Как далеко ставится источник. Ближе — точнее глубина, дальше — не влезает
+// коробка; сто пятьдесят метров держат и то, и другое.
+const SHADOW_LIGHT = 60;
+sun.position.copy(SUN_DIR).multiplyScalar(SHADOW_LIGHT);
 sun.castShadow = true;
 // Коробка теней размером с лодку с запасом, а не со сцену. Размер тут спорит сам
 // с собой: солнце над горизонтом на четыре градуса, и тень девятиметровой мачты
@@ -131,16 +131,34 @@ sun.castShadow = true;
 // Взято среднее: восемьдесят метров и сдвиг коробки ПО ТЕНИ, а не по лодке.
 // Лодка стоит у ближнего края, тень уходит вглубь, и её читаемая часть — первые
 // полсотни метров, где ещё различимы мачта и парус, — попадает целиком.
-const SHADOW_BOX = 80;
-const SHADOW_AHEAD = 55;
+// КОРОБКА ТЕНЕЙ ПОДОГНАНА ПОД ЛОДКУ, и ни подо что больше. Тени тут нужны от
+// паруса на палубу и от фигурки на банку — то есть внутри двенадцати метров.
+// Всё остальное теней не отбрасывает и не принимает: карта акватории снята с
+// этого нарочно, вода тоже.
+//
+// Прежняя коробка тянулась на восемьдесят метров — ловила стосорокаметровую тень
+// мачты при закатном солнце. Ловила напрасно: падает она на воду, а вода теней
+// не показывает. Зато карту размазывало так, что на фигурку приходилось
+// полтексела, и её тень не могла бы появиться ни при каком солнце.
+//
+// Двенадцать метров на две тысячи текселов — это сантиметр на тексель. Пуговицу
+// не разглядеть, а руку видно.
+const SHADOW_BOX = 12;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.left = -SHADOW_BOX;
 sun.shadow.camera.right = SHADOW_BOX;
 sun.shadow.camera.top = SHADOW_BOX;
 sun.shadow.camera.bottom = -SHADOW_BOX;
-sun.shadow.camera.near = 1;
-sun.shadow.camera.far = 900;
-sun.shadow.bias = -0.0012;
+// Ближняя и дальняя плоскости вплотную вокруг лодки. Это не экономия, а
+// точность: у теневой карты глубина хранится в долях диапазона камеры.
+sun.shadow.camera.near = SHADOW_LIGHT - SHADOW_BOX * 2;
+sun.shadow.camera.far = SHADOW_LIGHT + SHADOW_BOX * 2;
+
+// Смещение задаётся normalBias, В МЕТРАХ, а не bias в долях глубины. Стояло
+// bias = −0.0012 при диапазоне в девятьсот метров — то есть смещение больше
+// метра в мире, и фигурка ростом полтора метра проваливалась в него целиком.
+sun.shadow.bias = 0;
+sun.shadow.normalBias = 0.02;
 scene.add(sun);
 // Источник светит НА ЛОДКУ: коробка теней едет вместе с ней, иначе лодка из неё
 // выходит на первых же ста метрах и тень пропадает.
@@ -287,10 +305,10 @@ const seaCell = new Float32Array((SEG + 1) * (SEG + 1));
 seaGeo.setAttribute('seaCell', new Float32BufferAttribute(seaCell, 1));
 const seaMat = new MeshStandardNodeMaterial({ roughness: 0.28, metalness: 0.12 });
 const sea = new Mesh(seaGeo, seaMat);
-// Вода тень ПРИНИМАЕТ, но не отбрасывает: отбрасывать ей нечего — под ней
-// ничего нет, — а принять тень паруса она обязана, иначе лодка висит над водой
-// без всякой связи с ней.
-sea.receiveShadow = true;
+// Вода теней не принимает. Не по забывчивости: её вид держит отражение, а оно
+// сидит в свечении, куда тень по устройству не попадает, — и тень на воде
+// оказывалась бы посчитанной и невидимой. Когда понадобится, её придётся
+// заводить внутрь самого выражения воды, а не флагом.
 sea.frustumCulled = false;
 // Вода рисуется ПОСЛЕДНЕЙ из непрозрачных. Отражения экранного пространства
 // (ниже) читают снимок уже нарисованной сцены, и вода в этом снимке оказаться не
@@ -1207,7 +1225,16 @@ scene.add(boatGroup);
 // полутора сотнями, экипаж вообще приходит с сервера. Обход пустой группы
 // отработал молча, теней не было, и выглядело это как «тени не поддерживаются».
 function boatCastsShadow() {
-  boatGroup.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  // И ОТБРАСЫВАЕТ, И ПРИНИМАЕТ. Второе я забыл, и это стоило ещё одного круга:
+  // лодка исправно отбрасывала тень, но принять её было некому — палубе никто
+  // не разрешал. Тень фигурки падала на поверхность, которая её не смотрит, и
+  // выглядело это опять как «теней нет». Самозатенение — это ровно пара флагов,
+  // и нужны оба.
+  boatGroup.traverse(o => {
+    if (!o.isMesh) return;
+    o.castShadow = true;
+    o.receiveShadow = true;
+  });
 }
 
 function meshFrom(data, colour, rough, metal) {
@@ -2922,6 +2949,23 @@ resize();
 // Лодка собрана целиком — теперь и флаг тени есть кому достаться.
 boatCastsShadow();
 
+if (location.search.includes('shadowinfo')) {
+  let cast = 0, recv = 0, mesh = 0;
+  boatGroup.traverse(o => {
+    if (!o.isMesh) return;
+    mesh++;
+    if (o.castShadow) cast++;
+    if (o.receiveShadow) recv++;
+  });
+  const c = sun.shadow.camera;
+  console.log('тени: карта %s, у солнца %s, коробка %s..%s, глубина %s..%s',
+              renderer.shadowMap.enabled, sun.castShadow,
+              c.left, c.right, c.near, c.far);
+  console.log('лодка: мешей %d, отбрасывают %d, принимают %d', mesh, cast, recv);
+  console.log('материал корпуса:', hullMesh.material.type,
+              'тень у материала:', hullMesh.material.shadowSide);
+}
+
 function frame() {
   // Замер держит кадр за собой целиком — см. benchPaused в bench.js. Часы при
   // этом переставляются: иначе физика после замера доберёт всё простоявшее время
@@ -2997,9 +3041,9 @@ function frame() {
   // солнце. Наоборот нельзя: сдвинешь цель, не сдвинув источник, и свет
   // перестанет идти оттуда, где нарисовано солнце, — а вся затея была ровно про
   // то, чтобы они совпадали.
-  sun.target.position.copy(boatGroup.position)
-     .addScaledVector(SUN_FLAT, -SHADOW_AHEAD);
-  sun.position.copy(sun.target.position).addScaledVector(SUN_DIR, 300);
+  // Цель — сама лодка: коробка маленькая и сидит ровно на ней.
+  sun.target.position.copy(boatGroup.position);
+  sun.position.copy(sun.target.position).addScaledVector(SUN_DIR, SHADOW_LIGHT);
   boatGroup.rotation.order = 'YXZ';
   boatGroup.rotation.y = headingRotY(ipsi);
   boatGroup.rotation.x = heelRotX(iphi);

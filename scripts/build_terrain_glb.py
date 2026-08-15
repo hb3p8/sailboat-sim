@@ -615,6 +615,11 @@ def main():
     ap.add_argument("--no-cull", action="store_true",
                     help="оставить весь покров (для сравнения)")
     ap.add_argument("--no-draco", action="store_true")
+    ap.add_argument("--lod-cover", type=int, default=2,
+                    help="до какого уровня класть покров: 2 — во все, 0 — только "
+                         "в полный. Лес и застройка это десятая часть "
+                         "треугольников, но стенки у воды перекрывают друг друга, "
+                         "и на телефоне платится за каждый фрагмент")
     ap.add_argument("--out", default=None,
                     help="куда писать; по умолчанию assets/terrain.glb. Нужно, "
                          "чтобы держать рядом вариант с другим куском и сравнивать "
@@ -728,7 +733,7 @@ def main():
                 pos, col, idx = land_chunk(ix0, iy0, nx, ny, stride)
                 if lod == 0:
                     tris["земля"] += len(idx) // 3
-                if cover is not None:
+                if cover is not None and lod <= args.lod_cover:
                     if lod == 0:
                         tris["лес"] += len(cover[1]) // 3
                     idx = np.concatenate([idx, cover[1] + len(pos)])

@@ -2759,6 +2759,9 @@ function cycleCam() {
 // ---------------------------------------------------------------- цикл
 
 let acc = 0, last = performance.now() / 1000, tick = 0;
+// Куда камера ХОЧЕТ встать и куда смотреть. Два вектора на весь кадровый цикл:
+// прежде они создавались заново каждый кадр.
+const camWant = new Vector3(), camAimWant = new Vector3();
 
 // --- тайминги ------------------------------------------------------------
 //
@@ -3042,18 +3045,20 @@ function frame() {
   const bx = toSceneX(ix), bz = toSceneZ(iy);
   const fx = bowSceneX(ipsi), fz = bowSceneZ(ipsi);     // в нос
   const sx = stbdSceneX(ipsi), sz = stbdSceneZ(ipsi);   // на правый борт
-  const at = (fwd, stb, h) =>
-    new Vector3(bx + fwd * fx + stb * sx, h, bz + fwd * fz + stb * sz);
+  // Точки камеры пишутся в два готовых вектора, а не создаются заново каждый
+  // кадр. Их всего два, и живут они ровно до конца кадра.
+  const at = (fwd, stb, h, out) =>
+    out.set(bx + fwd * fx + stb * sx, h, bz + fwd * fz + stb * sz);
   let want;
-  if (camMode === 0) want = at(-13, 2.5, 4.6);
-  else if (camMode === 1) want = at(-2, 5, 3.0);
-  else if (camMode === 2) want = at(-1.2, 1.0, 1.9);
-  else if (camMode === 3) want = at(-2, 0, 28);
-  else if (camMode === HIGH_CAM) want = at(-60, 0, HIGH_CAM_UP);
+  if (camMode === 0) want = at(-13, 2.5, 4.6, camWant);
+  else if (camMode === 1) want = at(-2, 5, 3.0, camWant);
+  else if (camMode === 2) want = at(-1.2, 1.0, 1.9, camWant);
+  else if (camMode === 3) want = at(-2, 0, 28, camWant);
+  else if (camMode === HIGH_CAM) want = at(-60, 0, HIGH_CAM_UP, camWant);
   else {
     // Свободная: сферические координаты вокруг лодки, в мировых осях.
     const c = Math.cos(freeCam.el), d = freeCam.dist;
-    want = new Vector3(bx + d * c * Math.cos(freeCam.az),
+    want = camWant.set(bx + d * c * Math.cos(freeCam.az),
                        rig.mast_height_m * 0.35 + d * Math.sin(freeCam.el),
                        bz + d * c * Math.sin(freeCam.az));
   }
@@ -3074,8 +3079,8 @@ function frame() {
     scene.fog.far = hi ? HIGH_FOG[1] : (FAR_WATER ? 14000 : 420);
   }
   const aim = camMode === FREE_CAM
-    ? new Vector3(bx + 1.5 * fx, rig.mast_height_m * 0.35, bz + 1.5 * fz)
-    : at(2, 0, camMode === 3 || camMode === HIGH_CAM ? 0 : 1.4);
+    ? camAimWant.set(bx + 1.5 * fx, rig.mast_height_m * 0.35, bz + 1.5 * fz)
+    : at(2, 0, camMode === 3 || camMode === HIGH_CAM ? 0 : 1.4, camAimWant);
   // Свободную камеру не сглаживаем: под рукой она должна ходить сразу.
   if (camMode === FREE_CAM) { camPos.copy(want); camAim.copy(aim); }
   else {

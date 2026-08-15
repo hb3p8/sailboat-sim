@@ -184,10 +184,16 @@ export class Lattice {
     // Прандтля, с пеленой от задней шкаторины (tests/vlm.test.mjs), — и там
     // отрезки настоящие.
     const same = (p, q) => p[0] === q[0] && p[1] === q[1] && p[2] === q[2];
-    const lead = new Array(n), trail = new Array(n);
+    // Признаки живут в полях: матрица собирается каждый шаг, и два массива на
+    // сборку — это мусор в горячем пути. Восьмибитные: значений всего два.
+    let lead = this._lead, trail = this._trail;
+    if (!lead || lead.length !== n) {
+      lead = this._lead = new Uint8Array(n);
+      trail = this._trail = new Uint8Array(n);
+    }
     for (let j = 0; j < n; j++) {
-      lead[j] = !same(P[j].ta, P[j].a);
-      trail[j] = !same(P[j].b, P[j].tb);
+      lead[j] = same(P[j].ta, P[j].a) ? 0 : 1;
+      trail[j] = same(P[j].b, P[j].tb) ? 0 : 1;
     }
     for (let i = 0; i < n; i++) {
       const ci = P[i].c, ni = P[i].nrm;

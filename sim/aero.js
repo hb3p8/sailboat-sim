@@ -1651,7 +1651,9 @@ export class Rig {
     if (!this.wake) this.wake = new FreeWake(NS + 2, this.wakeLen || WAKE_LEN);
     const w = this.wake;
     w.core = lat.core;
-    const G = new Float64Array(NS);
+    // Циркуляции полосок в буфер, а не в новый массив: `stepWake` идёт каждый шаг.
+    const G = this._wakeG && this._wakeG.length === NS
+      ? this._wakeG : (this._wakeG = new Float64Array(NS));
     for (let i = 0; i < NS; i++) {
       let s = 0;
       for (let k = 0; k < NCHORD; k++) s += lat.gamma[i * NCHORD + k];

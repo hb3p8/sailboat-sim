@@ -161,8 +161,7 @@ async function benchDrain() {
 
 // Один блок кадров в выбранном режиме. Возвращает время на кадр.
 async function benchBlock(mode) {
-  seaRefSsr.value = mode[1];
-  seaRefPlanar.value = mode[2];
+  seaRefPlanar.value = mode[1];
   await benchDrain();
   const t0 = performance.now();
   for (let i = 0; i < BENCH_BLOCK; i++) renderer.render(scene, camera);
@@ -196,16 +195,19 @@ async function benchRun() {
   if (benchBusy) return;
   benchBusy = true;
   const out = document.getElementById('v-bench');
-  const keep = [seaRefSsr.value, seaRefPlanar.value];
+  const keep = seaRefPlanar.value;
   try {
-    const modes = [['небо', 0, 0], ['SSR', 1, 0], ['зеркало', 0, 1]];
+    // Способов осталось два: марш по экрану убран из кода целиком (почему —
+    // у самого отражения в main.js). «Небо» здесь опорная точка: цена воды,
+    // которая не отражает ничего, кроме подложки.
+    const modes = [['небо', 0], ['зеркало', 1]];
     const ms = modes.map(() => 0);
     const draws = [];
     for (let w = 0; w < BENCH_WARM; w++) {
       for (const m of modes) await benchBlock(m);
     }
     for (const m of modes) {
-      seaRefSsr.value = m[1]; seaRefPlanar.value = m[2];
+      seaRefPlanar.value = m[1];
       draws.push(benchDraws());
     }
     for (let r = 0; r < BENCH_ROUNDS; r++) {
@@ -231,8 +233,7 @@ async function benchRun() {
                    'скорость записи команд, а не цена кадра. Сравнивать нельзя.');
     }
   } finally {
-    seaRefSsr.value = keep[0];
-    seaRefPlanar.value = keep[1];
+    seaRefPlanar.value = keep;
     benchBusy = false;
   }
 }

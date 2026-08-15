@@ -161,7 +161,7 @@ function readControls(dt) {
   // то, на чём лодка стоит сию секунду, и по нему видно, что качка не
   // подрисована: цифра ходит вместе с корпусом.
   ocean.uChop.value = parseFloat(ui.chop.value);
-  seaSsr.value = parseFloat(ui.ssr.value);
+  seaReflect.value = parseFloat(ui.refl.value);
   if (capSeaHs) {
     const hs = boat.seaHs || 0;
     const lp = 1.56 * seaState(o.windSpeed, boat.fetchM || 0).tp ** 2;

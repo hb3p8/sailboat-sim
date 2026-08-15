@@ -451,8 +451,8 @@
   <div class="cap"><span>Под лодкой</span><span id="v-seanow"></span></div>
   <label><span class="cap"><span>Крутизна гребня</span><span id="v-chop"></span></span>
     <input id="chop" type="range" min="0" max="1.6" step="0.05" value="0.85"></label>
-  <label><span class="cap"><span>Отражение сцены</span><span id="v-ssr"></span></span>
-    <input id="ssr" type="range" min="0" max="1" step="0.05" value="0.85"></label>
+  <label><span class="cap"><span>Отражение сцены</span><span id="v-refl"></span></span>
+    <input id="refl" type="range" min="0" max="1" step="0.05" value="0.85"></label>
   <label><span class="cap"><span>Способ отражения</span></span>
     <select id="searef"></select></label>
   <label><span class="cap"><span>Вид воды</span></span>
@@ -617,8 +617,8 @@ const BUILD = /*__BUILD__*/ null;
     chan: v => (+v === 0 ? 'нет' : 'до ' + (+v * 90).toFixed(0) + '°'),
     // Единица — как в воде: столько горизонтального смещения даёт спектр сам.
     // Ниже гребень приглаживается, выше заостряется сверх натурального.
-    // Ноль — вода отражает одно небо, как до появления SSR.
-    ssr: v => (+v === 0 ? 'только небо' : (+v * 100).toFixed(0) + '%'),
+    // Ноль — вода отражает одно небо, и это законный дешёвый вид.
+    refl: v => (+v === 0 ? 'только небо' : (+v * 100).toFixed(0) + '%'),
     chop: v => (+v === 0 ? 'синусы' : (+v).toFixed(2) +
                (Math.abs(+v - 1) < 0.03 ? ' (как в воде)' : '')),
   };

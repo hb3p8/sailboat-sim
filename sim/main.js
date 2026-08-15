@@ -2817,13 +2817,14 @@ const camWant = new Vector3(), camAimWant = new Vector3();
 // знают ничего. Разрешение меток запрашивается раз в несколько кадров — оно
 // асинхронное и само по себе не бесплатное.
 const perf = { frame: 0, phys: 0, scene: 0, draw: 0, hud: 0,
-               gpu: 0, gpuCompute: 0, steps: 0, calls: 0, tris: 0, fps: 0,
+               gpu: 0, gpuCompute: 0, gpuBatch: 0, steps: 0, calls: 0, tris: 0, fps: 0,
                // Сколько модельного времени брошено из-за бюджета шагов. Не
                // сглаживается: это счётчик, а не мгновенная величина.
                dropped: 0 };
 const PERF_K = 0.1;
 const smooth = (was, now) => was + (now - was) * PERF_K;
 let perfBusy = false;
+let perfAt = 0, perfRuns = 0;    // кадров и прогонов волны на прошлом замере меток
 const camPos = new Vector3(-14, 5, 0);
 const camAim = new Vector3();
 const prev = { x: 0, y: 0, psi: 0, phi: 0, zc: 0, th: 0 };
@@ -2945,8 +2946,14 @@ function frame() {
     acc -= DT;
     steps++;
     if (acc >= DT && performance.now() - tPhys > PHYS_BUDGET) {
-      perf.dropped += acc;      // сколько модельного времени выброшено
-      acc = 0;
+      // Бросаются только ЦЕЛЫЕ шаги. Остаток меньше шага не просрочен — он
+      // копится дальше и держит промежуточную позу: по нему кадр
+      // интерполируется между двумя состояниями физики. Обнуление вместе с ним
+      // добавляло к каждому срабатыванию до 33 мс лишнего скачка и на столько же
+      // завышало счётчик брошенного.
+      const drop = Math.floor(acc / DT) * DT;
+      perf.dropped += drop;     // сколько модельного времени выброшено
+      acc -= drop;              // остаток всегда в [0, DT)
       break;
     }
   }
@@ -3174,7 +3181,16 @@ function frame() {
   perf.tris = renderer.info.render.triangles;
   // Метки видеокарты: раз в десять кадров, и только когда предыдущий запрос
   // уже вернулся. Запрос асинхронный, дублировать его незачем.
-  if ((tick % 10) === 0 && !perfBusy && renderer.resolveTimestampsAsync) {
+  // `tick > 0` — не придирка: на нулевом кадре делить пакет не на что, и «счёт»
+  // вышел бы равен пакету, то есть вдвое завышенным.
+  if (tick > 0 && (tick % 10) === 0 && !perfBusy && renderer.resolveTimestampsAsync) {
+    // Кадров и прогонов волны с прошлого замера. Метка `compute` меряет ОДИН
+    // ПАКЕТ, а пакет идёт не каждый кадр: волна считается раз в `OCEAN_EVERY`.
+    // Показывать пакет как цену кадра — значит завысить её вдвое, а сравнивать
+    // с ним «до и после» разрежения — бессмысленно: пакет от разрежения не
+    // дешевеет вовсе, дешевеет кадр.
+    const frames = tick - perfAt, runs = ocean.runs - perfRuns;
+    perfAt = tick; perfRuns = ocean.runs;
     perfBusy = true;
     Promise.all([renderer.resolveTimestampsAsync('render'),
                  renderer.resolveTimestampsAsync('compute')])
@@ -3183,8 +3199,13 @@ function frame() {
         // прочего: с общей постоянной число догоняло бы правду сотню кадров, и
         // сравнивать два вида на глаз было бы нечем.
         const kg = 0.35;
+        const batch = renderer.info.compute.timestamp || 0;
         perf.gpu += ((renderer.info.render.timestamp || 0) - perf.gpu) * kg;
-        perf.gpuCompute += ((renderer.info.compute.timestamp || 0) - perf.gpuCompute) * kg;
+        perf.gpuBatch += (batch - perf.gpuBatch) * kg;
+        // Средняя цена счёта на ПОКАЗАННЫЙ кадр — то, что складывается с
+        // отрисовкой в цену кадра.
+        const avg = batch * runs / frames;
+        perf.gpuCompute += (avg - perf.gpuCompute) * kg;
       })
       .catch(() => {})
       .finally(() => { perfBusy = false; });
@@ -3256,20 +3277,28 @@ function updatePerf() {
   if (perfEl) {
     perfEl.textContent =
       rev() + '\n' +
-      'кадр   ' + ms(perf.frame) + ' мс   ' + perf.fps.toFixed(0) + ' к/с\n' +
+      // «ЦП» в подписи не для красоты: это время работы процессора от входа в
+      // кадр до постановки следующего, без ожидания развёртки и без работы
+      // видеокарты. Полный кадр виден по к/с рядом, и они НЕ обязаны сходиться:
+      // 16.4 мс при 46 к/с — это не противоречие, а ровно эта разница.
+      'кадр ЦП ' + ms(perf.frame) + ' мс   ' + perf.fps.toFixed(0) + ' к/с\n' +
       'физика ' + ms(perf.phys) + '   шагов ' + perf.steps.toFixed(1) +
         (perf.dropped > 0.05 ? '   брошено ' + perf.dropped.toFixed(1) + ' с' : '') + '\n' +
       'сцена  ' + ms(perf.scene) + '\n' +
       'рисов. ' + ms(perf.draw) + '\n' +
       'приб.  ' + ms(perf.hud) + '\n' +
-      'ГП     ' + ms(gpu) + '   (счёт ' + ms(perf.gpuCompute) + ')\n' +
+      // Счёт — СРЕДНИЙ на показанный кадр; в скобках цена одного пакета, а
+      // пакет идёт раз в OCEAN_EVERY кадров. Складывать с отрисовкой можно
+      // только первое.
+      'ГП     ' + ms(gpu) + '   (счёт ' + ms(perf.gpuCompute) +
+        ', пакет ' + ms(perf.gpuBatch) + ')\n' +
       'вызовов ' + perf.calls + '   тр. ' + (perf.tris / 1000).toFixed(0) + 'к';
   }
   if (gperfEl) {
     // Двумя строками, а не одной: одна не помещается на телефоне поперёк, а
     // ломать её посередине числа нельзя — читать становится нечего.
     gperfEl.textContent =
-      rev() + ' · ' + perf.fps.toFixed(0) + ' к/с · кадр ' + ms(perf.frame) + ' мс\n' +
+      rev() + ' · ' + perf.fps.toFixed(0) + ' к/с · кадр ЦП ' + ms(perf.frame) + ' мс\n' +
       'физ ' + ms(perf.phys) + ' · сцена ' + ms(perf.scene) +
       ' · рис ' + ms(perf.draw) +
       (perf.dropped > 0.05 ? ' · брошено ' + perf.dropped.toFixed(1) + ' с' : '') + '\n' +
@@ -3352,6 +3381,9 @@ window.sv20perf = () => ({
   геометрий: renderer.info.memory.geometries,
   текстур: renderer.info.memory.textures,
   пиксели: [Math.round(renderer.domElement.width), Math.round(renderer.domElement.height)],
+  // Прогонов волны и кадров: по их отношению «счёт» и переводится из цены
+  // пакета в цену кадра, и если оно вдруг единица — прибор врёт.
+  прогонов: ocean.runs, кадров: tick,
 });
 shapeSails(rigSideZ(1));
 // WebGPU поднимается асинхронно: устройство запрашивается у системы. До этого

@@ -61,6 +61,21 @@ function perfHead() {
     // по ней всё же можно, а для чтения ленты через неделю это важно.
     агент: (navigator.userAgent || '').slice(0, 120),
     пелена: !!(boat && boat.o && boat.o.wakeForces),
+    // КАЧЕСТВО, а не только устройство. Без этих чисел лента не говорит, в каком
+    // режиме снята: `dpr` выше — плотность экрана, а рисует рендерер в своей,
+    // и на телефоне она в полтора раза меньше. Сравнивать две сессии, не зная
+    // сетки воды, размера карты теней и деления пелены, значит сравнивать
+    // неизвестно что с неизвестно чем — ровно это и указано в ревью (§10.2).
+    качество: {
+      pixelRatio: renderer.getPixelRatio ? +renderer.getPixelRatio().toFixed(3) : null,
+      сетка: typeof SEG !== 'undefined' ? SEG : null,
+      тень: sun && sun.shadow && sun.shadow.mapSize ? sun.shadow.mapSize.width : null,
+      зеркало: typeof seaRefPlanar !== 'undefined' && seaRefPlanar ? seaRefPlanar.value : null,
+      волнаN: ocean && ocean.gridN != null ? ocean.gridN : null,
+      волнаРаз: ocean && ocean.every != null ? ocean.every : null,
+      пеленаДеление: boat && boat.o ? (boat.o.wakeSlice | 0) : null,
+      интерфейсМоб: typeof MOBILE_UI !== 'undefined' ? !!MOBILE_UI : null,
+    },
   };
 }
 
@@ -76,7 +91,8 @@ function perfSample(now) {
     сцена: +perf.scene.toFixed(2),
     рис: +perf.draw.toFixed(2),
     гп: +perf.gpu.toFixed(2),
-    счёт: +perf.gpuCompute.toFixed(2),
+    счёт: +perf.gpuCompute.toFixed(2),     // средний на показанный кадр
+    пакет: +perf.gpuBatch.toFixed(2),      // и цена одного пакета волны
     брошено: +perf.dropped.toFixed(2),
     выз: perf.calls,
     тр: perf.tris,

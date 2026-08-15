@@ -623,6 +623,11 @@ function solveGauss(M, out, n) {
 // вырастает с пяти сантиметров до тридцати — примерно в толщину той вихревой
 // пелены, что видно за парусом в дыму.
 const CORE_GROW = 0.06;
+
+// Сколько молодых рядов пелены считается КАЖДЫЙ шаг, сколько бы ни было деление
+// работы по шагам. Четыре ряда это восьмая доля цепочки и первые 0.13 секунды
+// её жизни — та часть, которую парус в основном и видит.
+const NEAR_EXACT = 4;
 const FOURPI = 4 * Math.PI;
 
 export class FreeWake {
@@ -678,6 +683,11 @@ export class FreeWake {
     // текущим ветром: после поворота весь дальний след разом менял направление,
     // хотя ближние узлы стояли на месте. Памяти о том, куда шла лодка, не было
     // ровно никакой. Теперь направление стареет вместе с рядом.
+    // Деление работы по шагам: 1 — считать всё каждый шаг (точно), K — по
+    // 1/K узлов за шаг. Ставится снаружи, см. `Rig.stepWake`.
+    this.slice = 1;
+    this.phase = 0;
+    this.selN = -1;      // −1 — считать всех
     this.tdx = new Float64Array(len);
     this.tdy = new Float64Array(len);
     this.tdz = new Float64Array(len);
@@ -942,6 +952,26 @@ export class FreeWake {
   //
   // Это и есть та самая петля, в которой живёт 95% цены пелены: пятьсот
   // шестьдесят точек на две тысячи рёбер — миллион с лишним отрезков за шаг.
+  // РАБОТА ДЕЛИТСЯ ПО ШАГАМ, а не считается реже.
+  //
+  // Разница существенная. «Реже» — это один шаг из трёх дороже втрое, то есть
+  // рывок в кадре: на телефоне такой шаг стоил бы десяток миллисекунд и был бы
+  // виден дрожанием. Здесь же каждый шаг делает свою треть, и цена ровная.
+  //
+  // Делится по ВОЗРАСТУ узла, и молодые ряды не делятся вовсе. Возле кромки
+  // поле меняется быстро и градиенты велики — именно эти узлы и решают, что
+  // видит парус; дальний след дрейфует медленно и почти однородно, и его
+  // скорость, посчитанная два шага назад, за это время устаревает на
+  // сантиметры. `NEAR_EXACT` рядов считаются всегда, остальные по очереди.
+  //
+  // Что при этом остаётся ТОЧНЫМ и почему это важнее скорости сноса: сама
+  // маршевая схема. Ряд сходит каждый шаг, стареет каждый шаг, ближнее кольцо
+  // соединяет сегодняшнюю кромку с сегодняшним же первым рядом, циркуляции
+  // пишутся каждый шаг. Приближается ровно одно — скорость, с которой узел
+  // переезжает, — и приближается на два шага давности.
+  //
+  // `slice` = 1 (по умолчанию) означает точный счёт, как было: настольная
+  // машина ничего не замечает, а эталон обязан совпасть побайтово.
   selfInduce() {
     const L = this.len, F = this.fil, N = this.n;
     if (!this.sx || this.sx.length < F * L) {
@@ -951,14 +981,56 @@ export class FreeWake {
       this.qx = new Float64Array(F * L);
       this.qy = new Float64Array(F * L);
       this.qz = new Float64Array(F * L);
+      this.tx = new Float64Array(F * L);
+      this.ty = new Float64Array(F * L);
+      this.tz = new Float64Array(F * L);
+      this.sel = new Int32Array(F * L);
     }
+    if (this.selN < 0) {
+      // Точный путь оставлен отдельной веткой нарочно: он ходит на настольной
+      // машине и в батареях, и лишней арифметики в нём быть не должно.
+      for (let f = 0; f < F; f++) {
+        for (let i = 0; i < N; i++) {
+          const j = f * N + i, k = f * L + i;
+          this.qx[j] = this.x[k]; this.qy[j] = this.y[k]; this.qz[j] = this.z[k];
+        }
+      }
+      this.field(this.qx, this.qy, this.qz, F * N, this.sx, this.sy, this.sz);
+      return;
+    }
+    const m = this.selN;
+    for (let q = 0; q < m; q++) {
+      const j = this.sel[q], f = (j / N) | 0, k = f * L + (j - f * N);
+      this.qx[q] = this.x[k]; this.qy[q] = this.y[k]; this.qz[q] = this.z[k];
+    }
+    this.field(this.qx, this.qy, this.qz, m, this.tx, this.ty, this.tz);
+    for (let q = 0; q < m; q++) {
+      const j = this.sel[q];
+      this.sx[j] = this.tx[q]; this.sy[j] = this.ty[q]; this.sz[j] = this.tz[q];
+    }
+  }
+
+  // Кого считать на этом шаге. Зовётся ОДИН раз за шаг и до всего прочего:
+  // выбором пользуются оба дорогих поля — и своё (`selfInduce`), и чужое
+  // (решётка в узлах, `Rig.stepWake`). Считать их по разным наборам значило бы
+  // складывать в скорость узла две половины разной свежести.
+  //
+  // `selN < 0` — считать всех: это и есть точный режим при `slice` = 1.
+  pickSlice() {
+    const L = this.len, F = this.fil, N = this.n;
+    const K = Math.max(1, this.slice | 0);
+    if (!this.sel || this.sel.length < F * L) this.sel = new Int32Array(F * L);
+    if (K === 1) { this.selN = -1; return; }
+    const ph = this.phase % K;
+    this.phase = (this.phase + 1) % K;
+    let m = 0;
     for (let f = 0; f < F; f++) {
       for (let i = 0; i < N; i++) {
-        const j = f * N + i, k = f * L + i;
-        this.qx[j] = this.x[k]; this.qy[j] = this.y[k]; this.qz[j] = this.z[k];
+        if (i >= NEAR_EXACT && (i % K) !== ph) continue;
+        this.sel[m++] = f * N + i;
       }
     }
-    this.field(this.qx, this.qy, this.qz, F * N, this.sx, this.sy, this.sz);
+    this.selN = m;
   }
 
   // `seed(f, out)` даёт точку схода нити, `vel(x, y, z, out, j)` — местную

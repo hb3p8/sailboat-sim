@@ -1721,17 +1721,45 @@ export class Rig {
       this.lqz = new Float64Array(N); this.lvx = new Float64Array(N);
       this.lvy = new Float64Array(N); this.lvz = new Float64Array(N);
     }
-    for (let f = 0; f < w.fil; f++) {
-      for (let i = 0; i < w.n; i++) {
-        const k = f * w.len + i, j = f * w.n + i;
+    // Кого считаем на этом шаге. Выбор делается ЗДЕСЬ и один раз: тем же
+    // набором пелена посчитает и своё поле, иначе в скорость узла сложились бы
+    // две половины разной свежести (`FreeWake.pickSlice`).
+    w.slice = Math.max(1, b.o.wakeSlice | 0);
+    w.pickSlice();
+    lat.packBound(true);
+    if (w.selN < 0) {
+      for (let f = 0; f < w.fil; f++) {
+        for (let i = 0; i < w.n; i++) {
+          const k = f * w.len + i, j = f * w.n + i;
+          const rx = w.x[k] - b.x, ry = w.y[k] - b.y;
+          this.lqx[j] = rx * c + ry * sn;      // в оси корпуса
+          this.lqy[j] = -rx * sn + ry * c;
+          this.lqz[j] = w.z[k];
+        }
+      }
+      lat.fieldBound(this.lqx, this.lqy, this.lqz, P, this.lvx, this.lvy, this.lvz);
+    } else {
+      // Та же работа, но только по выбранным узлам, и ответ раскладывается по
+      // их местам. Непосчитанные держат прошлое значение — в этом вся затея.
+      const m = w.selN, sel = w.sel;
+      if (!this.ltx || this.ltx.length < this.lqx.length) {
+        const N = this.lqx.length;
+        this.ltx = new Float64Array(N); this.lty = new Float64Array(N);
+        this.ltz = new Float64Array(N);
+      }
+      for (let q = 0; q < m; q++) {
+        const j = sel[q], f = (j / w.n) | 0, k = f * w.len + (j - f * w.n);
         const rx = w.x[k] - b.x, ry = w.y[k] - b.y;
-        this.lqx[j] = rx * c + ry * sn;      // в оси корпуса
-        this.lqy[j] = -rx * sn + ry * c;
-        this.lqz[j] = w.z[k];
+        this.lqx[q] = rx * c + ry * sn;
+        this.lqy[q] = -rx * sn + ry * c;
+        this.lqz[q] = w.z[k];
+      }
+      lat.fieldBound(this.lqx, this.lqy, this.lqz, m, this.ltx, this.lty, this.ltz);
+      for (let q = 0; q < m; q++) {
+        const j = sel[q];
+        this.lvx[j] = this.ltx[q]; this.lvy[j] = this.lty[q]; this.lvz[j] = this.ltz[q];
       }
     }
-    lat.packBound(true);
-    lat.fieldBound(this.lqx, this.lqy, this.lqz, P, this.lvx, this.lvy, this.lvz);
     const vel = (X, Y, Z, out, j) => {
       // Наведённое решёткой посчитано заранее, в осях корпуса — вернуть в мир.
       const tx = this.lvx[j], ty = this.lvy[j];

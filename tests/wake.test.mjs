@@ -804,6 +804,53 @@ console.log('\nЛодка с пеленой для картинки и без н
     inside + ' из ' + checked);
 }
 
+// --- работа по шагам: та же модель, ровнее цена --------------------------------
+//
+// На телефоне пелена стоила больше половины процессорной части кадра, и первым
+// заходом её там просто выключили. Выключение — это другая модель: скос считают
+// прямые лучи, а запаздывание подобранный фильтр, и установившийся ход уезжает
+// на проценты.
+//
+// Деление работы устроено иначе: схема остаётся ТА ЖЕ (ряд сходит каждый шаг,
+// стареет каждый шаг, ближнее кольцо соединяет сегодняшнюю кромку с сегодняшним
+// рядом), приближается ровно одно — свежесть скорости сноса у ДАЛЬНИХ узлов.
+// Молодые ряды считаются каждый шаг всегда.
+//
+// Отсюда и проверка: при любом делении установившийся ход обязан совпасть. Не
+// «примерно», а до разряда, который вообще видно, — иначе это не деление
+// работы, а другая модель, и называть её так нельзя.
+{
+  const wrap = a => ((a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+  const hold = (slice, twa, sheet, secs) => {
+    const b = new Boat(PACK);
+    b.o.freeWake = true; b.o.wakeForces = true; b.o.wakeSlice = slice;
+    b.o.windSpeed = 6; b.o.windDir = 100 * D;
+    b.o.sheet = sheet * D; b.o.twist = 8 * D;
+    b.o.crewHike = -1; b.o.crewMass = 219.9; b.u = 3;
+    b.wind.o.gust = 0; b.wind.o.shift = 0;
+    const psi = (100 - twa) * D;
+    for (let i = 0; i < secs * 30; i++) {
+      b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D,
+        -(2.2 * wrap(psi - b.psi) - 0.9 * b.r)));
+      b.step(1 / 30);
+    }
+    return b;
+  };
+  console.log('\nДеление работы пелены по шагам, ветер 6 м/с, 40 с на курс:\n');
+  let worst = 0;
+  for (const [twa, sheet] of [[45, 14], [90, 35], [160, 80]]) {
+    const a = hold(1, twa, sheet, 40), c = hold(3, twa, sheet, 40);
+    const d = Math.abs(c.telemetry.speedKn - a.telemetry.speedKn);
+    worst = Math.max(worst, d);
+    console.log('  TWA %s°: точно %s уз, по трети %s уз, крен %s против %s°',
+      String(twa).padStart(3), a.telemetry.speedKn.toFixed(4),
+      c.telemetry.speedKn.toFixed(4), (a.phi / D).toFixed(2), (c.phi / D).toFixed(2));
+  }
+  console.log('');
+  check('деление работы не меняет установившийся ход', worst < 0.005,
+    'худшее расхождение ' + worst.toFixed(4) + ' уз');
+}
+
 // --- поле пелены: пачкой и по точке — одно и то же -----------------------------
 //
 // У `FreeWake` два способа спросить поле: `induced()` по одной точке и `field()`

@@ -296,6 +296,27 @@
     box-shadow: 0 0 10px rgba(255, 207, 90, .45);
   }
 
+  /* Тайминги. В отладке — карточкой под приборами, в игровом — строкой под
+     компасом: числа нужны на телефоне не меньше, а места там нет. */
+  #perf {
+    /* Над строкой подсказок, а не поверх неё: подсказки прибиты к низу. */
+    position: absolute; left: 12px; top: auto; bottom: 56px; z-index: 5;
+    font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre; opacity: .85; pointer-events: none;
+  }
+  body.game #perf { display: none; }
+  /* Ширина ограничена и перенос разрешён: строка длинная, а по краям стоят
+     скорость и ветер — без ограничения она лезет прямо на них. */
+  #gperf {
+    position: absolute; left: 50%; transform: translateX(-50%); top: 86px;
+    width: min(62%, 260px);
+    font: 10px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: rgba(226, 238, 252, .72); text-shadow: 0 1px 4px rgba(0, 8, 18, .85);
+    text-align: center; pointer-events: none; display: none;
+    white-space: pre-line;
+  }
+  body.game #gperf { display: block; }
+
   /* Экипаж: ступенями от борта до борта, середина — диаметральная. */
   #gcrew { right: 10px; bottom: 92px; width: 138px; }
   #gcrew .row { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
@@ -332,6 +353,7 @@
 <div id="game">
   <div id="gcomp"><canvas id="gcompc" width="720" height="68"></canvas></div>
   <div id="ghead">—</div>
+  <div id="gperf">—</div>
 
   <div id="gspeed" class="pane"><div class="cap">скорость</div><b>—</b><i>уз</i></div>
   <div id="gwind" class="pane"><div class="cap">ветер</div><b>—</b><i>уз</i></div>
@@ -367,6 +389,7 @@
   </div>
 </div>
 <div id="hud" class="card"></div>
+<div id="perf" class="card"></div>
 <div id="panel" class="card">
   <h2>Условия</h2>
   <label><span class="cap"><span>Истинный ветер</span><span id="v-wind"></span></span>

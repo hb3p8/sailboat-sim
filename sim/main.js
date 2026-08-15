@@ -61,7 +61,11 @@ const camera = new PerspectiveCamera(CAM_FOV, 1, FAR_WATER ? 0.5 : 0.15,
 // на четыре слоя ниже причины. Причин же всего две, и обе снаружи страницы:
 // адрес не защищённый или браузер не умеет. Разбирается это здесь, чтобы
 // человек с телефона читал, что ему делать, а не имя метода в сборщике шейдеров.
-const renderer = new WebGPURenderer({ antialias: true });
+// `trackTimestamp` — В КОНСТРУКТОР, а не свойством после. Свойство ставится на
+// рендерер, а метки времени заводит СЛОЙ ПОД ним, и он читает свой флаг один
+// раз, из этих же параметров. Поставленное потом свойство он не видит вовсе:
+// метки молча не собираются, и на экране стоит ровный ноль.
+const renderer = new WebGPURenderer({ antialias: true, trackTimestamp: true });
 
 function gpuTrouble() {
   if (navigator.gpu) return null;
@@ -2929,6 +2933,28 @@ function cycleCam() {
 // ---------------------------------------------------------------- цикл
 
 let acc = 0, last = performance.now() / 1000, tick = 0;
+
+// --- тайминги ------------------------------------------------------------
+//
+// Кадр разбирается на части, потому что «медленно» — не диагноз. Тормозить
+// может физика (процессор, шаг 1/30 и до восьми шагов на кадр), может сцена
+// (тоже процессор: паруса, экипаж, камера, отладочная геометрия), может
+// рисование, а может видеокарта — и на ней ещё отдельно счётные проходы
+// (волна БПФ и поле следа) и собственно проход отрисовки.
+//
+// Числа сглаживаются: мгновенные скачут так, что читать их нельзя, а искать по
+// ним виновника — тем более. Постоянная маленькая (0.1), чтобы отклик на
+// переключение вида был виден сразу.
+//
+// Видеокарта меряется её собственными метками времени (`trackTimestamp`), а не
+// секундомером на процессоре: рисование асинхронное, и часы процессора о нём не
+// знают ничего. Разрешение меток запрашивается раз в несколько кадров — оно
+// асинхронное и само по себе не бесплатное.
+const perf = { frame: 0, phys: 0, scene: 0, draw: 0, hud: 0,
+               gpu: 0, gpuCompute: 0, steps: 0, calls: 0, tris: 0, fps: 0 };
+const PERF_K = 0.1;
+const smooth = (was, now) => was + (now - was) * PERF_K;
+let perfBusy = false;
 const camPos = new Vector3(-14, 5, 0);
 const camAim = new Vector3();
 const prev = { x: 0, y: 0, psi: 0, phi: 0, zc: 0, th: 0 };
@@ -2990,7 +3016,8 @@ function frame() {
     return;
   }
 
-  const now = performance.now() / 1000;
+  const tFrame = performance.now();
+  const now = tFrame / 1000;
   const dt = Math.min(0.25, now - last);
   last = now;
   acc += dt;
@@ -3014,6 +3041,7 @@ function frame() {
   if (benchFrozen()) { readControls(DT); benchPose(boat, prev); acc = 0; }
 
   let steps = 0;
+  const tPhys = performance.now();
   while (acc >= DT && steps < 8) {
     prev.x = boat.x; prev.y = boat.y; prev.psi = boat.psi; prev.phi = boat.phi;
     prev.zc = boat.zc; prev.th = boat.th;
@@ -3031,6 +3059,9 @@ function frame() {
     acc -= DT;
     steps++;
   }
+  const tScene = performance.now();
+  perf.phys = smooth(perf.phys, tScene - tPhys);
+  perf.steps = smooth(perf.steps, steps);
   const a = Math.min(1, acc / DT);
   const ix = prev.x + (boat.x - prev.x) * a;
   const iy = prev.y + (boat.y - prev.y) * a;
@@ -3230,12 +3261,38 @@ function frame() {
   if (benchFrozen()) { benchAim(camera); benchQuiet(); }
 
   updateCrew();
+  const tDraw = performance.now();
+  perf.scene = smooth(perf.scene, tDraw - tScene);
   if (orthoView) renderOrtho(bx, bz, fx, fz, sx, sz);
   else renderer.render(scene, camera);
-  if ((tick % 3) === 0) { updateHud(t); gameHud(t);
+  const tHud = performance.now();
+  perf.draw = smooth(perf.draw, tHud - tDraw);
+  if ((tick % 3) === 0) { updateHud(t); gameHud(t); updatePerf();
     if (debugMode >= 1 && debugMode <= 3) updateRig(t);
     if (debugMode === 4) updateBalCard();
     if (topShown) updateTop(); }
+  perf.hud = smooth(perf.hud, performance.now() - tHud);
+  perf.frame = smooth(perf.frame, performance.now() - tFrame);
+  perf.fps = smooth(perf.fps, dt > 0 ? 1 / dt : 0);
+  perf.calls = renderer.info.render.drawCalls;
+  perf.tris = renderer.info.render.triangles;
+  // Метки видеокарты: раз в десять кадров, и только когда предыдущий запрос
+  // уже вернулся. Запрос асинхронный, дублировать его незачем.
+  if ((tick % 10) === 0 && !perfBusy && renderer.resolveTimestampsAsync) {
+    perfBusy = true;
+    Promise.all([renderer.resolveTimestampsAsync('render'),
+                 renderer.resolveTimestampsAsync('compute')])
+      .then(() => {
+        // Метки приходят раз в десять кадров, поэтому сглаживаются сильнее
+        // прочего: с общей постоянной число догоняло бы правду сотню кадров, и
+        // сравнивать два вида на глаз было бы нечем.
+        const kg = 0.35;
+        perf.gpu += ((renderer.info.render.timestamp || 0) - perf.gpu) * kg;
+        perf.gpuCompute += ((renderer.info.compute.timestamp || 0) - perf.gpuCompute) * kg;
+      })
+      .catch(() => {})
+      .finally(() => { perfBusy = false; });
+  }
   tick++;
   requestAnimationFrame(frame);
 }
@@ -3261,6 +3318,42 @@ const HUD_ROWS = [
 function relBearing(t) {
   const a = Math.atan2(t.curY, t.curX) - boat.psi;
   return Math.round(Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) / D);
+}
+
+// Тайминги на экран. Два вида, одни и те же числа: в отладке — столбцом с
+// подписями, в игровом — одной строкой, потому что места там нет, а цифры на
+// телефоне нужны как раз больше всего.
+//
+// Что показывается и почему именно это: кадр целиком и частота (есть ли вообще
+// беда), физика и сцена (процессор, и они разделены — тормозить может любая),
+// рисование (процессор, сборка команд) и видеокарта двумя числами: проход
+// отрисовки и счётные проходы (волна и след). Виновника видно сразу, без
+// профилировщика, которого на телефоне и нет.
+const perfEl = document.getElementById('perf');
+const gperfEl = document.getElementById('gperf');
+const ms = v => v.toFixed(1);
+
+function updatePerf() {
+  const gpu = perf.gpu + perf.gpuCompute;
+  if (perfEl) {
+    perfEl.textContent =
+      'кадр   ' + ms(perf.frame) + ' мс   ' + perf.fps.toFixed(0) + ' к/с\n' +
+      'физика ' + ms(perf.phys) + '   шагов ' + perf.steps.toFixed(1) + '\n' +
+      'сцена  ' + ms(perf.scene) + '\n' +
+      'рисов. ' + ms(perf.draw) + '\n' +
+      'приб.  ' + ms(perf.hud) + '\n' +
+      'ГП     ' + ms(gpu) + '   (счёт ' + ms(perf.gpuCompute) + ')\n' +
+      'вызовов ' + perf.calls + '   тр. ' + (perf.tris / 1000).toFixed(0) + 'к';
+  }
+  if (gperfEl) {
+    // Двумя строками, а не одной: одна не помещается на телефоне поперёк, а
+    // ломать её посередине числа нельзя — читать становится нечего.
+    gperfEl.textContent =
+      perf.fps.toFixed(0) + ' к/с · кадр ' + ms(perf.frame) + ' мс\n' +
+      'физ ' + ms(perf.phys) + ' · сцена ' + ms(perf.scene) +
+      ' · рис ' + ms(perf.draw) + '\n' +
+      'ГП ' + ms(perf.gpu) + ' + счёт ' + ms(perf.gpuCompute);
+  }
 }
 
 function updateHud(t) {
@@ -3326,6 +3419,18 @@ if (typeof BUILD !== 'undefined' && BUILD) {
 // Тот же дамп доступен из консоли — удобно, когда файл забирать некуда:
 // copy(JSON.stringify(sv20dump()))
 window.sv20dump = dumpState;
+// Тайминги наружу — тем же способом, что и дамп состояния: на телефоне консоли
+// нет, а на настольной машине по ним удобно собирать замеры не глазами с экрана.
+//   copy(JSON.stringify(sv20perf()))
+window.sv20perf = () => ({
+  ...perf,
+  gpuЕсть: !!(renderer.info.render.timestamp || renderer.info.compute.timestamp),
+  метки: !!renderer.trackTimestamp,
+  вызовов: renderer.info.render.calls,
+  геометрий: renderer.info.memory.geometries,
+  текстур: renderer.info.memory.textures,
+  пиксели: [Math.round(renderer.domElement.width), Math.round(renderer.domElement.height)],
+});
 shapeSails(rigSideZ(1));
 // WebGPU поднимается асинхронно: устройство запрашивается у системы. До этого
 // рисовать нечем, поэтому цикл запускается после init.

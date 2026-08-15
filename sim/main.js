@@ -2417,6 +2417,8 @@ function syncPanelFromBoat() {
   set('jibdraft', Math.round((o.jibDraft != null ? o.jibDraft : o.draft) * 100));
   set('mainup', o.mainUp !== false);
   set('jibup', o.jibUp !== false);
+  set('genup', !!o.gennakerUp);
+  set('gensheet', Math.round(gennakerSheetOf(o) / D));
   set('oldsail', false);
   set('fetch', o.fetch / 1000);
   set('fetchover', o.fetchOverride);
@@ -2704,7 +2706,7 @@ const ui = {};
 for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draft',
                   'fetch', 'fetchover', 'cur', 'shd0', 'shk', 'shg', 'chan', 'chop', 'refl',
                   'mainsheet', 'jibsheet', 'mainup', 'jibup', 'oldsail',
-                  'jibtwist', 'jibdraft'])
+                  'jibtwist', 'jibdraft', 'genup', 'gensheet'])
   ui[id] = document.getElementById(id);
 
 // --- вода на панели -----------------------------------------------------------

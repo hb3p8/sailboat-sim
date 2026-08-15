@@ -148,6 +148,8 @@
     margin-top: 2px; font-size: 10.5px; color: var(--dim);
     font-variant-numeric: tabular-nums;
   }
+  #gennote { font-size: 10.5px; color: var(--dim); line-height: 1.5; margin: -4px 0 8px; }
+  #gennote b { color: var(--fg); font-weight: 600; }
   #rignote b { color: var(--fg); font-weight: 600; }
   #rignote .slack { color: var(--accent); }
   #keys { bottom: 14px; left: 14px; color: var(--dim); font-size: 12px; }
@@ -440,6 +442,13 @@
   <label><span class="cap"><span>Пузо</span><span id="v-jibdraft"></span></span>
     <input id="jibdraft" type="range" min="40" max="130" step="5" value="100"></label>
 
+  <h2>Генакер</h2>
+  <label><span class="cap">
+      <span><input id="genup" type="checkbox"> Поднят · шкот</span>
+      <span id="v-gensheet"></span></span>
+    <input id="gensheet" type="range" min="10" max="110" step="1" value="40"></label>
+  <div id="gennote">Подъём убирает стаксель — так его и носят. Клавиша <b>N</b>.</div>
+
   <h2>Модель</h2>
   <label class="flat"><span class="cap">
       <span><input id="oldsail" type="checkbox"> Прежняя физика паруса</span>
@@ -497,7 +506,8 @@
 </div>
 <div id="keys" class="card">
   <b>←→</b> руль &nbsp;·&nbsp; <b>↑↓</b> шкот &nbsp;·&nbsp;
-  <b>R F</b> стаксель-шкот &nbsp;·&nbsp; <b>H</b> авторулевой &nbsp;·&nbsp;
+  <b>R F</b> стаксель-шкот &nbsp;·&nbsp; <b>N</b> генакер &nbsp;·&nbsp;
+  <b>H</b> авторулевой &nbsp;·&nbsp;
   <b>T</b> чёрная тень &nbsp;·&nbsp;
   <b>C</b> камера &nbsp;·&nbsp; <b>G</b> отладка: поток, пелена, пелена на чёрном, баланс &nbsp;·&nbsp;
   <b>P</b> дамп &nbsp;·&nbsp; <b>X</b> сброс &nbsp;·&nbsp; <b>?</b> подсказки<br>

@@ -102,6 +102,20 @@ function readControls(dt) {
     if (byKey) for (const el of [ui.mainsheet, ui.jibsheet])
       el.dispatchEvent(new Event('input'));
     o.mainUp = ui.mainup.checked;
+    // ГЕНАКЕР ЧИТАЕТСЯ ПЕРВЫМ, и стаксель — уже с оглядкой на него.
+    //
+    // Панель переписывает состояние парусов с галочек КАЖДЫЙ кадр. Пока этого
+    // здесь не было, поднятый клавишей генакер убирал стаксель ровно на один
+    // кадр: следующий же проход возвращал его галочкой обратно, и на воде
+    // оказывались оба паруса разом — то, чего в этой постановке быть не должно.
+    if (ui.genup) {
+      if (ui.genup.checked !== !!o.gennakerUp) boat.setGennaker(ui.genup.checked);
+      // Галочка стакселя при поднятом генакере не спорит, а показывает: он
+      // убран, и поднять его нечем, пока не убран генакер.
+      ui.jibup.disabled = !!o.gennakerUp;
+      if (o.gennakerUp) ui.jibup.checked = false;
+      o.genSheet = parseFloat(ui.gensheet.value) * D;
+    }
     o.jibUp = ui.jibup.checked;
     // Переключатель физики паруса живёт не в состоянии лодки, а рядом с
     // моделью: он про то, ЧЕМ считать, а не про то, как лодку ведут. Оттого его

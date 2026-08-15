@@ -213,13 +213,30 @@ class Ocean {
     // один раз — в горячем пути новых массивов быть не должно, а `[...a, b]`
     // это ровно новый массив каждый кадр.
     this.kBatch = [...this.kFrame, this.kProbe];
-    // Пакет, РАЗЛОЖЕННЫЙ ПО КАДРАМ. Собирается один раз: в горячем пути новых
-    // массивов быть не должно.
+    // Пакет, РАЗЛОЖЕННЫЙ ПО КАДРАМ, и делится он ПО ЦЕНЕ, а не по числу
+    // проходов. Первая попытка резала пополам по счёту, и доли вышли 5.1 и 1.5
+    // мс: БПФ дороже прочих проходов в разы, и в первую долю их попало четыре, а
+    // во вторую два. Собирается один раз — в горячем пути новых массивов быть не
+    // должно.
     this.kSlices = [];
     {
-      const per = Math.ceil(this.kBatch.length / Math.max(1, OCEAN_EVERY));
-      for (let i = 0; i < this.kBatch.length; i += per)
-        this.kSlices.push(this.kBatch.slice(i, i + per));
+      const w = this.kWeight.concat([1]);            // проба весит как обычный проход
+      const parts = Math.max(1, OCEAN_EVERY);
+      const total = w.reduce((a, b) => a + b, 0);
+      let acc = 0, from = 0;
+      for (let i = 0; i < this.kBatch.length; i++) {
+        acc += w[i];
+        const last = i === this.kBatch.length - 1;
+        // Граница ставится в БЛИЖНЮЮ сторону, а не по первому превышению: проход
+        // неделим, и вопрос только в том, с какой стороны от цели он дешевле.
+        // По первому превышению выходило 57/43, с округлением — 46/54.
+        const target = total * (this.kSlices.length + 1) / parts;
+        const next = i + 1 < w.length ? w[i + 1] : 0;
+        if (last || (acc + next / 2 >= target && this.kSlices.length < parts - 1)) {
+          this.kSlices.push(this.kBatch.slice(from, i + 1));
+          from = i + 1;
+        }
+      }
     }
     this._phase = 0;
 
@@ -363,14 +380,24 @@ class Ocean {
 
   // ----------------------------------------------------------------- кадр
 
+  // Вес прохода для разложения по кадрам. БПФ — это log2(N) шагов бабочки на
+  // каждую из N строк, остальные проходы обходят решётку один раз.
+  //
+  // Тройка не с потолка, а решена из замера метками видеокарты. Доли вышли
+  // 0.262 и 0.197 мс при составе 4 БПФ + 4 прочих против 2 БПФ + 6 прочих;
+  // отсюда БПФ 0.049 мс, прочий проход 0.0165 — ровно втрое.
+  static FFT_WEIGHT = 3;
+
   _buildFrameKernels() {
     this.kFrame = [];
+    this.kWeight = [];
+    const put = (k, w) => { this.kFrame.push(k); this.kWeight.push(w); };
     for (const c of this.cascades) {
-      this.kFrame.push(this._evolveKernel(c));
-      this.kFrame.push(this._fftKernel(c, c.specA, c.specB, true));
-      this.kFrame.push(this._fftKernel(c, c.specB, c.specA, false));
-      this.kFrame.push(this._assembleKernel(c));
-      this.kFrame.push(this._normalKernel(c));
+      put(this._evolveKernel(c), 1);
+      put(this._fftKernel(c, c.specA, c.specB, true), Ocean.FFT_WEIGHT);
+      put(this._fftKernel(c, c.specB, c.specA, false), Ocean.FFT_WEIGHT);
+      put(this._assembleKernel(c), 1);
+      put(this._normalKernel(c), 1);
     }
   }
 

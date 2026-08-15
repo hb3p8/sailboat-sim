@@ -3518,6 +3518,31 @@ window.sv20terrain = () => {
     туман: scene.fog ? [scene.fog.near, scene.fog.far] : null,
   };
 };
+// Цена волны по долям, замером с осушением очереди: `await sv20ocean()`.
+//
+// Прибор кадра показывает метку видеокарты, а она приходит раз в десять кадров и
+// сглажена. Здесь же видно САМУ ПОСЛЕДОВАТЕЛЬНОСТЬ: доля за долей. Ради этого и
+// заведено — разложение пакета по кадрам проверяется ровностью, а ровность по
+// сглаженному числу не увидеть.
+window.sv20ocean = async (n = 12) => {
+  // Меряется МЕТКАМИ ВИДЕОКАРТЫ, а не стенными часами с осушением очереди.
+  // Осушение на этой машине стоит полторы-три миллисекунды при цене всей волны
+  // около одной, и первый заход это показал наглядно: весь пакет вышел 3.0 мс, а
+  // две его половины — 4.6 и 1.9. Мерилась отправка, а не работа.
+  const доли = [];
+  for (let i = 0; i < n; i++) {
+    ocean.step(boat.t + i / 30);
+    await renderer.resolveTimestampsAsync('compute');
+    доли.push(+(renderer.info.compute.timestamp || 0).toFixed(3));
+  }
+  renderer.compute(ocean.kBatch);
+  await renderer.resolveTimestampsAsync('compute');
+  return {
+    доли,
+    пакетЦеликом: +(renderer.info.compute.timestamp || 0).toFixed(3),
+    проходовВдолях: ocean.kSlices.map(s => s.length),
+  };
+};
 // Тот же дамп доступен из консоли — удобно, когда файл забирать некуда:
 // copy(JSON.stringify(sv20dump()))
 window.sv20dump = dumpState;

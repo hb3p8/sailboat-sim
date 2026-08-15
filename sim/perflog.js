@@ -77,6 +77,7 @@ function perfSample(now) {
     рис: +perf.draw.toFixed(2),
     гп: +perf.gpu.toFixed(2),
     счёт: +perf.gpuCompute.toFixed(2),
+    брошено: +perf.dropped.toFixed(2),
     выз: perf.calls,
     тр: perf.tris,
     // Условия, от которых цена кадра действительно зависит: ветер поднимает

@@ -2780,7 +2780,10 @@ const camWant = new Vector3(), camAimWant = new Vector3();
 // знают ничего. Разрешение меток запрашивается раз в несколько кадров — оно
 // асинхронное и само по себе не бесплатное.
 const perf = { frame: 0, phys: 0, scene: 0, draw: 0, hud: 0,
-               gpu: 0, gpuCompute: 0, steps: 0, calls: 0, tris: 0, fps: 0 };
+               gpu: 0, gpuCompute: 0, steps: 0, calls: 0, tris: 0, fps: 0,
+               // Сколько модельного времени брошено из-за бюджета шагов. Не
+               // сглаживается: это счётчик, а не мгновенная величина.
+               dropped: 0 };
 const PERF_K = 0.1;
 const smooth = (was, now) => was + (now - was) * PERF_K;
 let perfBusy = false;
@@ -2869,6 +2872,23 @@ function frame() {
   // важен: поза ставится после чтения и перебивает ветер с ползунка.
   if (benchFrozen()) { readControls(DT); benchPose(boat, prev); acc = 0; }
 
+  // Догон шагов ограничен ВРЕМЕНЕМ, а не только их числом.
+  //
+  // Раньше стояло одно `steps < 8`, и этого мало: считалось, что восемь шагов
+  // всегда дешевле кадра. На телефоне не всегда. Замер сессии (docs/perf.md,
+  // §3) поймал петлю в работе: кадр стал длиннее -> накопилось времени на
+  // лишний шаг -> кадр стал ещё длиннее. За полторы минуты физика на кадр
+  // выросла вдвое, притом сам шаг подорожал только в полтора раза — вторая
+  // половина роста пришла ровно отсюда.
+  //
+  // Поэтому: вышли за бюджет — доедаем текущий шаг и БРОСАЕМ остаток. Модельное
+  // время при этом отстаёт от настоящего, и это честный размен: лодка идёт
+  // чуть медленнее реальной, зато кадр не встаёт. Отставание не прячется —
+  // оно копится в `perf.dropped` и показывается прибором.
+  //
+  // Бюджет — треть кадра при тридцати в секунду. Больше значит отдать физике
+  // весь кадр, меньше — ронять время на ровном месте.
+  const PHYS_BUDGET = 11;   // мс
   let steps = 0;
   const tPhys = performance.now();
   while (acc >= DT && steps < 8) {
@@ -2887,6 +2907,11 @@ function frame() {
     recorder.push(boat);
     acc -= DT;
     steps++;
+    if (acc >= DT && performance.now() - tPhys > PHYS_BUDGET) {
+      perf.dropped += acc;      // сколько модельного времени выброшено
+      acc = 0;
+      break;
+    }
   }
   const tScene = performance.now();
   perf.phys = smooth(perf.phys, tScene - tPhys);
@@ -3195,7 +3220,8 @@ function updatePerf() {
     perfEl.textContent =
       rev() + '\n' +
       'кадр   ' + ms(perf.frame) + ' мс   ' + perf.fps.toFixed(0) + ' к/с\n' +
-      'физика ' + ms(perf.phys) + '   шагов ' + perf.steps.toFixed(1) + '\n' +
+      'физика ' + ms(perf.phys) + '   шагов ' + perf.steps.toFixed(1) +
+        (perf.dropped > 0.05 ? '   брошено ' + perf.dropped.toFixed(1) + ' с' : '') + '\n' +
       'сцена  ' + ms(perf.scene) + '\n' +
       'рисов. ' + ms(perf.draw) + '\n' +
       'приб.  ' + ms(perf.hud) + '\n' +
@@ -3208,7 +3234,8 @@ function updatePerf() {
     gperfEl.textContent =
       rev() + ' · ' + perf.fps.toFixed(0) + ' к/с · кадр ' + ms(perf.frame) + ' мс\n' +
       'физ ' + ms(perf.phys) + ' · сцена ' + ms(perf.scene) +
-      ' · рис ' + ms(perf.draw) + '\n' +
+      ' · рис ' + ms(perf.draw) +
+      (perf.dropped > 0.05 ? ' · брошено ' + perf.dropped.toFixed(1) + ' с' : '') + '\n' +
       'ГП ' + ms(perf.gpu) + ' + счёт ' + ms(perf.gpuCompute);
   }
 }

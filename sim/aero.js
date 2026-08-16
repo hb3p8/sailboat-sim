@@ -174,6 +174,17 @@ function triNear(px, py, pz, V, i0, i1, i2, out) {
 const GENNAKER_SAG = 0.13;
 const GENNAKER_SAG_POW = 0.8;   // пузатее к середине, чем чистый синус
 
+// Вынос передней шкаторины на высоте `z`. Считается ПО ВЫСОТЕ ТОЧКИ, а не по
+// номеру полоски: иначе общая граница соседей получает два разных значения.
+export function sailSagAt(sail, z, zLo, span) { return sagAt(sail, z, zLo, span); }
+
+function sagAt(sail, z, zLo, span) {
+  if (!sail.gennaker || !(span > 1e-9)) return 0;
+  const f = Math.min(1, Math.max(0, (z - zLo) / span));
+  const luff = Math.hypot(sail.head[0] - sail.tack[0], sail.head[1] - sail.tack[1]);
+  return GENNAKER_SAG * luff * Math.pow(Math.sin(Math.PI * f), GENNAKER_SAG_POW);
+}
+
 const DESIGN_CAMBER = {
   main: [0.125, 0.075],
   jib: [0.105, 0.065],
@@ -682,10 +693,18 @@ export class Rig {
           // Боковой вынос передней шкаторины: ноль у галса и у фала, наибольший
           // посередине. Для грота со стакселем всегда ноль — их шкаторины
           // закреплены по всей длине.
-          sag: s.gennaker
-            ? GENNAKER_SAG * Math.hypot(s.head[0] - s.tack[0], s.head[1] - s.tack[1]) *
-              Math.pow(Math.sin(Math.PI * f), GENNAKER_SAG_POW)
-            : 0,
+          //
+          // ТРИ ЗНАЧЕНИЯ, А НЕ ОДНО, и это не запас на будущее. Полоска строится
+          // по трём высотам — нижней границе, середине и верхней, — и общая
+          // граница двух соседей обязана получить ОДНО И ТО ЖЕ смещение с обеих
+          // сторон. Одно значение на полоску давало ей два разных: несущая
+          // поверхность размахом 8.6 м оказывалась разрезана щелями до полуметра,
+          // а точки схода пелены — разорваны на столько же. Это ровно то место,
+          // где потом мерилась потеря ранга: две верхние полоски давали почти
+          // одинаковые уравнения (косинус 0.975 на вспышке, docs/wake.md §5.12).
+          sag: sagAt(s, h, zLo, span),
+          sagLo: sagAt(s, hLo, zLo, span),
+          sagHi: sagAt(s, hHi, zLo, span),
           h: h,                               // высота по мачте, без крена
           hLo: hLo, hHi: hHi,                 // границы размаха полоски
           chordLo: chordAt(hLo), chordHi: chordAt(hHi),
@@ -891,7 +910,8 @@ export class Rig {
       // `sg` — вынос передней шкаторины под ветер (у грота со стакселем ноль).
       // Он двигает ВСЮ хорду, а не только её конец: шкаторина ушла вбок, и
       // сечение целиком стоит там же, где она.
-      const sg = st.sag * rigSide;
+      const sgLo = st.sagLo * rigSide, sgHi = st.sagHi * rigSide,
+            sg = st.sag * rigSide;
       const put = (arr, h, ch, xl, t, sag) => {
         const bow = camSign * cam * 4 * t * (1 - t) * ch;
         const ax = xl - t * ch * cs + bow * nc;
@@ -903,13 +923,13 @@ export class Rig {
       // Точки схода пелены — на самой задней кромке (t = 1), а не на последней
       // панели: панель кончается на трёх четвертях своей доли хорды, и пелена,
       // посаженная туда, висела бы в воздухе перед кромкой.
-      put(this.shedLo[i], st.hLo, st.chordLo, st.xLuffLo, 1, sg);
-      put(this.shedHi[i], st.hHi, st.chordHi, st.xLuffHi, 1, sg);
+      put(this.shedLo[i], st.hLo, st.chordLo, st.xLuffLo, 1, sgLo);
+      put(this.shedHi[i], st.hHi, st.chordHi, st.xLuffHi, 1, sgHi);
       for (let k = 0; k < NCHORD; k++) {
         const p = lat.panels[i * NCHORD + k];
         const tb = (k + 0.25) / NCHORD, tc = (k + 0.75) / NCHORD;
-        put(p.a, st.hHi, st.chordHi, st.xLuffHi, tb, sg);
-        put(p.b, st.hLo, st.chordLo, st.xLuffLo, tb, sg);
+        put(p.a, st.hHi, st.chordHi, st.xLuffHi, tb, sgHi);
+        put(p.b, st.hLo, st.chordLo, st.xLuffLo, tb, sgLo);
         if (b.o.wakeForces) {
           // Со свободной пеленой контур закрывается ЗАДНЕЙ КРОМКОЙ.
           //
@@ -949,11 +969,11 @@ export class Rig {
         const o = i * 2 * (NCHORD + 1) * 3, tmp = [0, 0, 0];
         for (let j = 0; j <= NCHORD; j++) {
           const t = j / NCHORD;
-          put(tmp, st.hLo, st.chordLo, st.xLuffLo, t, sg);
+          put(tmp, st.hLo, st.chordLo, st.xLuffLo, t, sgLo);
           this.surf[o + j * 6] = tmp[0];
           this.surf[o + j * 6 + 1] = tmp[1];
           this.surf[o + j * 6 + 2] = tmp[2];
-          put(tmp, st.hHi, st.chordHi, st.xLuffHi, t, sg);
+          put(tmp, st.hHi, st.chordHi, st.xLuffHi, t, sgHi);
           this.surf[o + j * 6 + 3] = tmp[0];
           this.surf[o + j * 6 + 4] = tmp[1];
           this.surf[o + j * 6 + 5] = tmp[2];

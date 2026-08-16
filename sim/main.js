@@ -1457,6 +1457,7 @@ function shapeSails(side, dt) {
         ? (boat.rig.twistEffGen != null ? boat.rig.twistEffGen : twistMain)
         : sail.mast ? twistMain : twistJib;
       const sh = setOf(sail) + twistOwn * Math.pow(f, 1.3);
+      const sag = sailSagAt(sail, h, zLo, zHi - zLo);
       // Пузо берётся у ближайшей по высоте полоски: их шесть на парус, строк
       // сетки одиннадцать.
       const g = strips[base + Math.min(5, Math.round(f * 5))] || {};
@@ -1517,7 +1518,12 @@ function shapeSails(side, dt) {
         }
         a[i] = xLuff + chord * t * ux + bow * nx;
         a[i + 1] = h;
-        a[i + 2] = chord * t * uy + bow * ny;
+        // Вынос передней шкаторины под ветер — ТОТ ЖЕ, что у расчёта, и по той
+        // же высоте точки. Без него оранжевое полотно оставалось в ДП, а
+        // решётка с пеленой стояли сбоку: расходились ровно там, где по
+        // картинке и ищут ошибки. Смещается вся хорда целиком, потому что
+        // сечение стоит там же, где его шкаторина.
+        a[i + 2] = sag * side + chord * t * uy + bow * ny;
         col[i] = shade; col[i + 1] = shade; col[i + 2] = shade;
         i += 3;
       }

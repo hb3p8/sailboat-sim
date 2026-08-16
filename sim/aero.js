@@ -160,6 +160,20 @@ function triNear(px, py, pz, V, i0, i1, i2, out) {
 // Летящее пузо от этих чисел отличается: его считает мембрана из давления и
 // запаса длины ткани. Проектное задаёт только запас, то есть сколько ткани
 // вообще есть. Ползунок «пузо» убирает запас фалом и оттяжками.
+// Провис передней шкаторины генакера под ветер, в долях её длины.
+//
+// У грота передняя шкаторина прибита к мачте, у стакселя надета на штаг — обе
+// лежат в диаметральной плоскости, и полотно уходит вбок только хордой. У
+// генакера впереди нет ничего: шкаторина натянута между галсом на бушприте и
+// фалом на топе, а посередине её выдувает под ветер. Настоящий парус на
+// бакштаге уносит на метр с лишним, и именно этим он и выходит из-за грота.
+//
+// Величина — оценка (обмерить нечего, парус летит), но не произвольная: она
+// проверяется тем же зазором между поверхностями, ради которого и заведена.
+// Форма — синусом: ноль на обоих концах, где шкаторина закреплена.
+const GENNAKER_SAG = 0.13;
+const GENNAKER_SAG_POW = 0.8;   // пузатее к середине, чем чистый синус
+
 const DESIGN_CAMBER = {
   main: [0.125, 0.075],
   jib: [0.105, 0.065],
@@ -644,6 +658,13 @@ export class Rig {
           // Проектное пузо полоски — по её высоте, линейно от нижней
           // шкаторины к верхней.
           design: s.design[0] + (s.design[1] - s.design[0]) * f,
+          // Боковой вынос передней шкаторины: ноль у галса и у фала, наибольший
+          // посередине. Для грота со стакселем всегда ноль — их шкаторины
+          // закреплены по всей длине.
+          sag: s.gennaker
+            ? GENNAKER_SAG * Math.hypot(s.head[0] - s.tack[0], s.head[1] - s.tack[1]) *
+              Math.pow(Math.sin(Math.PI * f), GENNAKER_SAG_POW)
+            : 0,
           h: h,                               // высота по мачте, без крена
           hLo: hLo, hHi: hHi,                 // границы размаха полоски
           chordLo: chordAt(hLo), chordHi: chordAt(hHi),
@@ -788,7 +809,8 @@ export class Rig {
       // давления её хорды, а не мачта: поэтому при потраве шкота парусность
       // уходит назад и в сторону, и приводящий момент меняется сам собой.
       const zi = st.h * cphi;
-      const yi = -st.h * sphi + CP_CHORD * chord * Math.sin(sheet) * rigSide * cphi;
+      const yi = -st.h * sphi +
+                 (st.sag * rigSide + CP_CHORD * chord * Math.sin(sheet) * rigSide) * cphi;
       const xi = st.xLuff - CP_CHORD * chord * Math.cos(sheet);
       // Своя местная скорость: снос, рыскание и качка на своих плечах. Из
       // последнего слагаемого и получается аэродинамическое демпфирование
@@ -845,10 +867,14 @@ export class Rig {
       g.camPanel = cam;                 // пузо, с которым построены панели
       // Точка на средней линии паруса на доле t хорды: вдоль хорды плюс пузо
       // по нормали. Пузо и даёт угол нулевой подъёмной силы.
-      const put = (arr, h, ch, xl, t) => {
+      // `sg` — вынос передней шкаторины под ветер (у грота со стакселем ноль).
+      // Он двигает ВСЮ хорду, а не только её конец: шкаторина ушла вбок, и
+      // сечение целиком стоит там же, где она.
+      const sg = st.sag * rigSide;
+      const put = (arr, h, ch, xl, t, sag) => {
         const bow = camSign * cam * 4 * t * (1 - t) * ch;
         const ax = xl - t * ch * cs + bow * nc;
-        const as = t * ch * sn + bow * ns;      // смещение поперёк, в плоскости
+        const as = sag + t * ch * sn + bow * ns;   // смещение поперёк, в плоскости
         arr[0] = ax;
         arr[1] = -h * sphi + as * e2y;
         arr[2] = h * cphi + as * e2z;
@@ -856,13 +882,13 @@ export class Rig {
       // Точки схода пелены — на самой задней кромке (t = 1), а не на последней
       // панели: панель кончается на трёх четвертях своей доли хорды, и пелена,
       // посаженная туда, висела бы в воздухе перед кромкой.
-      put(this.shedLo[i], st.hLo, st.chordLo, st.xLuffLo, 1);
-      put(this.shedHi[i], st.hHi, st.chordHi, st.xLuffHi, 1);
+      put(this.shedLo[i], st.hLo, st.chordLo, st.xLuffLo, 1, sg);
+      put(this.shedHi[i], st.hHi, st.chordHi, st.xLuffHi, 1, sg);
       for (let k = 0; k < NCHORD; k++) {
         const p = lat.panels[i * NCHORD + k];
         const tb = (k + 0.25) / NCHORD, tc = (k + 0.75) / NCHORD;
-        put(p.a, st.hHi, st.chordHi, st.xLuffHi, tb);
-        put(p.b, st.hLo, st.chordLo, st.xLuffLo, tb);
+        put(p.a, st.hHi, st.chordHi, st.xLuffHi, tb, sg);
+        put(p.b, st.hLo, st.chordLo, st.xLuffLo, tb, sg);
         if (b.o.wakeForces) {
           // Со свободной пеленой контур закрывается ЗАДНЕЙ КРОМКОЙ.
           //
@@ -883,7 +909,7 @@ export class Rig {
           p.ta[0] = p.a[0]; p.ta[1] = p.a[1]; p.ta[2] = p.a[2];
           p.tb[0] = p.b[0]; p.tb[1] = p.b[1]; p.tb[2] = p.b[2];
         }
-        put(p.c, st.h, chord, st.xLuff, tc);
+        put(p.c, st.h, chord, st.xLuff, tc, sg);
         // Нормаль повёрнута на местный наклон средней линии — отсюда и берётся
         // подъёмная сила пуза, без отдельного слагаемого.
         const sl = camSign * cam * 4 * (1 - 2 * tc);
@@ -902,11 +928,11 @@ export class Rig {
         const o = i * 2 * (NCHORD + 1) * 3, tmp = [0, 0, 0];
         for (let j = 0; j <= NCHORD; j++) {
           const t = j / NCHORD;
-          put(tmp, st.hLo, st.chordLo, st.xLuffLo, t);
+          put(tmp, st.hLo, st.chordLo, st.xLuffLo, t, sg);
           this.surf[o + j * 6] = tmp[0];
           this.surf[o + j * 6 + 1] = tmp[1];
           this.surf[o + j * 6 + 2] = tmp[2];
-          put(tmp, st.hHi, st.chordHi, st.xLuffHi, t);
+          put(tmp, st.hHi, st.chordHi, st.xLuffHi, t, sg);
           this.surf[o + j * 6 + 3] = tmp[0];
           this.surf[o + j * 6 + 4] = tmp[1];
           this.surf[o + j * 6 + 5] = tmp[2];
@@ -1562,6 +1588,19 @@ export class Rig {
     }
   }
 
+  // Доля удержанной циркуляции на КАЖДУЮ панель — тем же гашением, что у схода.
+  // Считается в свой буфер: в горячем пути новых массивов быть не должно.
+  boundFade() {
+    const NS = this.strips.length, n = this.lattice.n, NC = n / NS;
+    const f = this._bfade && this._bfade.length === n
+      ? this._bfade : (this._bfade = new Float64Array(n));
+    for (let i = 0; i < NS; i++) {
+      const k = this.wakeShed(i);
+      for (let c = 0; c < NC; c++) f[i * NC + c] = k;
+    }
+    return f;
+  }
+
   // Сколько из решённой циркуляции полоска ДЕЙСТВИТЕЛЬНО сбрасывает в пелену.
   //
   // Поперёк потока листа с кромки не сходит. Когда парус развёрнут к потоку
@@ -1854,7 +1893,10 @@ export class Rig {
     // две половины разной свежести (`FreeWake.pickSlice`).
     w.slice = Math.max(1, b.o.wakeSlice | 0);
     w.pickSlice();
-    lat.packBound(true);
+    // Связанная циркуляция идёт в поле С ТЕМ ЖЕ ГАШЕНИЕМ, что и сход в пелену:
+    // сорванная полоска не держит ни того ни другого. Доля на панель — по её
+    // полоске.
+    lat.packBound(true, this.boundFade());
     if (!this.ltx || this.ltx.length < this.lqx.length) {
       const N = this.lqx.length;
       this.ltx = new Float64Array(N); this.lty = new Float64Array(N);

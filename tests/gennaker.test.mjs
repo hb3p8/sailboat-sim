@@ -168,7 +168,7 @@ const G = PACK.rig.gennaker;
       const Gs = b.rig.stripGamma;
       if (Gs) for (let k = 0; k < Gs.length; k++) gmax = Math.max(gmax, Math.abs(Gs[k]));
     }
-    return { gmax, v: b.telemetry.speedKn };
+    return { gmax, v: b.telemetry.speedKn, fuse: b.rig.fuseTrips || 0 };
   };
   // Предел: рабочая циркуляция полоски здесь порядка тридцати, сотня — уже с
   // запасом вдвое, а разнос всегда уходит на порядки, а не на проценты.
@@ -177,8 +177,9 @@ const G = PACK.rig.gennaker;
   for (let L = 4.0; L <= 7.01; L += 0.2) {
     const r = run(L);
     if (r.gmax > worst) { worst = r.gmax; worstAt = L; }
-    console.log('    шкот %s м:  Γ до %s   ход %s уз%s',
+    console.log('    шкот %s м:  Γ до %s   ход %s уз   предохранитель %s%s',
       L.toFixed(1), r.gmax.toExponential(1).padStart(9), r.v.toFixed(2),
+      String(r.fuse).padStart(3),
       r.gmax > LIMIT ? '   РАЗНОС' : '');
   }
   console.log('');

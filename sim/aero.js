@@ -1043,15 +1043,19 @@ export class Rig {
       // циркуляций уже не зависят. Неизвестно одно — свежее кольцо, и оно идёт
       // в матрицу (`nearWake`).
       const WF = !!b.o.wakeForces && this.wake && this.wake.n > 1;
-      if (this.latRebuild || WF !== this.latNoTail) {
-        lat.build(aw.x / awSpeed, aw.y / awSpeed, 0, true, true, WF);
-        this.latNoTail = WF;
-      }
       // Выборка обновляется РОВНО когда пелена входит в силы. Силы считают и
       // для приборов, и для отладочной картинки — с нулевым шагом и с выключенной
       // обратной связью; если менять постановку и там, отладочный вид начинает
       // двигать лодку. Батарея пелены это ловит сразу.
+      //
+      // И делается это ДО сборки матрицы: от выборки зависит доля схода, а от
+      // неё — доля прямого хвоста, которой контур замыкается.
       if (WF) this.updateLattice();
+      if (this.latRebuild || WF !== this.latNoTail) {
+        lat.build(aw.x / awSpeed, aw.y / awSpeed, 0, true, true,
+                  WF ? this.tailWeight() : null);
+        this.latNoTail = WF;
+      }
       if (WF) this.wakeDownwash(b, lat); else lat.wExtra.fill(0);
       const q = this.latQ;
       // Рабочий знак нагрузки: в какую сторону парус ПОСТАВЛЕН. Берётся он у
@@ -1691,6 +1695,25 @@ export class Rig {
     for (let i = 0; i < NS; i++)
       for (let c = 0; c < NC; c++) m[i * NC + c] = on[i];
     return m;
+  }
+
+  // Доля ПРЯМОГО ХВОСТА на каждую панель — вторая половина замыкания контура.
+  //
+  // Свежее кольцо замыкает долю `f` (`nearWake` берёт её тем же множителем),
+  // прямой хвост — оставшуюся `1−f`. Связанный вихрь и ножки при этом одни,
+  // общие, и сумма двух замыканий несёт полную Γ. Без этого при `0 < f < 1` на
+  // задней кромке оставались свободные концы силой `(1−f)·Γ`: вихревая линия
+  // обрывалась в воздухе, Гельмгольц нарушался, и разносилось ровно это
+  // (docs/wake.md, §9.3).
+  tailWeight() {
+    const NS = this.strips.length, n = this.lattice.n, NC = n / NS;
+    const w = this._tailW && this._tailW.length === n
+      ? this._tailW : (this._tailW = new Float64Array(n));
+    for (let i = 0; i < NS; i++) {
+      const k = 1 - this.wakeShed(i);
+      for (let c = 0; c < NC; c++) w[i * NC + c] = k;
+    }
+    return w;
   }
 
   // Доля удержанной циркуляции на КАЖДУЮ панель — тем же гашением, что у схода.

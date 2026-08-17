@@ -39,7 +39,7 @@
   },
   "family": "naca0012-v1",
   "level": "coarse",
-  "n_proc": 4,
+  "n_proc": 8,
   "refine": [
    5,
    6

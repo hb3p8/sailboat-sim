@@ -187,6 +187,33 @@ try:
         check("каноническое тело %s ориентировано наружу" % name,
               b["volume_m3"] > 0, "V = %.6f" % b["volume_m3"])
 
+    # Сечение паруса: тонкая изогнутая дуга. Замкнуть её веером из центра
+    # габарита нельзя — у такой дуги центр лежит снаружи тела, — а задняя
+    # кромка, сведённая в точку, оказывается тоньше допуска склейки. Обе
+    # ошибки были сделаны и обе ловятся здесь.
+    for cam, drf, n in ((0.0, 0.5, 60), (0.185, 0.45, 200), (0.30, 0.35, 120)):
+        up, lo = geo.sail_section(cam, drf, 3.9, 0.015, n=n)
+        s = geo.extrude_section(up, lo, 0.4)
+        w = geo.watertight(s)
+        check("сечение паруса замкнуто: пузо %.3f, %d точек" % (cam, n),
+              w["watertight"], json.dumps(w))
+        check("сечение паруса ориентировано наружу: пузо %.3f" % cam,
+              geo.volume_m3(s) > 0, "V = %.6f" % geo.volume_m3(s))
+        got = float(np.max(np.abs(0.5 * (up[:, 1] + lo[:, 1])))) / 3.9
+        check("пузо сечения выдержано: заказано %.3f" % cam,
+              near(got, cam, 0.006), "вышло %.4f" % got)
+    # Толщина задней кромки конечна и не меньше заказанной: иначе её не
+    # разрешит ни склейка геометрии, ни сетка.
+    up, lo = geo.sail_section(0.185, 0.45, 3.9, 0.015, n=200,
+                              te_thickness=0.003)
+    # Толщина меряется по РАССТОЯНИЮ между кромочными точками, а не по разности
+    # ординат: у сечения с пузом обшивка наклонена, и вертикальный зазор меньше
+    # настоящей толщины на косинус наклона. Первая версия проверки мерила
+    # ординаты и падала на совершенно исправной геометрии.
+    te = float(np.hypot(*(up[-1] - lo[-1]))) / 3.9
+    check("задняя кромка сечения обрезана по заданной толщине",
+          te >= 0.003 * 0.98, "вышло %.4f хорды" % te)
+
     loop = geo.naca_symmetric(0.12, 1.0, 60)
     check("профиль NACA 0012 имеет верную наибольшую толщину",
           near(2 * loop[:, 1].max(), 0.12, 0.002),
@@ -343,10 +370,15 @@ try:
     geo.canonical(geom, span=0.1, chord=1.0)
     # Тела лодки для случаев, которым они нужны, подменяются канонической
     # заглушкой: здесь проверяется разворачивание, а не обводы.
-    for name in ("underwater", "keel", "keel_fin", "bulb", "rudder",
-                 "hull", "main", "jib", "sail_section"):
-        shutil.copyfile(os.path.join(geom, "sign_probe.stl"),
-                        os.path.join(geom, name + ".stl"))
+    # Заглушки под тела, которых в каноническом наборе нет: здесь проверяется
+    # разворачивание, а не обводы. Список берётся из самих случаев, а не
+    # пишется руками — иначе новый случай молча остаётся непроверенным, что уже
+    # случилось с сечениями генакера.
+    for _p, m in found:
+        for name in (m["geometry"].get("bodies") or m["geometry"]["files"]):
+            dst = os.path.join(geom, name + ".stl")
+            if not os.path.exists(dst):
+                shutil.copyfile(os.path.join(geom, "sign_probe.stl"), dst)
 
     seen_templates = set()
     for path, m in found:
@@ -628,10 +660,15 @@ tmp = tempfile.mkdtemp(prefix="sv20-cfd-e2e-")
 try:
     geom = os.path.join(tmp, "geom")
     geo.canonical(geom, span=0.1, chord=1.0)
-    for name in ("underwater", "keel", "keel_fin", "bulb", "rudder",
-                 "hull", "main", "jib", "sail_section"):
-        shutil.copyfile(os.path.join(geom, "sign_probe.stl"),
-                        os.path.join(geom, name + ".stl"))
+    # Заглушки под тела, которых в каноническом наборе нет: здесь проверяется
+    # разворачивание, а не обводы. Список берётся из самих случаев, а не
+    # пишется руками — иначе новый случай молча остаётся непроверенным, что уже
+    # случилось с сечениями генакера.
+    for _p, m in found:
+        for name in (m["geometry"].get("bodies") or m["geometry"]["files"]):
+            dst = os.path.join(geom, name + ".stl")
+            if not os.path.exists(dst):
+                shutil.copyfile(os.path.join(geom, "sign_probe.stl"), dst)
     triple = [(p, m) for p, m in found
               if m["convergence_group"] == "naca0012-a10"]
     check("тройка naca0012-a10 найдена целиком", len(triple) == 3)

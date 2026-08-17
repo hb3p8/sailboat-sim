@@ -1,37 +1,77 @@
 {
- "schema": 1,
  "case_id": "hull-u250-beta04-r010",
- "family": "hull-lateral",
- "template": "openfoam-manoeuvre",
- "convergence_group": "hull-u250-beta04-r010",
- "notes": "§5, этап 5: принудительное рыскание r' = rL/U = +0.1. Численный аналог captive/PMM-опыта: во вращающейся системе r задан точно и решение установившееся, тогда как свободная циркуляция и дороже, и хуже локализует источник ошибки. Считается без свободной поверхности — сначала производные, вода потом.",
- "geometry": {
-  "revision": "подставляется при разворачивании",
-  "bodies": ["underwater", "rudder"],
-  "files": {
-   "underwater": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-   "rudder": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-  }
+ "condition": {
+  "heel_deg": 0.0,
+  "leeway_deg": 4.0,
+  "rudder_deg": 0.0,
+  "speed_ms": 2.5,
+  "yaw_rate_nd": 0.1
  },
+ "convergence_group": "hull-u250-beta04-r010",
+ "family": "hull-lateral",
+ "fluid": {
+  "nu": 1.19e-06,
+  "rho": 1025.0
+ },
+ "geometry": {
+  "bodies": [
+   "underwater",
+   "rudder"
+  ],
+  "files": {
+   "rudder": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+   "underwater": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "revision": "подставляется при разворачивании"
+ },
+ "mesh": {
+  "base_size_m": 0.35,
+  "boundary_layers": 5,
+  "cells_target": 8000000,
+  "domain": {
+   "aft_l": 3.0,
+   "down_l": 1.5,
+   "fwd_l": 1.5,
+   "seed": [
+    6.0,
+    6.0,
+    -4.0
+   ],
+   "side_l": 2.0,
+   "up_l": 0.6
+  },
+  "family": "hull-v1",
+  "level": "medium",
+  "n_proc": 8,
+  "yplus_target": 60.0
+ },
+ "notes": "§5, этап 5: принудительное рыскание r' = rL/U = +0.1. Численный аналог captive/PMM-опыта: во вращающейся системе r задан точно и решение установившееся, тогда как свободная циркуляция и дороже, и хуже локализует источник ошибки. Считается без свободной поверхности — сначала производные, вода потом.",
+ "numerics": {
+  "average_from": 2200,
+  "dt_s": 1.0,
+  "end_time": 3000,
+  "iterations": 3000,
+  "residual_tol": 1e-05,
+  "write_interval": 500
+ },
+ "reference": {
+  "area_m2": 6.7947,
+  "length_m": 5.469,
+  "origin_m": [
+   2.73,
+   0.0,
+   0.0
+  ],
+  "rho": 1025.0,
+  "speed_ms": 2.5
+ },
+ "schema": 1,
  "solver": {
-  "name": "OpenFOAM",
-  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
   "application": "SRFSimpleFoam",
+  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
+  "name": "OpenFOAM",
   "turbulence": "kOmegaSST",
   "wall_treatment": "wall-function"
  },
- "fluid": {"rho": 1025.0, "nu": 1.19e-06},
- "condition": {"speed_ms": 2.5, "heel_deg": 0.0, "leeway_deg": 4.0, "rudder_deg": 0.0, "yaw_rate_nd": 0.1},
- "mesh": {
-  "level": "medium",
-  "family": "hull-v1",
-  "base_size_m": 0.35,
-  "boundary_layers": 5,
-  "yplus_target": 60.0,
-  "cells_target": 8000000,
-  "n_proc": 16,
-  "domain": {"fwd_l": 1.5, "aft_l": 3.0, "side_l": 2.0, "up_l": 0.6, "down_l": 1.5, "seed": [6.0, 6.0, -4.0]}
- },
- "numerics": {"iterations": 3000, "end_time": 3000, "write_interval": 500, "dt_s": 1.0, "residual_tol": 1e-05, "average_from": 2200},
- "reference": {"area_m2": 6.7947, "length_m": 5.469, "rho": 1025.0, "speed_ms": 2.5, "origin_m": [2.73, 0.0, 0.0]}
+ "template": "openfoam-manoeuvre"
 }

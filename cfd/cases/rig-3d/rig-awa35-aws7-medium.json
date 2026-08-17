@@ -1,37 +1,77 @@
 {
- "schema": 1,
  "case_id": "rig-awa35-aws7-medium",
- "family": "rig-3d",
- "template": "openfoam-aero",
- "convergence_group": "rig-awa35-aws7",
- "notes": "§5, этап 2: первая точка серии при AWS = 7 м/с. Паруса заморожены в форме, которую симулятор выдаёт для того же ветра, шкота, твиста и пузa; мачта включается отдельным вариантом, чтобы не спутать ошибку её модели с интерференцией парусов. Экспорт поверхностей парусов из sim/membrane.js — оставшаяся работа, см. cfd/README.md.",
- "geometry": {
-  "revision": "подставляется при разворачивании",
-  "bodies": ["main", "jib"],
-  "files": {
-   "main": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-   "jib": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-  }
+ "condition": {
+  "awa_deg": 35.0,
+  "aws_ms": 7.0,
+  "heel_deg": 0.0,
+  "sheet_deg": 16.0,
+  "twist_deg": 0.0
  },
+ "convergence_group": "rig-awa35-aws7",
+ "family": "rig-3d",
+ "fluid": {
+  "nu": 1.48e-05,
+  "rho": 1.225
+ },
+ "geometry": {
+  "bodies": [
+   "main",
+   "jib"
+  ],
+  "files": {
+   "jib": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+   "main": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "revision": "подставляется при разворачивании"
+ },
+ "mesh": {
+  "base_size_m": 0.5,
+  "boundary_layers": 5,
+  "cells_target": 12000000,
+  "domain": {
+   "aft_l": 8.0,
+   "down_l": 0.2,
+   "fwd_l": 4.0,
+   "seed": [
+    6.0,
+    6.0,
+    5.0
+   ],
+   "side_l": 4.0,
+   "up_l": 3.0
+  },
+  "family": "rig-v1",
+  "level": "medium",
+  "n_proc": 8,
+  "yplus_target": 40.0
+ },
+ "notes": "§5, этап 2: первая точка серии при AWS = 7 м/с. Паруса заморожены в форме, которую симулятор выдаёт для того же ветра, шкота, твиста и пузa; мачта включается отдельным вариантом, чтобы не спутать ошибку её модели с интерференцией парусов. Экспорт поверхностей парусов из sim/membrane.js — оставшаяся работа, см. cfd/README.md.",
+ "numerics": {
+  "average_from": 2200,
+  "dt_s": 1.0,
+  "end_time": 3000,
+  "iterations": 3000,
+  "residual_tol": 1e-05,
+  "write_interval": 500
+ },
+ "reference": {
+  "area_m2": 20.0,
+  "length_m": 2.5,
+  "origin_m": [
+   3.0,
+   0.0,
+   0.0
+  ],
+  "rho": 1.225,
+  "speed_ms": 7.0
+ },
+ "schema": 1,
  "solver": {
-  "name": "OpenFOAM",
-  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
   "application": "simpleFoam",
+  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
+  "name": "OpenFOAM",
   "turbulence": "kOmegaSST",
   "wall_treatment": "wall-function"
  },
- "fluid": {"rho": 1.225, "nu": 1.48e-05},
- "condition": {"aws_ms": 7.0, "awa_deg": 35.0, "heel_deg": 0.0, "sheet_deg": 16.0, "twist_deg": 0.0},
- "mesh": {
-  "level": "medium",
-  "family": "rig-v1",
-  "base_size_m": 0.5,
-  "boundary_layers": 5,
-  "yplus_target": 40.0,
-  "cells_target": 12000000,
-  "n_proc": 16,
-  "domain": {"fwd_l": 4.0, "aft_l": 8.0, "side_l": 4.0, "up_l": 3.0, "down_l": 0.2, "seed": [6.0, 6.0, 5.0]}
- },
- "numerics": {"iterations": 3000, "end_time": 3000, "write_interval": 500, "dt_s": 1.0, "residual_tol": 1e-05, "average_from": 2200},
- "reference": {"area_m2": 20.0, "length_m": 2.5, "rho": 1.225, "speed_ms": 7.0, "origin_m": [3.0, 0.0, 0.0]}
+ "template": "openfoam-aero"
 }

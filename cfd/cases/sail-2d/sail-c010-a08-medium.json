@@ -1,33 +1,75 @@
 {
- "schema": 1,
  "case_id": "sail-c010-a08-medium",
- "family": "sail-2d",
- "template": "openfoam-2d",
- "convergence_group": "sail-c010-a08",
- "notes": "§5, этап 1: расчётное пузо, угол атаки 8°, Re = 5e5. Сравнивается с polarCoeffs. Геометрия сечения выгружается из sim/membrane.js — экспортёр ещё не написан (cfd/README.md, «что осталось»); до него случай проходит validate, но не разворачивается.",
- "geometry": {
-  "revision": "подставляется при разворачивании",
-  "bodies": ["sail_section"],
-  "files": {"sail_section": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+ "condition": {
+  "alpha_deg": 8.0,
+  "camber": 0.1,
+  "reynolds": 500000.0,
+  "speed_ms": 7.4
  },
+ "convergence_group": "sail-c010-a08",
+ "family": "sail-2d",
+ "fluid": {
+  "nu": 1.48e-05,
+  "rho": 1.225
+ },
+ "geometry": {
+  "bodies": [
+   "sail_section"
+  ],
+  "files": {
+   "sail_section": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "revision": "подставляется при разворачивании"
+ },
+ "mesh": {
+  "base_size_m": 0.25,
+  "boundary_layers": 5,
+  "domain": {
+   "aft_l": 20.0,
+   "down_l": 1.0,
+   "fwd_l": 20.0,
+   "seed": [
+    10.0,
+    10.0,
+    0.0
+   ],
+   "side_l": 20.0,
+   "span_m": 0.1,
+   "up_l": 1.0
+  },
+  "family": "sail-2d-v1",
+  "level": "medium",
+  "n_proc": 8,
+  "yplus_target": 30.0
+ },
+ "notes": "§5, этап 1: расчётное пузо, угол атаки 8°, Re = 5e5. Сравнивается с polarCoeffs. Геометрия сечения выгружается из sim/membrane.js — экспортёр ещё не написан (cfd/README.md, «что осталось»); до него случай проходит validate, но не разворачивается.",
+ "numerics": {
+  "average_from": 2000,
+  "dt_s": 1.0,
+  "end_time": 3000,
+  "iterations": 3000,
+  "residual_tol": 1e-06,
+  "write_interval": 500
+ },
+ "reference": {
+  "area_m2": 0.1,
+  "chord_m": 1.0,
+  "length_m": 1.0,
+  "origin_m": [
+   0.25,
+   0.0,
+   0.0
+  ],
+  "rho": 1.225,
+  "speed_ms": 7.4
+ },
+ "schema": 1,
  "solver": {
-  "name": "OpenFOAM",
-  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
   "application": "simpleFoam",
+  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
+  "name": "OpenFOAM",
   "turbulence": "kOmegaSST",
   "wall_treatment": "wall-function"
  },
- "fluid": {"rho": 1.225, "nu": 1.48e-05},
- "condition": {"reynolds": 500000.0, "alpha_deg": 8.0, "camber": 0.1, "speed_ms": 7.4},
- "mesh": {
-  "level": "medium",
-  "family": "sail-2d-v1",
-  "base_size_m": 0.25,
-  "boundary_layers": 5,
-  "yplus_target": 30.0,
-  "n_proc": 4,
-  "domain": {"fwd_l": 20.0, "aft_l": 20.0, "side_l": 20.0, "up_l": 1.0, "down_l": 1.0, "span_m": 0.1, "seed": [10.0, 10.0, 0.0]}
- },
- "numerics": {"iterations": 3000, "end_time": 3000, "write_interval": 500, "dt_s": 1.0, "residual_tol": 1e-06, "average_from": 2000},
- "reference": {"area_m2": 0.1, "length_m": 1.0, "chord_m": 1.0, "rho": 1.225, "speed_ms": 7.4, "origin_m": [0.25, 0.0, 0.0]}
+ "template": "openfoam-2d"
 }

@@ -1,37 +1,80 @@
 {
- "schema": 1,
  "case_id": "hull-u250-heel10-beta04-m2",
- "family": "hull-lateral",
- "template": "openfoam-vof",
- "convergence_group": "hull-u250-heel10-beta04",
- "notes": "Пример из §3.5 документа, доведённый до рабочего манифеста. Проверяет самые эмпирические места модели: HULL_CROSSFLOW_CD и HULL_HEEL_YAW. Крен задан ПОВОРОТОМ ТЕЛА (cfd/cfd.py geometry --heel), а дрейф — поворотом потока: иначе плоскость невозмущённой воды перестала бы совпадать с z = 0.",
- "geometry": {
-  "revision": "подставляется при разворачивании",
-  "bodies": ["underwater", "rudder"],
-  "files": {
-   "underwater": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-   "rudder": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-  }
+ "condition": {
+  "heel_deg": 10.0,
+  "leeway_deg": 4.0,
+  "rudder_deg": 0.0,
+  "speed_ms": 2.5
  },
+ "convergence_group": "hull-u250-heel10-beta04",
+ "family": "hull-lateral",
+ "fluid": {
+  "g": -9.80665,
+  "nu": 1.19e-06,
+  "nu_air": 1.48e-05,
+  "rho": 1025.0,
+  "rho_air": 1.225,
+  "sigma": 0.07
+ },
+ "geometry": {
+  "bodies": [
+   "underwater",
+   "rudder"
+  ],
+  "files": {
+   "rudder": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+   "underwater": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "revision": "подставляется при разворачивании"
+ },
+ "mesh": {
+  "base_size_m": 0.35,
+  "boundary_layers": 5,
+  "cells_target": 8000000,
+  "domain": {
+   "aft_l": 3.0,
+   "down_l": 1.5,
+   "fwd_l": 1.5,
+   "seed": [
+    6.0,
+    5.0,
+    -3.0
+   ],
+   "side_l": 2.0,
+   "up_l": 0.6
+  },
+  "family": "hull-v1",
+  "level": "medium",
+  "n_proc": 8,
+  "yplus_target": 60.0
+ },
+ "notes": "Пример из §3.5 документа, доведённый до рабочего манифеста. Проверяет самые эмпирические места модели: HULL_CROSSFLOW_CD и HULL_HEEL_YAW. Крен задан ПОВОРОТОМ ТЕЛА (cfd/cfd.py geometry --heel), а дрейф — поворотом потока: иначе плоскость невозмущённой воды перестала бы совпадать с z = 0.",
+ "numerics": {
+  "average_from": 15.0,
+  "dt_s": 0.002,
+  "end_time": 25.0,
+  "maxAlphaCo": 0.5,
+  "maxCo": 0.5,
+  "write_interval": 1.0
+ },
+ "reference": {
+  "area_m2": 6.7947,
+  "length_m": 5.469,
+  "origin_m": [
+   2.73,
+   0.0,
+   0.0
+  ],
+  "rho": 1025.0,
+  "speed_ms": 2.5
+ },
+ "schema": 1,
  "solver": {
-  "name": "OpenFOAM",
-  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
   "application": "interFoam",
+  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
+  "name": "OpenFOAM",
   "turbulence": "kOmegaSST",
   "wall_treatment": "wall-function"
  },
- "fluid": {"rho": 1025.0, "nu": 1.19e-06, "rho_air": 1.225, "nu_air": 1.48e-05, "g": -9.80665, "sigma": 0.07},
- "condition": {"speed_ms": 2.5, "heel_deg": 10.0, "leeway_deg": 4.0, "rudder_deg": 0.0},
- "mesh": {
-  "level": "medium",
-  "family": "hull-v1",
-  "base_size_m": 0.35,
-  "boundary_layers": 5,
-  "yplus_target": 60.0,
-  "cells_target": 8000000,
-  "n_proc": 16,
-  "domain": {"fwd_l": 1.5, "aft_l": 3.0, "side_l": 2.0, "up_l": 0.6, "down_l": 1.5, "seed": [6.0, 5.0, -3.0]}
- },
- "numerics": {"end_time": 25.0, "dt_s": 0.002, "maxCo": 0.5, "maxAlphaCo": 0.5, "write_interval": 1.0, "average_from": 15.0},
- "reference": {"area_m2": 6.7947, "length_m": 5.469, "rho": 1025.0, "speed_ms": 2.5, "origin_m": [2.73, 0.0, 0.0]}
+ "template": "openfoam-vof"
 }

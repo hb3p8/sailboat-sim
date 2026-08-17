@@ -38,7 +38,7 @@
   "family": "keel-half-wide-v2",
   "feature_level": 10,
   "level": "medium",
-  "n_proc": 4,
+  "n_proc": 8,
   "refine": [
    7,
    9

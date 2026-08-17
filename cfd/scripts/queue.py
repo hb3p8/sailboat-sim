@@ -33,6 +33,7 @@ STATE = os.path.join(ROOT, "out", "cfd", "queue.json")
 # корень лёг на плоскость симметрии домена.
 GEOM_KEEL = "out/cfd/geometry/keel-root"
 GEOM_MAIN = "out/cfd/geometry"
+GEOM_SAIL = "out/cfd/geometry/sail"
 
 QUEUE = [
     # Порядок — по убыванию того, что случай СООБЩАЕТ, а не по цене. Считается
@@ -44,6 +45,15 @@ QUEUE = [
     # на линейном участке (наклон), потом обе тройки сеток и размер домена.
     # Точки поляры для красоты кривой — в самом конце.
     ("keel-u200-a00-medium", GEOM_KEEL),
+    # Генакер, первый этап: сечение в той самой рабочей точке, где карта
+    # (курс, шкот) краснеет. Две формы на одном угле — плоская пластина, какой
+    # её сейчас видит модель, и сечение с проектным пузом. Разность и есть
+    # цена нулевого пуза. Стоит впереди тяжёлых троек: две плоские задачи
+    # против часа за трёхмерный случай.
+    ("gen-sec-flat-a35", GEOM_SAIL),
+    ("gen-sec-design-a35", GEOM_SAIL),
+    ("gen-sec-design-a25", GEOM_SAIL),
+    ("gen-sec-design-a45", GEOM_SAIL),
     ("keel-u200-a06-medium", GEOM_KEEL),
     ("hull-db-u250-b00-medium", GEOM_MAIN),
     ("keel-u200-a04-medium", GEOM_KEEL),

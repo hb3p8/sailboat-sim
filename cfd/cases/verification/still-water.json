@@ -1,31 +1,72 @@
 {
- "schema": 1,
  "case_id": "still-water",
- "family": "verification",
- "template": "openfoam-vof",
+ "condition": {
+  "speed_ms": 0.01
+ },
  "convergence_group": "still-water",
- "notes": "Этап 0.4—0.5: покоящаяся свободная поверхность. Проверяется отсутствие паразитной скорости и сохранение уровня воды, а по силе на теле — известная гидростатика. Скорость потока задана заведомо малой, а не нулевой: ноль вырождает нормировку коэффициентов, и §3.7 такой случай не описывает.",
+ "family": "verification",
+ "fluid": {
+  "g": -9.80665,
+  "nu": 1.19e-06,
+  "nu_air": 1.48e-05,
+  "rho": 1025.0,
+  "rho_air": 1.225,
+  "sigma": 0.07
+ },
  "geometry": {
-  "revision": "подставляется при разворачивании",
-  "bodies": ["sign_probe"],
-  "files": {"sign_probe": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+  "bodies": [
+   "sign_probe"
+  ],
+  "files": {
+   "sign_probe": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "revision": "подставляется при разворачивании"
  },
- "solver": {
-  "name": "OpenFOAM",
-  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
-  "application": "interFoam",
-  "turbulence": "laminar"
- },
- "fluid": {"rho": 1025.0, "nu": 1.19e-06, "rho_air": 1.225, "nu_air": 1.48e-05, "g": -9.80665, "sigma": 0.07},
- "condition": {"speed_ms": 0.01},
  "mesh": {
-  "level": "coarse",
-  "family": "still-v1",
   "base_size_m": 0.4,
   "boundary_layers": 0,
-  "n_proc": 4,
-  "domain": {"fwd_l": 6.0, "aft_l": 6.0, "side_l": 6.0, "up_l": 4.0, "down_l": 4.0, "seed": [3.0, 3.0, -2.0]}
+  "domain": {
+   "aft_l": 6.0,
+   "down_l": 4.0,
+   "fwd_l": 6.0,
+   "seed": [
+    3.0,
+    3.0,
+    -2.0
+   ],
+   "side_l": 6.0,
+   "up_l": 4.0
+  },
+  "family": "still-v1",
+  "level": "coarse",
+  "n_proc": 8
  },
- "numerics": {"end_time": 10.0, "dt_s": 0.005, "maxCo": 0.5, "maxAlphaCo": 0.5, "write_interval": 1.0, "average_from": 5.0},
- "reference": {"area_m2": 1.0, "length_m": 1.0, "rho": 1025.0, "speed_ms": 0.01, "origin_m": [0.0, 0.0, 0.0]}
+ "notes": "Этап 0.4—0.5: покоящаяся свободная поверхность. Проверяется отсутствие паразитной скорости и сохранение уровня воды, а по силе на теле — известная гидростатика. Скорость потока задана заведомо малой, а не нулевой: ноль вырождает нормировку коэффициентов, и §3.7 такой случай не описывает.",
+ "numerics": {
+  "average_from": 5.0,
+  "dt_s": 0.005,
+  "end_time": 10.0,
+  "maxAlphaCo": 0.5,
+  "maxCo": 0.5,
+  "write_interval": 1.0
+ },
+ "reference": {
+  "area_m2": 1.0,
+  "length_m": 1.0,
+  "origin_m": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "rho": 1025.0,
+  "speed_ms": 0.01
+ },
+ "schema": 1,
+ "solver": {
+  "application": "interFoam",
+  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
+  "name": "OpenFOAM",
+  "turbulence": "laminar"
+ },
+ "template": "openfoam-vof"
 }

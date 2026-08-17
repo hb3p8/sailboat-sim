@@ -38,7 +38,7 @@
   },
   "family": "hull-db-v1",
   "level": "fine",
-  "n_proc": 4,
+  "n_proc": 8,
   "refine": [
    4,
    6

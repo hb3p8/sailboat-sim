@@ -38,7 +38,7 @@
   "family": "keel-half-v2",
   "feature_level": 8,
   "level": "medium",
-  "n_proc": 4,
+  "n_proc": 8,
   "refine": [
    5,
    7

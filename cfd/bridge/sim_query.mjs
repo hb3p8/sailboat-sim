@@ -144,6 +144,66 @@ const Q = {
       settle_s: RIG_SETTLE_S,
     };
   },
+
+  // --- генакер: состояние полосок в рабочей точке ---------------------------
+  //
+  // Ставится ровно тот же ход, что в tests/gennaker.test.mjs: свободная пелена,
+  // экипаж на борту, руль на курс. Иначе сравнивать было бы не с чем — карта
+  // (курс, шкот) снята именно так.
+  //
+  // Отдаётся состояние КАЖДОЙ полоски: угол атаки, пузо, положение горба,
+  // заполнение и то, упёрлась ли она в потолок сечения. Потолок здесь главное:
+  // карта по курсу и шкоту покраснела там, где предохранитель звенит десятками
+  // раз, а звенит он именно по потолку.
+  gennakerStrips({ twa_deg, sheet_m, wind_ms, seconds, sheet_deg, twist_deg }) {
+    const b = new Boat(PACK);
+    b.o.freeWake = true; b.o.wakeForces = true;
+    b.o.crewHike = -1; b.o.crewMass = 219.9;
+    b.wind.o.gust = 0; b.wind.o.shift = 0;
+    b.setGennaker(true);
+    b.o.sheet = (sheet_deg == null ? 70 : sheet_deg) * D;
+    b.o.twist = (twist_deg == null ? 8 : twist_deg) * D;
+    b.o.genSheetLen = sheet_m;
+    b.reset();
+    b.o.windSpeed = wind_ms == null ? 6 : wind_ms;
+    b.o.windDir = 100 * D;
+    b.u = 3;
+    const twa = twa_deg;
+    b.psi = (100 - twa) * D;
+    const wrap = a => ((a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+    const secs = seconds == null ? 25 : seconds;
+    let gmax = 0;
+    for (let i = 0; i < secs * 30; i++) {
+      b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D,
+        -(2.2 * wrap((100 - twa) * D - b.psi) - 0.9 * b.r)));
+      b.step(1 / 30);
+      const Gs = b.rig.stripGamma;
+      if (Gs) for (let k = 0; k < Gs.length; k++) gmax = Math.max(gmax, Math.abs(Gs[k]));
+    }
+    const out = [];
+    b.rig.stripCalc.forEach((g, i) => {
+      const st = b.rig.strips[i];
+      if (!st.gennaker) return;
+      const cam = Math.abs(g.camber) * (g.fill || 0);
+      const k = polarCoeffs(g.alpha, cam * Math.sign(g.camber || 1));
+      const ceiling = polarCeiling(cam);
+      out.push({
+        strip: i, alpha_deg: g.alpha / D, camber: g.camber, draft: g.draft,
+        slack: g.slack, design: st.design, luff_frac: g.luffFrac,
+        fill: g.fill, chord_m: g.chord, ve_ms: g.ve, gamma: g.gamma,
+        cl: k.cl, cd: k.cd, ceiling: ceiling,
+        // Доля потолка: единица и больше означает, что сечение упёрлось и
+        // подъёмную силу дальше ограничивает не физика, а предохранитель.
+        at_ceiling: ceiling > 0 ? Math.abs(k.cl) / ceiling : 0,
+        stall_deg: polarStallDeg(cam),
+      });
+    });
+    return {
+      twa_deg: twa, sheet_m: sheet_m, strips: out,
+      gamma_max: gmax, fuse_trips: b.rig.fuseTrips || 0,
+      speed_kn: b.telemetry.speedKn,
+    };
+  },
 };
 
 let raw = '';

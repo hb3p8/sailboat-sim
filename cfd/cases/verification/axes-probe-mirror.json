@@ -1,31 +1,64 @@
 {
- "schema": 1,
  "case_id": "axes-probe-mirror",
- "family": "verification",
- "template": "openfoam-aero",
+ "condition": {
+  "leeway_deg": -6.0,
+  "speed_ms": 10.0
+ },
  "convergence_group": "axes-probe-mirror",
- "notes": "Пара к axes-probe: тот же случай с обратным знаком дрейфа. Отличается ровно одним полем — так и задумано: если отличается что-то ещё, зеркальная проверка перестаёт что-либо проверять.",
+ "family": "verification",
+ "fluid": {
+  "nu": 1.5e-05,
+  "rho": 1.225
+ },
  "geometry": {
-  "revision": "подставляется при разворачивании",
-  "bodies": ["sign_probe"],
-  "files": {"sign_probe": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+  "bodies": [
+   "sign_probe"
+  ],
+  "files": {
+   "sign_probe": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "revision": "подставляется при разворачивании"
  },
- "solver": {
-  "name": "OpenFOAM",
-  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
-  "application": "simpleFoam",
-  "turbulence": "kOmegaSST"
- },
- "fluid": {"rho": 1.225, "nu": 1.5e-05},
- "condition": {"speed_ms": 10.0, "leeway_deg": -6.0},
  "mesh": {
-  "level": "coarse",
-  "family": "probe-v1",
   "base_size_m": 0.5,
   "boundary_layers": 3,
-  "n_proc": 4,
-  "domain": {"fwd_l": 10.0, "aft_l": 15.0, "side_l": 10.0, "up_l": 10.0, "down_l": 10.0}
+  "domain": {
+   "aft_l": 15.0,
+   "down_l": 10.0,
+   "fwd_l": 10.0,
+   "side_l": 10.0,
+   "up_l": 10.0
+  },
+  "family": "probe-v1",
+  "level": "coarse",
+  "n_proc": 8
  },
- "numerics": {"iterations": 1500, "end_time": 1500, "write_interval": 500, "dt_s": 1.0, "residual_tol": 1e-05, "average_from": 1000},
- "reference": {"area_m2": 1.0, "length_m": 1.0, "rho": 1.225, "speed_ms": 10.0, "origin_m": [0.0, 0.0, 0.0]}
+ "notes": "Пара к axes-probe: тот же случай с обратным знаком дрейфа. Отличается ровно одним полем — так и задумано: если отличается что-то ещё, зеркальная проверка перестаёт что-либо проверять.",
+ "numerics": {
+  "average_from": 1000,
+  "dt_s": 1.0,
+  "end_time": 1500,
+  "iterations": 1500,
+  "residual_tol": 1e-05,
+  "write_interval": 500
+ },
+ "reference": {
+  "area_m2": 1.0,
+  "length_m": 1.0,
+  "origin_m": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "rho": 1.225,
+  "speed_ms": 10.0
+ },
+ "schema": 1,
+ "solver": {
+  "application": "simpleFoam",
+  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
+  "name": "OpenFOAM",
+  "turbulence": "kOmegaSST"
+ },
+ "template": "openfoam-aero"
 }

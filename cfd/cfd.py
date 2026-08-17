@@ -335,6 +335,69 @@ def _read_log(logs, name, fn):
         return None
 
 
+# --- sail ---------------------------------------------------------------------
+
+def cmd_sail(a):
+    """Сечения паруса в CFD-геометрию — по тому, что симулятор сам себе назначил.
+
+    Пузо и положение горба не выдумываются и не берутся из чертежа: они
+    спрашиваются у рига в рабочей точке. Иначе CFD считал бы не ту форму,
+    которую модель считает своей, и расхождение нечему было бы приписать.
+    """
+    dst = a.dst or os.path.join(OUT_GEOM, "sail")
+    os.makedirs(dst, exist_ok=True)
+    made, report = {}, {"schema": 1, "bodies": {}, "files": {},
+                        "axes_out": ax.AXES_CFD, "inputs": {}, "unions": {},
+                        "transform": "сечение строится сразу в осях CFD"}
+
+    strips = None
+    if a.twa is not None:
+        ok, why = simbridge.available()
+        if not ok:
+            raise SystemExit("нужен мост к симулятору: " + why)
+        strips = simbridge.one({"fn": "gennakerStrips", "twa_deg": a.twa,
+                                "sheet_m": a.sheet, "seconds": a.seconds})
+        print("генакер при TWA %.0f°, шкот %.1f м: предохранитель %d раз, "
+              "Γ до %.2e, ход %.2f уз"
+              % (a.twa, a.sheet, strips["fuse_trips"], strips["gamma_max"],
+                 strips["speed_kn"]))
+        print("  пол.  угол   пузо  проектн.  запас  хорда   Ve     cl  доля потолка")
+        for g in strips["strips"]:
+            print("  %3d %6.1f° %6.3f %8.3f %6.3f %6.2f %5.2f %6.3f %8.2f"
+                  % (g["strip"], g["alpha_deg"], g["camber"], g["design"],
+                     g["slack"], g["chord_m"], g["ve_ms"], g["cl"],
+                     g["at_ceiling"]))
+
+    for spec in (a.section or []):
+        parts = spec.split(",")
+        name = parts[0]
+        camber = float(parts[1])
+        draft = float(parts[2]) if len(parts) > 2 else 0.5
+        up, lo = geo.sail_section(camber, draft, a.chord, a.thickness)
+        tris = geo.extrude_section(up, lo, a.span, z0=-0.5 * a.span)
+        geo.write_stl_ascii(os.path.join(dst, name + ".stl"), [(name, tris)])
+        w = geo.watertight(tris)
+        report["files"][name] = hashing.sha256_file(
+            os.path.join(dst, name + ".stl"))
+        report["bodies"][name] = {"watertight": w, "area_m2": geo.area_m2(tris),
+                                  "volume_m3": geo.volume_m3(tris),
+                                  "bbox_m": geo.bbox_m(tris),
+                                  "camber": camber, "draft": draft,
+                                  "chord_m": a.chord,
+                                  "thickness_rel": a.thickness}
+        made[name] = w["watertight"]
+        print("  %-22s пузо %.3f, горб %.2f, хорда %.2f м, толщина %.1f%% — %s"
+              % (name, camber, draft, a.chord, 100 * a.thickness,
+                 "замкнуто" if w["watertight"] else "НЕ замкнуто"))
+    if strips:
+        report["gennaker_point"] = strips
+    if made:
+        with open(os.path.join(dst, "geometry.json"), "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=1, sort_keys=True)
+        print("сечения в %s" % rel(dst))
+    return 0 if all(made.values()) else 1
+
+
 # --- slices -------------------------------------------------------------------
 
 # Какие разрезы имеют смысл для семейства. Плоскость поперёк размаха показывает
@@ -798,6 +861,19 @@ def main(argv=None):
     co.add_argument("--window", type=float, default=0.5,
                     help="доля хвоста для усреднения, если случай её не задал")
 
+    sa = sub.add_parser("sail", help="сечения паруса в CFD-геометрию")
+    sa.add_argument("--section", action="append",
+                    help="имя,пузо[,горб] — можно несколько раз")
+    sa.add_argument("--chord", type=float, default=1.0, help="хорда, м")
+    sa.add_argument("--span", type=float, default=0.1, help="толщина слоя, м")
+    sa.add_argument("--thickness", type=float, default=0.015,
+                    help="толщина сечения в долях хорды")
+    sa.add_argument("--dst", help="куда писать")
+    sa.add_argument("--twa", type=float,
+                    help="спросить риг о полосках генакера на этом курсе")
+    sa.add_argument("--sheet", type=float, default=4.5, help="длина шкота, м")
+    sa.add_argument("--seconds", type=float, default=25.0)
+
     sl = sub.add_parser("slices", help="снять поля на плоскостях для отчёта")
     sl.add_argument("--run", required=True, help="каталог запуска")
     sl.add_argument("--nx", type=int, default=200)
@@ -822,7 +898,7 @@ def main(argv=None):
         p.print_help()
         return 2
     return {"validate": cmd_validate, "geometry": cmd_geometry, "case": cmd_case,
-            "run": cmd_run, "collect": cmd_collect, "slices": cmd_slices,
+            "run": cmd_run, "collect": cmd_collect, "slices": cmd_slices, "sail": cmd_sail,
             "convergence": cmd_convergence, "compare": cmd_compare,
             "html": cmd_html, "report": cmd_report}[a.cmd](a)
 

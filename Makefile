@@ -156,7 +156,7 @@ fit: extract
 # Цели — однострочные обёртки: §3.6 требует, чтобы то же самое работало и без
 # make, а на счётной машине его может не быть вовсе.
 .PHONY: cfd-validate cfd-image cfd-geometry cfd-case cfd-run cfd-collect \
-        cfd-slices cfd-convergence cfd-compare cfd-report cfd-html
+        cfd-slices cfd-queue cfd-convergence cfd-compare cfd-report cfd-html
 
 CFD := $(VENV) cfd/cfd.py
 
@@ -190,6 +190,13 @@ cfd-collect:
 # режет уже сохранённые поля — в том числе у случая, посчитанного неделю назад.
 cfd-slices:
 	@$(CFD) slices --run $(RUN)
+
+# Очередь: развернуть, посчитать и собрать сводку по каждому случаю ПО ОДНОМУ.
+# Один за другим, а не разом: OpenFOAM берёт столько ядер, сколько ему велено,
+# и два случая по четыре процесса на десяти ядрах идут не вдвое быстрее, а
+# втрое медленнее каждый.
+cfd-queue:
+	@$(VENV) cfd/scripts/queue.py $(if $(ONLY),--only $(ONLY),)
 
 cfd-convergence:
 	@$(CFD) convergence $(if $(FAMILY),--family $(FAMILY),)

@@ -31,6 +31,44 @@ from sv20 import (appendages, calibrate, hullmodel, hydro, meshops, polar,  # no
 RHO_WATER = 1025.0
 
 
+def _deadrise(sec_x, sec_poly, lwl_aft, lwl_fwd, rise_m=0.20):
+    """Килеватость днища по кормовой половине ватерлинии, градусы.
+
+    Главный входной параметр глиссирования, и брать его надо оттуда же, откуда
+    считается плавучесть, — из шпангоутов, а не отдельным числом.
+
+    Мерится так же, как её меряют на буксировках: наклон ПРЯМОГО УЧАСТКА днища,
+    а не касательной у самого киля. Берётся самая нижняя точка контура и точка
+    обвода на `rise_m` выше неё, угол между их хордой и горизонталью. У SV20 на
+    0.20 м выходит 12.3…13.5° почти по всей кормовой половине, к носу круто
+    растёт — потому и берётся половина, а не вся длина: работает на глиссировании
+    именно она.
+    """
+    out = []
+    mid = 0.5 * (lwl_aft + lwl_fwd)
+    for x, poly in zip(sec_x, sec_poly):
+        if x < lwl_aft or x > mid or len(poly) < 3:
+            continue
+        zmin = min(p[1] for p in poly)
+        ykeel = min(poly, key=lambda p: p[1])[0]
+        zc = zmin + rise_m
+        edge = None
+        for k in range(len(poly)):
+            y1, z1 = poly[k]
+            y2, z2 = poly[(k + 1) % len(poly)]
+            if (z1 - zc) * (z2 - zc) > 0:
+                continue
+            t = (zc - z1) / ((z2 - z1) or 1e-9)
+            y = y1 + t * (y2 - y1)
+            if edge is None or abs(y) > abs(edge):
+                edge = y
+        if edge is None:
+            continue
+        dy = abs(edge - ykeel)
+        out.append(math.degrees(math.atan2(rise_m, dy)) if dy > 1e-6 else 90.0)
+    return round(sum(out) / len(out), 2) if out else None
+
+
 def _sections_volume(xs, polys, z_w):
     """Объём по выгруженным контурам — проверка огрубления, не расчёт."""
     areas = []
@@ -337,6 +375,8 @@ def main():
                          for y, z in poly])
     sec_vol = _sections_volume(sec_x, sec_poly, 0.0)
     sec_err = 100.0 * (sec_vol - h["volume_m3"]) / h["volume_m3"]
+    deadrise = _deadrise(sec_x, sec_poly,
+                         h["lwl_aft_x_mm"] / 1000.0, h["lwl_fwd_x_mm"] / 1000.0)
     gz_sum = righting.summarise(gz, ref["gm_mm"])
 
     table = []
@@ -386,6 +426,7 @@ def main():
             "draft_canoe_m": h["draft_canoe_mm"] / 1000.0,
             "wetted_m2": h["wetted_area_m2"], "volume_m3": h["volume_m3"],
             "gm_m": ref["gm_mm"] / 1000.0,
+            "deadrise_deg": deadrise,
             "table": table,
         },
         "righting": {

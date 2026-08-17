@@ -13,9 +13,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { seaState, addedResistance } from '../sim/waves.js';
 import { Boat } from '../sim/physics.js';
+import { Pool } from './lib/pool.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PACK = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
+const PACK_PATH = join(ROOT, 'out/export/physics.json');
+const pool = new Pool(PACK_PATH, PACK);
 const D = Math.PI / 180;
 
 let failures = 0;
@@ -109,25 +112,19 @@ check('добавка растёт как квадрат высоты волны
 // Иначе она не тронет лавировочный угол, а ради него всё и делалось.
 
 {
-  const wrapPi = a => { a %= 2 * Math.PI; if (a > Math.PI) a -= 2 * Math.PI;
-                        if (a < -Math.PI) a += 2 * Math.PI; return a; };
-  const run = (twa, sheet, twist, fetch) => {
-    const b = new Boat(PACK);
-    b.o.windSpeed = 6; b.o.windDir = twa * D; b.o.sheet = sheet * D;
-    b.o.twist = twist * D; b.o.crewHike = -1; b.o.crewMass = 240;  // наветренный
-    b.o.fetch = fetch; b.u = 3; b.phi = 10 * D;
-    for (let i = 0; i < 90 * 30; i++) {
-      b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D,
-        -(2.2 * wrapPi(0 - b.psi) - 0.9 * b.r)));
-      b.step(1 / 30);
-    }
-    return b.telemetry.speedKn;
-  };
+  // Восемь прогонов по девяносто секунд — весь счёт этой батареи, и друг от
+  // друга они не зависят. Считаются в пуле, гладкая вода и волна вперемешку.
+  const CASES = [[35, 3, 16], [50, 6, 24], [90, 32, 16], [150, 70, 8]];
+  const specs = [];
+  for (const [twa, sheet, twist] of CASES)
+    for (const fetch of [0, 3000]) specs.push({ run: 'waveLoss', twa, sheet, twist, fetch });
+  const got = (await pool.map(specs)).map(r => r.speedKn);
   console.log('Потеря хода от волны, ветер 12 узлов, разгон 3 км:\n');
   console.log('  курс     гладкая   с волной   потеря');
   const loss = [];
-  for (const [twa, sh, tw] of [[35, 3, 16], [50, 6, 24], [90, 32, 16], [150, 70, 8]]) {
-    const flat = run(twa, sh, tw, 0), wavy = run(twa, sh, tw, 3000);
+  for (let ci = 0; ci < CASES.length; ci++) {
+    const [twa, sh, tw] = CASES[ci];
+    const flat = got[ci * 2], wavy = got[ci * 2 + 1];
     loss.push({ twa, pct: 100 * (flat - wavy) / flat });
     console.log('  TWA ' + String(twa).padStart(3) + '° ' +
       flat.toFixed(2).padStart(8) + ' ' + wavy.toFixed(2).padStart(10) + ' ' +

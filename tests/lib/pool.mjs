@@ -22,11 +22,15 @@ import { RUNS } from './runs.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 export class Pool {
-  constructor(packPath, pack, size) {
+  // `terrainPath` — пакет акватории. Нужен там, где сценарий считает лодку в
+  // реке: `Terrain` строится в рабочем потоке из того же файла, что и в главном.
+  constructor(packPath, pack, size, terrainPath) {
     // Одно ядро оставляем системе, иначе на ноутбуке всё начинает дёргаться.
     this.n = size || Math.max(1, Math.min(8, cpus().length - 2));
     this.pack = pack;
     this.packPath = packPath;
+    this.terrainPath = terrainPath || null;
+    this.terrain = null;
     this.workers = null;
   }
 
@@ -35,7 +39,8 @@ export class Pool {
     this.workers = [];
     for (let i = 0; i < this.n; i++) {
       const w = new Worker(join(HERE, 'worker.mjs'),
-                           { workerData: { pack: this.packPath } });
+                           { workerData: { pack: this.packPath,
+                                           terrain: this.terrainPath } });
       w.unref();
       this.workers.push(w);
     }
@@ -45,7 +50,7 @@ export class Pool {
   // живёт она в одном месте: разъедутся — параллельный прогон начнёт отвечать
   // не то, что последовательный.
   one(spec) {
-    return spec.run ? RUNS[spec.run](this.pack, spec) : steady(this.pack, spec);
+    return spec.run ? RUNS[spec.run](this.pack, spec, this.terrain) : steady(this.pack, spec);
   }
 
   // Посчитать список условий. Возвращает результаты в том же порядке.

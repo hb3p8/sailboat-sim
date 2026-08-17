@@ -189,29 +189,20 @@ console.log('\nВолна под корпусом\n');
 // раскачивалась, это было бы видно именно так — крен уходит за борт, всплытие
 // за метр.
 {
-  const { Boat } = await import('../sim/physics.js');
+  const { Pool } = await import('./lib/pool.mjs');
   const DEG = Math.PI / 180;
-  const run = (hs, tp, wind) => {
-    const b = new Boat(PACK);
-    // Экипаж на наветренном борту: TWA положительный, значит на левом (−1).
-    b.o.windSpeed = wind; b.o.windDir = 100 * DEG; b.o.crewHike = -1;
-    b.u = 2;
-    const w = 2 * Math.PI / tp, k = w * w / G, amp = hs / 2;
-    const o = { phi: 0, th: 0, zlo: 9, zhi: -9, bad: false };
-    for (let i = 0; i < 60 * 30; i++) {
-      const t = i / 30, ph = k * b.x - w * t;
-      b.setWater(amp * Math.cos(ph), -amp * k * Math.sin(ph), 0);
-      b.step(1 / 30);
-      if (![b.phi, b.th, b.zc, b.u].every(Number.isFinite)) { o.bad = true; break; }
-      if (t < 8) continue;                       // первые секунды — разгон
-      o.phi = Math.max(o.phi, Math.abs(b.phi));
-      o.th = Math.max(o.th, Math.abs(b.th));
-      o.zlo = Math.min(o.zlo, b.zc); o.zhi = Math.max(o.zhi, b.zc);
-    }
-    return o;
-  };
-  for (const [hs, tp, wind] of [[0.58, 2.97, 12], [0.90, 3.60, 16], [0.25, 2.30, 8]]) {
-    const calm = run(0, tp, wind), wave = run(hs, tp, wind);
+  // Шесть прогонов по минуте — весь счёт этой батареи, и все независимы:
+  // считаются в пуле, гладкая вода и волна вперемешку.
+  const CASES = [[0.58, 2.97, 12], [0.90, 3.60, 16], [0.25, 2.30, 8]];
+  const pool = new Pool(new URL('../out/export/physics.json', import.meta.url).pathname, PACK);
+  const specs = [];
+  for (const [hs, tp, wind] of CASES)
+    for (const h of [0, hs]) specs.push({ run: 'waveRide', hs: h, tp, wind });
+  const got = await pool.map(specs);
+  pool.close();
+  for (let ci = 0; ci < CASES.length; ci++) {
+    const [hs, tp, wind] = CASES[ci];
+    const calm = got[ci * 2], wave = got[ci * 2 + 1];
     assert.ok(!wave.bad, `на волне hs=${hs} модель разошлась`);
     // Качка появилась: дифферент на волне обязан быть заметно больше, чем на
     // гладкой воде, где он держится тягой и почти постоянен.

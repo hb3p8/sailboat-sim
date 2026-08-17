@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 import { Terrain, fetchFactor, shelterFactor, channelTurn,
          WIND_SHORE_A, WIND_SHORE_L } from '../sim/terrain.js';
 import { Boat } from '../sim/physics.js';
+import { Pool } from './lib/pool.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PATH = join(ROOT, 'out/export/terrain_pack.json');
@@ -33,6 +34,10 @@ if (!existsSync(PATH)) {
 
 const pack = JSON.parse(readFileSync(PATH, 'utf8'));
 const t = new Terrain(pack);
+// Прогоны лодки по реке — по всем ядрам. Акватория строится в каждом потоке из
+// того же файла, так что модель там та же самая.
+const PHYS_PATH = join(ROOT, 'out/export/physics.json');
+const pool = new Pool(PHYS_PATH, JSON.parse(readFileSync(PHYS_PATH, 'utf8')), 0, PATH);
 
 console.log('\nПакет акватории\n');
 console.log('  участок %s × %s км, шаг %s м; поля физики %s × %s по %s м на %d румбов',
@@ -229,16 +234,12 @@ check('пакет читается и считается готовым', t.read
 {
   const PACK_P = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
   const [ox, oy] = pack.open_water;
-  const run = (x, y, over) => {
-    const b = new Boat(PACK_P, t);
-    Object.assign(b.o, { windSpeed: 8, windDir: 30 * D, sheet: 14 * D, twist: 8 * D,
-                         crewHike: -1, crewMass: 240, fetchOverride: over, fetch: 3000 });
-    b.x = x; b.y = y; b.psi = 30 * D - 45 * D; b.u = 3; b.phi = 12 * D;
-    for (let i = 0; i < 50 * 30; i++) b.step(1 / 30);
-    return b;
-  };
-  const rough = run(ox, oy - 450, false);      // разогнанная сторона
-  const calm = run(ox, oy + 450, false);       // затишная
+  const [rough, calm, over, out] = (await pool.map([
+    { run: 'fetchSide', x: ox, y: oy - 450, over: false },   // разогнанная сторона
+    { run: 'fetchSide', x: ox, y: oy + 450, over: false },   // затишная
+    { run: 'fetchSide', x: ox, y: oy - 450, over: true },    // с переопределением
+    { run: 'fetchSide', x: 60000, y: 60000, over: false },   // за краем участка
+  ])).map(r => ({ telemetry: r.t }));
   console.log('  лодка в бейдевинд, ветер под 30° к реке:');
   console.log('    на разогнанной стороне: разгон %s м, %s уз',
     rough.telemetry.fetchM.toFixed(0), rough.telemetry.speedKn.toFixed(2));
@@ -253,7 +254,6 @@ check('пакет читается и считается готовым', t.read
 
   // Переопределение обязано отменять поле целиком.
   {
-    const over = run(ox, oy - 450, true);
     console.log('    с переопределением:     разгон %s м, %s уз\n',
       over.telemetry.fetchM.toFixed(0), over.telemetry.speedKn.toFixed(2));
     check('переопределение отменяет поле',
@@ -263,7 +263,6 @@ check('пакет читается и считается готовым', t.read
   // За краем участка поле молчит, и разгон берётся из опции — то есть лодка
   // ведёт себя ровно так, как если бы акватории не было вовсе.
   {
-    const out = run(60000, 60000, false);
     check('за краем участка разгон берётся из опции',
       !out.telemetry.fetchField && out.telemetry.fetchM === 3000);
   }
@@ -296,26 +295,16 @@ check('пакет читается и считается готовым', t.read
 
   // Лодка, направленная в берег, обязана остановиться и не пройти сквозь.
   {
-    const b = new Boat(PACK_P, t);
     // Курс к ветру ровно фордевинд: экипаж сидит в лодке, а не на борту.
-    Object.assign(b.o, { windSpeed: 8, windDir: 90 * D, sheet: 24 * D,
-                         crewHike: 0, crewMass: 240 });
-    b.x = ox; b.y = oy; b.psi = -Math.PI / 2; b.u = 4;   // носом на юг, к берегу
-    let worst = 1e9;
-    for (let i = 0; i < 400 * 30; i++) {
-      b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * (-Math.PI / 2 - b.psi) - 0.9 * b.r)));
-      b.step(1 / 30);
-      const d = t.shore(b.x, b.y);
-      if (d !== null && d < worst) worst = d;
-    }
+    const { worst, at } = (await pool.map([{ run: 'intoShore', x: ox, y: oy }]))[0];
     console.log('  лодка носом в берег, 400 с: ближе всего подошла на %s м, стоит на %s м',
-      worst.toFixed(2), t.shore(b.x, b.y).toFixed(2));
+      worst.toFixed(2), at.toFixed(2));
     // Не «где-то около берега», а ровно на урезе: ограничение позиционное, и
     // просочиться сквозь него нельзя даже за четыреста секунд упирания. Гасить
     // одну лишь скорость было мало — у изогнутого берега лодка уползала внутрь
     // по сантиметрам, зато безостановочно.
     check('в берег лодка не проходит', worst > 1.0, worst.toFixed(2) + ' м');
-    check('и стоит там же, а не оседает внутрь', t.shore(b.x, b.y) > 1.0);
+    check('и стоит там же, а не оседает внутрь', at > 1.0);
   }
 
   // Мель. Профиль её — чистая функция места, и меряется он как функция: глубина
@@ -349,22 +338,13 @@ check('пакет читается и считается готовым', t.read
   // тень, и разделить их можно только выключив одну из них. Здесь проверяется
   // то, что и должно: у берега заметно медленнее, но лодка идёт.
   {
-    const run = y0 => {
-      const b = new Boat(PACK_P, t);
-      Object.assign(b.o, { windSpeed: 8, windDir: 90 * D, sheet: 24 * D,
-                           fetchOverride: true, fetch: 0,
-                           crewHike: -1, crewMass: 240 });
-      b.x = ox; b.y = y0; b.psi = 0; b.u = 4;
-      for (let i = 0; i < 60 * 30; i++) {
-        b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * (0 - b.psi) - 0.9 * b.r)));
-        b.step(1 / 30);
-      }
-      return b;
-    };
+    const runPair = async (a, c) => (await pool.map([
+      { run: 'alongShore', x: ox, y: a }, { run: 'alongShore', x: ox, y: c },
+    ])).map(r => ({ telemetry: r.t }));
     // У НАВЕТРЕННОГО берега: у подветренного за минуту дрейф прижмёт лодку к
     // урезу, она упрётся в ограничение и встанет — и померен будет не ход у
     // берега, а берег. Это, кстати, ровно то, чем подветренный берег и опасен.
-    const near = run(ys0 - 12), far = run(oy);
+    const [near, far] = await runPair(ys0 - 12, oy);
     console.log('  вдоль берега 60 с, волнение выключено:');
     console.log('    на середине (%s м до берега): %s уз, ветер ×%s, мель %s',
       far.telemetry.shoreM.toFixed(0), far.telemetry.speedKn.toFixed(2),
@@ -582,18 +562,10 @@ check('пакет читается и считается готовым', t.read
   // кажущийся ветер падает (8.68 -> 7.82 узла), и ход через воду сбавляет на
   // 0.24 узла вместо прежних 0.06. Запас вчетверо больше, а главное — поймать
   // знак срывом больше нельзя: механизм проверяется отдельно, ниже.
-  const run = cur => {
-    const b = new Boat(PACK_P, t);
-    Object.assign(b.o, { windSpeed: 8, windDir: 180 * D, sheet: 80 * D,
-                         current: cur, crewHike: -1, crewMass: 240 });
-    b.x = ox; b.y = oy; b.psi = 0; b.u = 4;
-    for (let i = 0; i < 90 * 30; i++) {
-      b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * (0 - b.psi) - 0.9 * b.r)));
-      b.step(1 / 30);
-    }
-    return b.telemetry;
-  };
-  const with_ = run(U), without = run(0);
+  const [with_, without] = (await pool.map([
+    { run: 'withCurrent', x: ox, y: oy, cur: U },
+    { run: 'withCurrent', x: ox, y: oy, cur: 0 },
+  ])).map(r => r.t);
   console.log('  90 с курсом на восток, ветер попутный:');
   console.log('    без течения:  через воду %s уз, над грунтом %s уз, кажущийся %s уз',
     without.speedKn.toFixed(2), without.sogKn.toFixed(2), without.awsKn.toFixed(2));
@@ -702,22 +674,12 @@ check('пакет читается и считается готовым', t.read
   // каждую из них увело. Мерилось это соответственно неустойчиво — разница
   // гуляла от пяти градусов до одиннадцати от одной правки сил к другой, хотя
   // сам заворот держится своих девятнадцати.
-  const run = k => {
-    const b = new Boat(PACK_P, t);
-    // Ветер здесь стоит под углом к реке, и наветренный борт зависит от её оси:
-    // при TWA больше 180° он меняется на противоположный.
-    const twa = ((along + 60) % 360 + 360) % 360;
-    Object.assign(b.o, { windSpeed: 8, windDir: (along + 60) * D, sheet: 24 * D,
-                         chan: k, current: 0, crewMass: 240,
-                         crewHike: twa > 180 ? 1 : -1 });
-    b.x = ox; b.y = oy; b.psi = 0; b.u = 4;
-    for (let i = 0; i < 40 * 30; i++) {
-      b.o.rudder = Math.max(-25 * D, Math.min(25 * D, -(2.5 * (0 - b.psi) - 0.9 * b.r)));
-      b.step(1 / 30);
-    }
-    return b.telemetry;
-  };
-  const on = run(0.5), off = run(0);
+  // Ветер здесь стоит под углом к реке, и наветренный борт зависит от её оси:
+  // при TWA больше 180° он меняется на противоположный (см. сценарий).
+  const [on, off] = (await pool.map([
+    { run: 'channelWind', x: ox, y: oy, along, k: 0.5 },
+    { run: 'channelWind', x: ox, y: oy, along, k: 0 },
+  ])).map(r => r.t);
   console.log('  ветер под 60° к долине, 40 с на курсе:');
   console.log('    без канализации: кажущийся %s°, %s уз', off.awaDeg.toFixed(0),
     off.speedKn.toFixed(2));

@@ -10,9 +10,13 @@ import { dirname, join } from 'node:path';
 import { WindField, gustAt, gustTexture, GUST_PERIOD } from '../sim/wind.js';
 import { windage } from '../sim/aero.js';
 import { Boat } from '../sim/physics.js';
+import { Pool } from './lib/pool.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PACK = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
+// Долгие прогоны — по всем ядрам: они друг от друга не зависят.
+const PACK_PATH = join(ROOT, 'out/export/physics.json');
+const pool = new Pool(PACK_PATH, PACK);
 const D = Math.PI / 180;
 
 let failures = 0;
@@ -287,14 +291,9 @@ check('хорда убывает к топу',
 // Проверяется то, что можно проверить без картинки: знак пуза следует за
 // галсом и совпадает со знаком, по которому строит панели сам расчёт.
 {
-  const tack = twa => {
-    const b = new Boat(PACK);
-    b.o.windSpeed = 6; b.o.windDir = twa * D; b.o.sheet = 24 * D; b.o.twist = 8 * D;
-    b.u = 4; b.phi = 8 * D * Math.sign(twa);
-    for (let i = 0; i < 60 * 30; i++) b.step(1 / 30);
-    return { strips: b.telemetry.strips, calc: b.rig.stripCalc, side: b.rigSide };
-  };
-  const stb = tack(60), prt = tack(-60);
+  const [stb, prt] = await pool.map([
+    { run: 'tack', twa: 60 }, { run: 'tack', twa: -60 },
+  ]);
   console.log('\nНа какую сторону выгнут парус (пузо со знаком):\n');
   console.log('  галс   борт паруса   пузо грота        пузо стакселя');
   for (const [name, r] of [['правый', stb], ['левый', prt]]) {
@@ -455,20 +454,7 @@ check('хорда убывает к топу',
 // Порыв должен доехать до лодки и накренить её — иначе поле красивое, но ни на
 // что не влияет.
 {
-  const q = new Boat(PACK);
-  q.o.windSpeed = 8; q.o.windDir = 90 * D; q.o.sheet = 20 * D;
-  q.wind.o.gust = 0.35; q.wind.o.shift = 12 * D;
-  q.u = 4;
-  let lo = 99, hi = -99, wLo = 99, wHi = -99;
-  for (let i = 0; i < 300 * 30; i++) {
-    const e = wrapPi(0 - q.psi);
-    q.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * e - 0.9 * q.r)));
-    q.step(1 / 30);
-    if (i > 30 * 30) {
-      lo = Math.min(lo, q.telemetry.heelDeg); hi = Math.max(hi, q.telemetry.heelDeg);
-      wLo = Math.min(wLo, q.telemetry.twsKn); wHi = Math.max(wHi, q.telemetry.twsKn);
-    }
-  }
+  const { lo, hi, wLo, wHi } = (await pool.map([{ run: 'gustHeel' }]))[0];
   console.log('За 5 минут в порывистый ветер: ветер у рига ' + wLo.toFixed(1) +
     '…' + wHi.toFixed(1) + ' уз, крен ' + lo.toFixed(1) + '…' + hi.toFixed(1) + '°\n');
   check('порывы доезжают до лодки', wHi - wLo > 2,
@@ -507,30 +493,15 @@ function wrapPi(a) {
 // работает сорванным, и сверять там нечего.
 console.log('\nРешётка против сечения: подъёмная сила одной и той же полоски\n');
 {
+  const CASES = [['круто в бейдевинд', 35, 10, 8], ['бейдевинд', 45, 14, 8],
+                 ['полный бейдевинд', 50, 17, 8], ['крутой бакштаг', 60, 20, 16]];
+  const got = await pool.map(CASES.map(([, twa, sheet, twist]) =>
+    ({ run: 'latVsSection', twa, sheet, twist })));
   const rows = [];
-  for (const [name, twa, sheet, twist] of [
-      ['круто в бейдевинд', 35, 10, 8], ['бейдевинд', 45, 14, 8],
-      ['полный бейдевинд', 50, 17, 8], ['крутой бакштаг', 60, 20, 16]]) {
-    const b = new Boat(PACK);
-    Object.assign(b.o, { windSpeed: 6, windDir: twa * D, sheet: sheet * D,
-                         twist: twist * D, crewHike: -1, crewMass: 240 });
-    b.u = 3; b.phi = 12 * D;
-    for (let i = 0; i < 60 * 30; i++) {
-      b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * -b.psi - 0.9 * b.r)));
-      b.step(1 / 30);
-    }
-    const st = b.telemetry.strips, calc = b.rig.stripCalc;
+  for (let ci = 0; ci < CASES.length; ci++) {
+    const name = CASES[ci][0], rr = got[ci].ratios;
     let worst = 1, best = 1, n = 0;
-    for (let i = 0; i < st.length; i++) {
-      const g = calc[i];
-      // Полоска годится, если работает: наполнена, до срыва и внутри области,
-      // где поправка на скос берётся целиком (за двадцатью градусами к хорде
-      // она гасится, и тождество там нарочно не держится).
-      if (!g.live || g.fill < 0.8) continue;
-      if (Math.abs(st[i].alphaDeg) > 13 || Math.abs(g.alpha) > 20 * D) continue;
-      const clLat = Math.abs(2 * g.gamma / (g.ve * g.chord));
-      if (clLat < 0.2) continue;
-      const r = Math.abs(st[i].cl) / clLat;
+    for (const r of rr) {
       if (n === 0 || r < worst) worst = r;
       if (n === 0 || r > best) best = r;
       n++;
@@ -613,24 +584,10 @@ console.log('\nПарусность в потоке\n');
 // сломается, колдунчик перестанет быть предупреждением и станет подтверждением
 // уже случившегося — то есть бесполезным.
 {
-  const hold = (sheet) => {
-    const b = new Boat(PACK);
-    b.o.windSpeed = 6; b.o.windDir = 45 * D; b.o.sheet = sheet * D;
-    b.o.twist = 8 * D; b.o.crewHike = -1; b.o.crewMass = 219.9;
-    b.u = 3; b.phi = 18 * D;
-    for (let i = 0; i < 70 * 30; i++) {
-      b.o.rudder = Math.max(-25 * D, Math.min(25 * D, -(2.5 * (0 - b.psi) - 0.9 * b.r)));
-      b.step(1 / 30);
-    }
-    const st = b.telemetry.strips[3];
-    return {
-      speed: b.telemetry.speedKn, alpha: Math.abs(st.alphaDeg),
-      sep: st.sep,
-      // тот же порог, по которому виснет подветренный колдунчик у передней
-      droop: Math.max(0, Math.min(1, (3 - (13 - Math.abs(st.alphaDeg))) / 4)),
-    };
-  };
-  const tight = hold(12), good = hold(16), eased = hold(24);
+  const [tight, good, eased] = await pool.map([
+    { run: 'telltale', sheet: 12 }, { run: 'telltale', sheet: 16 },
+    { run: 'telltale', sheet: 24 },
+  ]);
   console.log('\nПеребранный грот: что показывают колдунчики\n');
   console.log('  шкот   ход     α    отрыв кромки   подветренный у передней');
   for (const [n, r] of [['12°', tight], ['16°', good], ['24°', eased]]) {

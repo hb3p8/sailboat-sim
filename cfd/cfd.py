@@ -307,9 +307,21 @@ def cmd_collect(a):
               % (summary["mesh"]["cells"], summary["mesh"].get("max_non_ortho", 0)))
     if dirty:
         print("  ГРЯЗНЫЙ запуск, в golden/ не идёт: %s" % "; ".join(dirty))
-    worst = max(force[k]["drift"] for k in ("Fx", "Fy", "Fz"))
-    if worst > 1.0:
-        print("  сила дрейфует на окне — среднее по нему сравнивать нельзя (§4.3)")
+    # Дрейфующей сила считается, только когда тренд велик И относительно
+    # разброса, И относительно МАСШТАБА СИЛ В ЭТОМ СЛУЧАЕ.
+    #
+    # Масштаб берётся по наибольшей из трёх составляющих, а не по самой
+    # величине. Обе крайности проверены на живых расчётах: по разбросу одному
+    # тревога поднималась на сошедшемся киле, где разброс — последние разряды
+    # записи; по собственному среднему — на боковой силе при нулевом угле,
+    # которая законно почти нуль, и любой микротренд относительно неё огромен.
+    scale = max(abs(force[k]["mean"]) for k in ("Fx", "Fy", "Fz")) or 1.0
+    drifting = [k for k in ("Fx", "Fy", "Fz")
+                if force[k]["drift"] > 1.0
+                and force[k]["trend_over_window"] / scale > 1e-3]
+    if drifting:
+        print("  дрейфуют %s — среднее по окну сравнивать нельзя (§4.3)"
+              % ", ".join(drifting))
     return 0
 
 
@@ -434,8 +446,14 @@ def convergence_results(family=None):
                 out.append((g + " / " + quantity, None,
                             "нет величины или числа ячеек на всех трёх сетках"))
                 continue
-            drift = max(by_level[lv]["force"]["Fx"]["drift"]
-                        for lv in conv.MESH_ORDER)
+            # В ворота §4.2 идёт дрейф только той величины, которая и
+            # дрейфует по обеим мерам разом; иначе тройка не проходила бы
+            # из-за микротренда в последних разрядах.
+            drift = 0.0
+            for lv in conv.MESH_ORDER:
+                f = by_level[lv]["force"]["Fx"]
+                if f.get("trend_frac", 0.0) > 1e-3:
+                    drift = max(drift, f["drift"])
             drift = None if not math.isfinite(drift) else drift
             r = conv.triple(vals, cells, REGIME.get(fam, "attached"),
                             dim=2 if fam == "sail-2d" else 3, drift=drift)

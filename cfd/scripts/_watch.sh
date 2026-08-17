@@ -2,8 +2,9 @@
 # Сообщать о каждой новой сводке и о каждом упавшем случае.
 # Разовый помощник, не часть контура.
 cd "$(dirname "$0")/../.."
+LOG="$1"
 seen=""
-fails=""
+fails=0
 while true; do
     for f in out/cfd/summaries/*.json; do
         [ -f "$f" ] || continue
@@ -13,10 +14,12 @@ while true; do
             echo "готово: $n"
         ;; esac
     done
-    bad=$(grep -c "упал" /private/tmp/claude-501/-Users-hb3p8-projects-sv20/398e1f93-61b4-505a-b729-b7d178947800/tasks/bdczza6zm.output 2>/dev/null || echo 0)
-    if [ "$bad" != "$fails" ]; then
-        fails="$bad"
-        [ "$bad" != "0" ] && echo "УПАВШИХ СЛУЧАЕВ: $bad"
+    if [ -f "$LOG" ]; then
+        bad=$(grep -c "упал" "$LOG" 2>/dev/null || echo 0)
+        if [ "$bad" -gt "$fails" ] 2>/dev/null; then
+            fails=$bad
+            echo "УПАЛ случай (всего упавших: $bad)"
+        fi
     fi
     if ! pgrep -f "queue.py" > /dev/null 2>&1; then
         echo "очередь закончилась"

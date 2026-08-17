@@ -123,8 +123,9 @@ def case_block(summary, run_dir):
         "turbulence": m["solver"]["turbulence"],
         "derived": summary["derived"],
         "force": {k: {kk: summary["force"][k][kk]
-                      for kk in ("mean", "std", "range", "drift", "window",
-                                 "samples")}
+                      for kk in ("mean", "std", "range", "drift", "trend_frac",
+                                 "window", "samples")
+                      if kk in summary["force"][k]}
                   for k in ("Fx", "Fy", "Fz") if k in summary["force"]},
         "cells": (summary.get("mesh") or {}).get("cells"),
         "mesh_quality": summary.get("mesh"),

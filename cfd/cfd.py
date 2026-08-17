@@ -576,7 +576,14 @@ def _keel_sim_curve(cases):
     ok, _why = simbridge.available()
     if not ok:
         return [], {}
-    grid = [i * 0.5 for i in range(0, 61)]      # 0…30° с шагом полградуса
+    # Кривая рисуется только на том диапазоне углов, который посчитан, плюс
+    # четыре градуса запаса. Тянуть её до срыва при двух посчитанных точках
+    # значит сжать эти точки в левый угол графика: видно будет красивую
+    # параболу симулятора и ничего из того, ради чего график сделан.
+    top = max([c["condition"].get("leeway_deg", 0.0) for c in cases] or [12.0])
+    top = min(30.0, top + 4.0)
+    n = max(8, int(top * 2))
+    grid = [i * top / n for i in range(n + 1)]
     ans = simbridge.query([{"fn": "foil", "alpha_deg": a, "foil": "keel"}
                            for a in grid])
     curve = [{"x": a, "y": r["cl"]} for a, r in zip(grid, ans)]
@@ -659,12 +666,29 @@ def cmd_html(a):
         hull_l, _bars_for("hull-lateral"),
         conv_by_family.get("hull-lateral", []), "lat"))
 
+    # Чувствительность к границе домена: два случая киля, отличающиеся только
+    # размером домена. Это и §4.4, и первое объяснение расхождения с моделью.
+    wide = next((b for b in keel if b["case_id"].endswith("-wide")), None)
+    base = next((b for b in keel
+                 if b["case_id"] == "keel-u200-a06-medium"), None)
+    sens = story.sensitivity_section(base, wide)
+    if sens:
+        sections.append(sens)
+
     pair = [b for b in hull_l
             if abs(b["condition"].get("leeway_deg", 0)) == 4.0]
-    mirror = story.mirror_section(sorted(
-        pair, key=lambda b: -b["condition"]["leeway_deg"])) if len(pair) == 2 else None
-    if mirror:
-        sections.append(mirror)
+    if len(pair) == 2:
+        pair = sorted(pair, key=lambda b: -b["condition"]["leeway_deg"])
+        sim_lat = None
+        ok, _why = simbridge.available()
+        if ok:
+            c = pair[0]["condition"]
+            sim_lat = simbridge.one({
+                "fn": "hullLateral", "speed_ms": c["speed_ms"],
+                "heel_deg": c.get("heel_deg", 0.0),
+                "leeway_deg": c.get("leeway_deg", 0.0),
+                "yaw_rate_nd": 0.0})
+        sections.append(story.mirror_section(pair, sim_lat))
     sections.append(story.limits_section(a.limit or []))
 
     data = payload.sanitise({"sections": [s for s in sections if s]})

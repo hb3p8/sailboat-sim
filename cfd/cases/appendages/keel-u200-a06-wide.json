@@ -1,0 +1,41 @@
+{
+ "schema": 1,
+ "case_id": "keel-u200-a06-wide",
+ "family": "appendages",
+ "template": "openfoam-halfspace",
+ "convergence_group": "keel-u200-a06-wide",
+ "notes": "Проверка чувствительности к размеру домена (§4.4) — и заодно первый подозреваемый по расхождению с foilCoeffs. У остальных случаев киля домен задан в ХОРДАХ, по 12—25, а определяющий размер несущей поверхности — размах: в размахах их домена всего по три-четыре, и скос от границы занижает подъёмную силу. Здесь домен растянут примерно до десяти размахов в каждую сторону при тех же размерах ячеек у поверхности: фоновая ячейка втрое крупнее, а уровни сгущения на два выше, чтобы у пера сетка осталась прежней. Отличается от keel-u200-a06-medium ТОЛЬКО этим, поэтому разность двух ответов и есть влияние границы.",
+ "geometry": {
+  "revision": "подставляется при разворачивании",
+  "bodies": ["keel"],
+  "files": {"keel": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+ },
+ "solver": {
+  "name": "OpenFOAM",
+  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
+  "application": "simpleFoam",
+  "turbulence": "kOmegaSST",
+  "wall_treatment": "wall-function"
+ },
+ "fluid": {"rho": 1025.0, "nu": 1.19e-06},
+ "condition": {"speed_ms": 2.0, "leeway_deg": 6.0},
+ "mesh": {
+  "level": "medium",
+  "family": "keel-half-wide-v1",
+  "base_size_m": 1.0,
+  "refine": [6, 8],
+  "regions": [
+   {"box": [[1.4, -2.0, -4.0], [7.5, 2.0, 0.05]], "level": 3},
+   {"box": [[2.4, -0.8, -2.0], [5.2, 0.8, 0.05]], "level": 4},
+   {"box": [[2.6, -0.35, -1.75], [3.9, 0.35, 0.05]], "level": 6}
+  ],
+  "surface_distance": [[0.05, 7]],
+  "boundary_layers": 4,
+  "yplus_target": 40.0,
+  "cells_target": 6000000,
+  "n_proc": 4,
+  "domain": {"fwd_l": 34.0, "aft_l": 70.0, "side_l": 37.0, "up_l": 0.0, "down_l": 37.0, "seed": [-8.0, 8.0, -8.0]}
+ },
+ "numerics": {"iterations": 1200, "end_time": 1200, "write_interval": 300, "dt_s": 1.0, "residual_tol": 1e-05, "average_from": 900},
+ "reference": {"area_m2": 0.46196, "length_m": 0.35110, "chord_m": 0.35110, "span_m": 1.31575, "rho": 1025.0, "speed_ms": 2.0, "origin_m": [3.05, 0.0, -0.66]}
+}

@@ -55,6 +55,9 @@ QUEUE = [
     ("keel-u200-a06-fine", GEOM_KEEL),
     ("hull-db-u250-b00-coarse", GEOM_MAIN),
     ("hull-db-u250-b00-fine", GEOM_MAIN),
+    # чувствительность к размеру домена: §4.4 требует её всё равно, а здесь
+    # она вдобавок проверяет первое объяснение расхождения киля с foilCoeffs
+    ("keel-u200-a06-wide", GEOM_KEEL),
     ("naca0012-a10-medium", GEOM_MAIN),
     # остальное по скорости и дрейфу
     ("hull-db-u150-b00-medium", GEOM_MAIN),

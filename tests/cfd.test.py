@@ -367,7 +367,9 @@ TEMPLATES = os.path.join(ROOT, "cfd", "templates")
 tmp = tempfile.mkdtemp(prefix="sv20-cfd-gen-")
 try:
     geom = os.path.join(tmp, "geom")
-    geo.canonical(geom, span=0.1, chord=1.0)
+    # Толще любого слоя домена: заглушка обязана удовлетворять тому же
+    # правилу, что и настоящие тела, иначе проверка проверяет саму себя.
+    geo.canonical(geom, span=0.4, chord=1.0)
     # Тела лодки для случаев, которым они нужны, подменяются канонической
     # заглушкой: здесь проверяется разворачивание, а не обводы.
     # Заглушки под тела, которых в каноническом наборе нет: здесь проверяется
@@ -490,6 +492,41 @@ try:
               <= 0.5 * 0.0164 * m["reference"].get("chord_m",
                                                    m["reference"]["length_m"])
               for _p, m in found if m["family"] == "appendages"))
+
+    # Плоский случай: тело обязано быть ТОЛЩЕ слоя домена и пересекать обе
+    # плоскости симметрии насквозь. Совпадение торца тела с границей домена
+    # сеточник обрабатывает плохо — торцы приходится и снимать, и притягивать
+    # одновременно, — и на профиле NACA это стоило незакрытого случая.
+    for _p, m in found:
+        if m["template"] != "openfoam-2d":
+            continue
+        c = openfoam.context(m, geom)
+        for name in (m["geometry"].get("bodies") or m["geometry"]["files"]):
+            stl = os.path.join(geom, name + ".stl")
+            if not os.path.exists(stl):
+                continue
+            bb = geo.bbox_m(geo.read_stl(stl))
+            if bb["min_m"][2] > c["span_lo"] - 1e-9 \
+                    or bb["max_m"][2] < c["span_hi"] + 1e-9:
+                check("тело плоского случая толще слоя: " + m["case_id"], False,
+                      "тело z %.3f…%.3f, слой %.3f…%.3f"
+                      % (bb["min_m"][2], bb["max_m"][2],
+                         c["span_lo"], c["span_hi"]))
+    def _thicker(m):
+        c = openfoam.context(m, geom)
+        for name in (m["geometry"].get("bodies") or m["geometry"]["files"]):
+            stl = os.path.join(geom, name + ".stl")
+            if not os.path.exists(stl):
+                continue
+            bb = geo.bbox_m(geo.read_stl(stl))
+            if bb["min_m"][2] > c["span_lo"] - 1e-9 \
+                    or bb["max_m"][2] < c["span_hi"] + 1e-9:
+                return False
+        return True
+
+    check("у плоских случаев тело толще слоя домена",
+          all(_thicker(m) for _p, m in found
+              if m["template"] == "openfoam-2d"))
 
     # Области сгущения: ящик обязан попасть в словарь сеточника, иначе переход
     # от фоновой ячейки к поверхностной идёт в один скачок и сеточник его
@@ -659,7 +696,9 @@ import cfd.cfd as cli                                # noqa: E402
 tmp = tempfile.mkdtemp(prefix="sv20-cfd-e2e-")
 try:
     geom = os.path.join(tmp, "geom")
-    geo.canonical(geom, span=0.1, chord=1.0)
+    # Толще любого слоя домена: заглушка обязана удовлетворять тому же
+    # правилу, что и настоящие тела, иначе проверка проверяет саму себя.
+    geo.canonical(geom, span=0.4, chord=1.0)
     # Заглушки под тела, которых в каноническом наборе нет: здесь проверяется
     # разворачивание, а не обводы. Список берётся из самих случаев, а не
     # пишется руками — иначе новый случай молча остаётся непроверенным, что уже

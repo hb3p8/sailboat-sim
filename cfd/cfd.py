@@ -678,6 +678,41 @@ def _keel_sim_curve(cases):
     return curve, pts
 
 
+def _gennaker_point():
+    """Состояние полосок рига в рабочей точке — из отчёта о сечениях.
+
+    Спрашивается один раз, при постройке геометрии, и лежит рядом с ней. Звать
+    риг заново при каждой сборке отчёта незачем: это двадцать пять секунд
+    модельного времени со свободной пеленой, и ответ от этого не меняется.
+    """
+    p = os.path.join(OUT_GEOM, "sail", "geometry.json")
+    if not os.path.exists(p):
+        return None
+    with open(p, encoding="utf-8") as f:
+        return json.load(f).get("gennaker_point")
+
+
+def _sail_sim_points(cases):
+    """Что модель отвечает на тех же углах — отдельно для плоской и для пуза."""
+    ok, _why = simbridge.available()
+    if not ok:
+        return {}
+    want = []
+    for c in cases:
+        cam = c["condition"].get("camber", 0.0)
+        want.append(("flat" if cam == 0 else "full",
+                     round(c["condition"].get("alpha_deg", 0.0), 3), cam))
+    # Кривую рисовать не по двум точкам: добавляется сетка углов на том же пузе.
+    cambers = sorted({c["condition"].get("camber", 0.0) for c in cases
+                      if c["condition"].get("camber", 0.0) > 0})
+    if cambers:
+        for a in range(0, 51, 2):
+            want.append(("full", float(a), cambers[0]))
+    ans = simbridge.query([{"fn": "polar", "alpha_deg": a, "camber": cam}
+                           for _k, a, cam in want])
+    return {(k, a): r["cl"] for (k, a, _c), r in zip(want, ans)}
+
+
 def _bars_for(family):
     ok, _why = simbridge.available()
     if not ok:
@@ -736,6 +771,15 @@ def cmd_html(a):
           "Каждый график продублирован таблицей — она под спойлером «таблица "
           "тех же чисел».")},
     ]))
+    # Генакер идёт первым разделом после обзора: это то, ради чего его и
+    # ставили вне очереди — рабочая точка, в которой модель звенит
+    # предохранителем.
+    sail = by_family.get("sail-2d", [])
+    gen = [c for c in sail if c["case_id"].startswith("gen-sec")]
+    if gen:
+        sections.append(story.gennaker_section(
+            gen, _sail_sim_points(gen), _gennaker_point()))
+
     sections.append(story.verification_section(
         ver, conv_by_family.get("verification", [])))
     sections.append(story.keel_section(

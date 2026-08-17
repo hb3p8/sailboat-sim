@@ -415,6 +415,117 @@ def hull_section(cases, rows, conv_rows, kind):
     return {"title": title, "blocks": blocks}
 
 
+def gennaker_section(cases, sim_pts, strips):
+    """Сечение генакера в рабочей точке, где модель упирается в потолок.
+
+    Раздел устроен вокруг ОДНОГО сравнения: плоская пластина против сечения с
+    проектным пузом на одном и том же угле. Модель сейчас считает первую —
+    расчётное пузо у полосок генакера выходит нулевым, — а парус задуман
+    вторым. Разность и есть цена этого нуля.
+    """
+    blocks = [{
+        "kind": "text",
+        "html": ("Карта (курс, шкот) из <code>tests/gennaker.test.mjs</code> "
+                 "краснеет в бакштаге: при TWA 120° и шкоте 4.5—5.5 м "
+                 "предохранитель по потолку сечения звенит по три десятка раз "
+                 "за двадцать пять секунд. Считается именно эта точка, а не "
+                 "удобная.")}]
+    if strips:
+        rows = [[g["strip"], g["alpha_deg"], g["camber"], g["design"],
+                 g["slack"], g["cl"], g["ceiling"], g["at_ceiling"]]
+                for g in strips.get("strips", [])]
+        worst = max((g["at_ceiling"] for g in strips.get("strips", [])),
+                    default=0)
+        blocks.append({"kind": "tiles", "items": [
+            _tile("предохранитель", strips.get("fuse_trips"), "раз", 0),
+            _tile("Γ наибольшее", strips.get("gamma_max"), None, 1),
+            _tile("ход", strips.get("speed_kn"), "уз", 2),
+            _tile("наибольшая доля потолка", worst, None, 2)]})
+        blocks.append({"kind": "note", "html":
+                       "<b>Запас ткани есть, проектное пузо есть, а расчётное "
+                       "выходит нулевым.</b> Полоски держатся на 33…37° угла "
+                       "атаки и считаются ПЛОСКОЙ ПЛАСТИНОЙ: столбец «пузо» "
+                       "весь в нулях при запасе 0.07…0.10 и проектном пузе "
+                       "0.16…0.20. Плоская пластина на таком угле упирается в "
+                       "потолок сечения неизбежно — доля потолка 1.10…1.15, — и "
+                       "предохранитель звенит поделом. Причина ли это красных "
+                       "клеток карты, отсюда не видно: пузо может входить в "
+                       "силы другим путём, и разбираться в этом надо на стороне "
+                       "симулятора. Но именно поэтому ниже считаются ОБЕ формы."})
+        blocks.append({"kind": "table", "open": True,
+                       "head": ["полоска", "угол, °", "пузо", "проектное",
+                                "запас ткани", "cl", "потолок", "доля потолка"],
+                       "rows": rows})
+    if not cases:
+        blocks.append({"kind": "note", "html":
+                       "Ни одно сечение не посчитано — сравнивать нечего."})
+        return {"title": "Генакер: сечение в рабочей точке", "blocks": blocks}
+
+    flat = [c for c in cases if c["condition"].get("camber", 0) == 0]
+    full = [c for c in cases if c["condition"].get("camber", 0) > 0]
+    same = [(f, g) for f in flat for g in full
+            if abs(f["condition"]["alpha_deg"] - g["condition"]["alpha_deg"]) < 1e-6]
+    if same:
+        f, g = same[0]
+        df, dg = f["derived"], g["derived"]
+        gain = (dg["Cl"] - df["Cl"]) / max(abs(df["Cl"]), 1e-9)
+        blocks.append({"kind": "h3", "html":
+                       "Цена нулевого пуза на угле %.0f°"
+                       % f["condition"]["alpha_deg"]})
+        blocks.append({"kind": "tiles", "items": [
+            _tile("Cl плоской пластины", df["Cl"], None, 3),
+            _tile("Cl с проектным пузом", dg["Cl"], None, 3),
+            _tile("разница", 100 * gain, "%", 0),
+            _tile("Cd плоской", df["Cd"], None, 4),
+            _tile("Cd с пузом", dg["Cd"], None, 4)]})
+        blocks.append({"kind": "bars", "rows": [
+            {"label": "Cl, плоская пластина", "cfd": df["Cl"],
+             "sim": sim_pts.get(("flat", round(f["condition"]["alpha_deg"], 3)), 0)},
+            {"label": "Cl, проектное пузо", "cfd": dg["Cl"],
+             "sim": sim_pts.get(("full", round(g["condition"]["alpha_deg"], 3)), 0)},
+        ], "title": "CFD против polarCoeffs на том же угле",
+            "text": ("Модель считает по таблице поляры, и таблица берёт пузо "
+                     "как параметр. Слева — то, что модель считает сейчас "
+                     "(пузо ноль), справа — то, чем парус задуман."),
+            "caption": "Синий — CFD, оранжевый — polarCoeffs."})
+
+    pts = [{"x": c["condition"]["alpha_deg"], "y": c["derived"]["Cl"],
+            "label": c["case_id"],
+            "sim": sim_pts.get(("full", round(c["condition"]["alpha_deg"], 3)))}
+           for c in sorted(full, key=lambda c: c["condition"]["alpha_deg"])]
+    curve = [{"x": a, "y": v} for (kind, a), v in sorted(sim_pts.items())
+             if kind == "full"]
+    if len(pts) >= 2 and curve:
+        blocks.append({
+            "kind": "polar", "pts": pts, "curve": curve,
+            "xlab": "угол атаки, °", "ylab": "Cl", "opt": {"yd": 2},
+            "title": "Поляра сечения с проектным пузом",
+            "text": ("Здесь проверяется не только величина, но и ПОТОЛОК: "
+                     "модель ограничивает подъёмную силу сечения сверху, и в "
+                     "рабочей точке она в этот потолок упирается. Если CFD "
+                     "даёт больше — потолок занижен и держит парус зря; если "
+                     "меньше — он не спасает, а маскирует срыв."),
+            "caption": "Наведите курсор, чтобы увидеть оба значения.",
+            "table": {"head": ["угол, °", "Cl (CFD)", "Cl (модель)", "Δ, %"],
+                      "rows": [[p["x"], p["y"], p["sim"],
+                                None if not p["sim"] else
+                                100 * (p["y"] - p["sim"]) / abs(p["sim"])]
+                               for p in pts]}})
+    for c in cases:
+        s = (c.get("slices") or {}).get("sliceSpan")
+        if s and s.get("nx"):
+            blocks.append({"kind": "field", "slice": s,
+                           "title": "Поле: " + c["case_id"],
+                           "caption": ("Пузо %.3f, угол %.0f°. На таком угле "
+                                       "интересен не столько сам отрыв, сколько "
+                                       "то, где он начинается: от этого зависит "
+                                       "и потолок, и то, что модель считает "
+                                       "срывом."
+                                       % (c["condition"].get("camber", 0),
+                                          c["condition"].get("alpha_deg", 0)))})
+    return {"title": "Генакер: сечение в рабочей точке", "blocks": blocks}
+
+
 def mirror_section(pair, sim=None):
     """Зеркальная пара по дрейфу: разделить настоящую силу и паразитную.
 

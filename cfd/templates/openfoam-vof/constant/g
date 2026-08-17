@@ -1,0 +1,15 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       uniformDimensionedVectorField;
+    object      g;
+}
+
+dimensions      [0 1 -2 0 0 0 0];
+
+// Z вверх в связанных осях CFD, поэтому тяжесть — по −Z. На накренённом
+// корпусе поворачивается ТЕЛО (cfd/lib/geometry.py, `place`), а не вектор g:
+// иначе плоскость невозмущённой воды перестаёт совпадать с z = 0, и всплытие
+// с дифферентом становится нечем мерить.
+value           (0 0 {{g}});

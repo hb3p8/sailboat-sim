@@ -1,0 +1,164 @@
+// Мост к realtime-модели: node cfd/bridge/sim_query.mjs < запрос.json
+//
+// §6 требует, чтобы сравнение звало ТЕ ЖЕ чистые функции, которыми пользуется
+// симулятор. Отсюда мост, а не переписывание формул на питоне: переписанная
+// формула расходится с оригиналом молча, и расхождение с CFD после этого
+// нечему приписать.
+//
+// Вход — JSON-массив запросов на stdin, выход — JSON-массив ответов на stdout.
+// Пакетом, а не по одному вызову: запуск node стоит десятые доли секунды, а
+// точек в поляре сотни.
+//
+//     echo '[{"fn":"hullResistance","u":2.5,"heel_deg":0}]' \
+//       | node cfd/bridge/sim_query.mjs
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+import { foilCoeffs, foilForce, hullResistance, hullLateral, hullHeelYaw }
+  from '../../sim/hydro.js';
+import { polarCoeffs, polarCeiling, polarStallDeg, setSailPolar }
+  from '../../sim/polar.js';
+import { sailCoeffs } from '../../sim/aero.js';
+import { Boat } from '../../sim/physics.js';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const PACK_PATH = join(ROOT, 'out/export/physics.json');
+const D = Math.PI / 180;
+
+let PACK;
+try {
+  PACK = JSON.parse(readFileSync(PACK_PATH, 'utf8'));
+} catch {
+  process.stderr.write(`нет ${PACK_PATH}: сначала make physics\n`);
+  process.exit(2);
+}
+setSailPolar(PACK.sail_polar || null);
+
+// Сколько кадров дать ригу устаканиться перед снятием сил. Решётка со
+// свободной пеленой — не чистая функция от условий: пелена сносится потоком и
+// выходит на форму за несколько секунд. Снимать силы на первом же кадре
+// значит сравнивать CFD с переходным процессом.
+const RIG_SETTLE_S = 12;
+const RIG_HZ = 30;
+
+const Q = {
+  // --- sail-2d --------------------------------------------------------------
+  polar({ alpha_deg, camber }) {
+    const k = polarCoeffs(alpha_deg * D, camber);
+    return {
+      cl: k.cl, cd: k.cd,
+      ceiling: polarCeiling(camber),
+      stall_deg: polarStallDeg(camber),
+    };
+  },
+
+  // Коэффициенты сечения так, как их видит риг: с заполаскиванием.
+  sailSection({ alpha_deg, camber, fill }) {
+    const k = sailCoeffs(alpha_deg * D, camber, fill == null ? 1 : fill);
+    return { cl: k.cl, cd: k.cd };
+  },
+
+  // --- appendages -----------------------------------------------------------
+  foil({ alpha_deg, foil, ar, stall_deg, cd0 }) {
+    const f = foil ? PACK.foils[foil] : null;
+    const k = foilCoeffs(alpha_deg * D,
+                         ar != null ? ar : f.effective_ar,
+                         stall_deg != null ? stall_deg : f.stall_deg,
+                         cd0 != null ? cd0 : 0.008);
+    return { cl: k.cl, cd: k.cd };
+  },
+
+  // Сила крыла сразу в связанных осях — то, что сравнивается с CFD напрямую.
+  foilForce({ foil, speed_ms, leeway_deg, deflect_deg, extra_cd }) {
+    const f = PACK.foils[foil];
+    const b = leeway_deg * D;
+    // Скорость крыла в осях лодки: ux вдоль, vy поперёк. Знак дрейфа тот же,
+    // что в cfd/lib/axes.py: положительный сносит на левый борт, то есть в +Y.
+    const r = foilForce(PACK.environment, f,
+                        speed_ms * Math.cos(b), speed_ms * Math.sin(b),
+                        (deflect_deg || 0) * D, extra_cd || 0);
+    return { fx: r.fx, fy: r.fy, side: r.side, alpha_deg: r.alpha / D, cl: r.cl,
+             area_m2: f.area_m2 };
+  },
+
+  // --- hull-resistance ------------------------------------------------------
+  hullResistance({ speed_ms, heel_deg }) {
+    return { rt_n: hullResistance(PACK, speed_ms, heel_deg || 0) };
+  },
+
+  // --- hull-lateral ---------------------------------------------------------
+  hullLateral({ speed_ms, heel_deg, leeway_deg, yaw_rate_nd }) {
+    const phi = (heel_deg || 0) * D;
+    const b = (leeway_deg || 0) * D;
+    const L = PACK.hydrostatics.lwl_m;
+    const r = ((yaw_rate_nd || 0) * speed_ms) / L;
+    const lat = hullLateral(PACK, phi, speed_ms * Math.sin(b), r, 24);
+    return {
+      fy_n: lat.fy, mz_nm: lat.mz, depth_m: lat.depth,
+      heel_yaw_nm: hullHeelYaw(PACK, speed_ms, phi),
+    };
+  },
+
+  // --- rig-3d ---------------------------------------------------------------
+  //
+  // Кажущийся ветер задаётся напрямую: лодка ставится стоящей (u = v = 0), и
+  // тогда истинный ветер и есть кажущийся. Оговорка, которую обязан помнить
+  // отчёт: в симуляторе ветер растёт с высотой, а в CFD-случае набегающий
+  // поток обычно однороден. Разница в профиле — не ошибка модели, а разница
+  // постановок, и сравнивать с ней надо распределение по высоте, а не только
+  // сумму.
+  rig({ aws_ms, awa_deg, heel_deg, sheet_deg, twist_deg, gennaker }) {
+    const b = new Boat(PACK);
+    b.o.windSpeed = aws_ms;
+    b.o.windDir = (awa_deg || 0) * D;      // курс ноль, значит AWA = windDir
+    b.o.sheet = (sheet_deg || 0) * D;
+    b.o.twist = (twist_deg || 0) * D;
+    b.o.crewHike = 0;
+    b.o.crewMass = 0;
+    b.wind.o.gust = 0;                     // порывов нет: сравнивается среднее
+    b.wind.o.shift = 0;
+    if (gennaker) b.setGennaker(true);
+    b.psi = 0;
+    b.phi = (heel_deg || 0) * D;
+    b.u = 0; b.v = 0; b.r = 0;
+    b.rigSide = (awa_deg || 0) > 0 ? 1 : -1;
+
+    const dt = 1 / RIG_HZ;
+    let out = null;
+    for (let i = 0; i < RIG_SETTLE_S * RIG_HZ; i++) {
+      // Состояние лодки держится насильно: интегратор здесь не нужен, нужен
+      // только установившийся риг при заданных ветре и крене.
+      b.u = 0; b.v = 0; b.r = 0;
+      b.phi = (heel_deg || 0) * D;
+      b.psi = 0;
+      b.t += dt;
+      out = b.rig.forces(b, b.apparentWind(), dt);
+    }
+    return {
+      fx_n: out.fx, fy_n: out.fy, fz_n: out.fz,
+      mx_nm: out.mx, mz_nm: out.mz,
+      ce_x_m: out.ceX, ce_y_m: out.ceY, ce_z_m: out.ceZ,
+      area_m2: out.area, alpha_deg: out.alpha / D, cl: out.cl,
+      settle_s: RIG_SETTLE_S,
+    };
+  },
+};
+
+let raw = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', d => { raw += d; });
+process.stdin.on('end', () => {
+  const req = JSON.parse(raw);
+  const out = req.map(q => {
+    const fn = Q[q.fn];
+    if (!fn) return { error: `нет запроса ${q.fn}` };
+    try {
+      return fn(q);
+    } catch (e) {
+      return { error: String(e && e.message || e) };
+    }
+  });
+  process.stdout.write(JSON.stringify(out));
+});

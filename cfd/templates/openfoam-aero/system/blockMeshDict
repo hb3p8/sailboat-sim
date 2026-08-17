@@ -1,0 +1,54 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      blockMeshDict;
+}
+
+// Фоновая сетка в связанных осях CFD: X в нос, Y на левый борт, Z вверх.
+// Тело стоит в начале координат; поток задаётся вектором скорости, а не
+// поворотом домена, — иначе сеточная погрешность менялась бы от точки поляры
+// к точке.
+scale   1;
+
+vertices
+(
+    ({{dom_xmin}} {{dom_ymin}} {{dom_zmin}})
+    ({{dom_xmax}} {{dom_ymin}} {{dom_zmin}})
+    ({{dom_xmax}} {{dom_ymax}} {{dom_zmin}})
+    ({{dom_xmin}} {{dom_ymax}} {{dom_zmin}})
+    ({{dom_xmin}} {{dom_ymin}} {{dom_zmax}})
+    ({{dom_xmax}} {{dom_ymin}} {{dom_zmax}})
+    ({{dom_xmax}} {{dom_ymax}} {{dom_zmax}})
+    ({{dom_xmin}} {{dom_ymax}} {{dom_zmax}})
+);
+
+blocks
+(
+    hex (0 1 2 3 4 5 6 7) ({{n_x}} {{n_y}} {{n_z}}) simpleGrading (1 1 1)
+);
+
+edges ();
+
+// Все внешние грани — одного типа. Куда именно дует, решает поле U с
+// `inletOutlet`: так один и тот же домен обслуживает и острый курс, и полный,
+// и не нужно переименовывать патчи при смене знака дрейфа.
+boundary
+(
+    farfield
+    {
+        type patch;
+        faces
+        (
+            (0 4 7 3)
+            (1 2 6 5)
+            (0 1 5 4)
+            (3 7 6 2)
+            (0 3 2 1)
+            (4 5 6 7)
+        );
+    }
+);
+
+mergePatchPairs ();

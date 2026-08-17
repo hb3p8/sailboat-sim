@@ -1,0 +1,28 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      transportProperties;
+}
+
+phases (water air);
+
+water
+{
+    transportModel  Newtonian;
+    nu              {{nu}};
+    rho             {{rho}};
+}
+
+air
+{
+    transportModel  Newtonian;
+    nu              {{nu_air}};
+    rho             {{rho_air}};
+}
+
+// Поверхностное натяжение на масштабе корпуса ничего не решает, но оставлено
+// в манифесте: оно понадобится, если дело дойдёт до брызг и вентиляции руля,
+// и тогда его нельзя будет спутать с молчаливым умолчанием.
+sigma           {{sigma}};

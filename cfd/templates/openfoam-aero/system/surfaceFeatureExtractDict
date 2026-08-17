@@ -1,0 +1,22 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      surfaceFeatureExtractDict;
+}
+
+// Рёбра выделяются по углу: у корпуса это транец и скула, у крыла — задняя
+// кромка. Задняя кромка важнее всего: размазанная кромка сдвигает точку схода
+// и меняет циркуляцию, а значит и всю поляру.
+{{body_patch}}.stl
+{
+    extractionMethod    extractFromSurface;
+    includedAngle       150;
+    subsetFeatures
+    {
+        nonManifoldEdges no;
+        openEdges        yes;
+    }
+    writeObj            no;
+}

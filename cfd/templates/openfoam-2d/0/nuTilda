@@ -1,0 +1,32 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      nuTilda;
+}
+
+dimensions      [0 2 -1 0 0 0 0];
+
+internalField   uniform {{nu_tilda}};
+
+boundaryField
+{
+    farfield
+    {
+        type            inletOutlet;
+        inletValue      uniform {{nu_tilda}};
+        value           uniform {{nu_tilda}};
+    }
+
+    {{wall_patches}}
+    {
+        type            fixedValue;
+        value           uniform 0;
+    }
+
+    frontAndBack
+    {
+        type            empty;
+    }
+}

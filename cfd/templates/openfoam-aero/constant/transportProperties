@@ -1,0 +1,15 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      transportProperties;
+}
+
+transportModel  Newtonian;
+
+// Вязкость приходит из манифеста и туда же попадает в сводку. Плотности здесь
+// нет нарочно: решатель несжимаемый и работает с кинематическими величинами,
+// а плотность нужна только для перевода сил в ньютоны — она стоит в
+// `reference.rho` и в функции-объекте `forces`.
+nu              {{nu}};

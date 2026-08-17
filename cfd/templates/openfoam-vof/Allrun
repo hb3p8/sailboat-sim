@@ -1,0 +1,33 @@
+#!/bin/sh
+# Двухфазный случай: та же цепочка, что в воздухе, плюс наливание воды.
+set -e
+cd "$(dirname "$0")"
+mkdir -p log
+
+echo "=== {{case_id}} / {{mesh_level}} / свободная поверхность ==="
+
+runApplication()
+{
+    app=$1; shift
+    echo "--- $app $*"
+    "$app" "$@" > "log/$app.log" 2>&1
+}
+
+runApplication blockMesh
+runApplication surfaceFeatureExtract
+runApplication snappyHexMesh -overwrite
+runApplication checkMesh -writeAllFields
+
+cp -r 0 0.orig
+runApplication setFields
+
+if [ "{{n_proc}}" -gt 1 ]; then
+    runApplication decomposePar
+    echo "--- {{application}} на {{n_proc}} процессах"
+    mpirun -np {{n_proc}} {{application}} -parallel > log/{{application}}.log 2>&1
+    runApplication reconstructPar
+else
+    runApplication {{application}}
+fi
+
+echo "=== готово: postProcessing/forces, postProcessing/waterLine"

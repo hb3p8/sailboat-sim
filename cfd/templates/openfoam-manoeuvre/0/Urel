@@ -1,0 +1,32 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volVectorField;
+    object      Urel;
+}
+
+dimensions      [0 1 -1 0 0 0 0];
+
+// Скорость ОТНОСИТЕЛЬНО вращающейся системы. На дальней границе она задаётся
+// условием `SRFFreestreamVelocity`: оно само вычитает переносную скорость в
+// каждой точке границы, и потому здесь стоит абсолютный вектор потока — тот
+// же самый, что в неподвижном случае.
+internalField   uniform ({{U_x}} {{U_y}} {{U_z}});
+
+boundaryField
+{
+    farfield
+    {
+        type            SRFFreestreamVelocity;
+        UInf            ({{U_x}} {{U_y}} {{U_z}});
+        relative        no;
+        freestreamValue uniform ({{U_x}} {{U_y}} {{U_z}});
+        value           uniform ({{U_x}} {{U_y}} {{U_z}});
+    }
+
+    {{wall_patches}}
+    {
+        type            noSlip;
+    }
+}

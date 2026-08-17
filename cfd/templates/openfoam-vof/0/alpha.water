@@ -1,0 +1,29 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      alpha.water;
+}
+
+dimensions      [0 0 0 0 0 0 0];
+
+// Ноль в начальном поле, вода наливается `setFields` по плоскости z = 0.
+// Наливать прямо здесь нельзя: `internalField` однороден, а нужна именно
+// граница раздела.
+internalField   uniform 0;
+
+boundaryField
+{
+    farfield
+    {
+        type            inletOutlet;
+        inletValue      uniform 0;
+        value           uniform 0;
+    }
+
+    {{wall_patches}}
+    {
+        type            zeroGradient;
+    }
+}

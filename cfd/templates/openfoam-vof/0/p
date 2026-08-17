@@ -1,0 +1,29 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      p;
+}
+
+// В двухфазном решателе давление НЕ кинематическое: единицы Па, и считается
+// оно из p_rgh. Файл нужен только затем, чтобы поле существовало с самого
+// начала; решает всё p_rgh.
+dimensions      [1 -1 -2 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{
+    farfield
+    {
+        type            calculated;
+        value           uniform 0;
+    }
+
+    {{wall_patches}}
+    {
+        type            calculated;
+        value           uniform 0;
+    }
+}

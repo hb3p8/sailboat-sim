@@ -1,0 +1,51 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Шаблон случая SV20. Всё, что заменено на {{имя}}, приходит из манифеста
+| (cfd/lib/openfoam.py); руками здесь не правят — правка делает запуск грязным.
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+application     {{application}};
+
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         {{end_time}};
+deltaT          {{dt}};
+
+writeControl    timeStep;
+writeInterval   {{write_interval}};
+purgeWrite      2;
+writeFormat     binary;
+writePrecision  8;
+writeCompression on;
+timeFormat      general;
+timePrecision   8;
+runTimeModifiable false;
+
+functions
+{
+{{forces_block}}
+
+    yPlus
+    {
+        type            yPlus;
+        libs            (fieldFunctionObjects);
+        writeControl    writeTime;
+        log             yes;
+    }
+
+    residuals
+    {
+        type            solverInfo;
+        libs            (utilityFunctionObjects);
+        fields          (U p k omega);
+        writeControl    timeStep;
+        writeInterval   1;
+    }
+}

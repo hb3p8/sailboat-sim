@@ -1,0 +1,54 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSchemes;
+}
+
+// Схемы второго порядка с ограничителем. Первый порядок по конвекции даёт
+// гладкую сходимость и неверную силу: численная вязкость размазывает отрыв
+// ровно там, где §5 просит его измерить.
+ddtSchemes
+{
+    default         steadyState;
+}
+
+gradSchemes
+{
+    default         cellLimited Gauss linear 1;
+}
+
+divSchemes
+{
+    default         none;
+    div(phi,U)      bounded Gauss linearUpwind grad(U);
+    // Вращающаяся система (шаблон openfoam-manoeuvre) решает то же уравнение
+    // для относительной скорости; схема обязана быть та же, иначе манёвренные
+    // производные окажутся посчитаны другой численностью, чем прямой ход.
+    div(phi,Urel)   bounded Gauss linearUpwind grad(Urel);
+    div(phi,k)      bounded Gauss limitedLinear 1;
+    div(phi,omega)  bounded Gauss limitedLinear 1;
+    div(phi,nuTilda) bounded Gauss limitedLinear 1;
+    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+}
+
+laplacianSchemes
+{
+    default         Gauss linear corrected;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+snGradSchemes
+{
+    default         corrected;
+}
+
+wallDist
+{
+    method          meshWave;
+}

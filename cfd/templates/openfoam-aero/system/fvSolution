@@ -1,0 +1,52 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSolution;
+}
+
+solvers
+{
+    p
+    {
+        solver          GAMG;
+        tolerance       1e-08;
+        relTol          0.01;
+        smoother        GaussSeidel;
+    }
+
+    "(U|Urel|k|omega|epsilon|nuTilda)"
+    {
+        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       1e-08;
+        relTol          0.1;
+    }
+}
+
+SIMPLE
+{
+    nNonOrthogonalCorrectors 1;
+    consistent      yes;
+
+    // Критерий остановки — по невязкам, но останавливаться по ним НЕЛЬЗЯ
+    // считать сходимостью силы (§4.3). Порог здесь стоит затем, чтобы не
+    // жечь машину впустую; вышла ли сила на плато, решает коллектор по
+    // истории `postProcessing/forces`.
+    residualControl
+    {
+        p               {{residual_tol}};
+        U               {{residual_tol}};
+        "(k|omega|epsilon|nuTilda)" {{residual_tol}};
+    }
+}
+
+relaxationFactors
+{
+    equations
+    {
+        U               0.9;
+        ".*"            0.9;
+    }
+}

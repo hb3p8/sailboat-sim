@@ -1,0 +1,15 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      decomposeParDict;
+}
+
+// Число процессов приходит из манифеста, а не из командной строки запускателя
+// (см. заголовок cfd/lib/runners.py): иначе один и тот же случай на разных
+// машинах разбивается по-разному, а разбивка меняет порядок суммирования и
+// последние знаки силы.
+numberOfSubdomains {{n_proc}};
+
+method          scotch;

@@ -125,7 +125,7 @@ PYSLOW := coupled
 # Батареи на питоне стоят особняком: они проверяют не симулятор, а то, что
 # считается ДО него и уезжает в пакет. Поэтому и запускаются интерпретатором из
 # .venv — им нужен numpy, которого системному питону никто не обещал.
-PYTESTS := section bl panel milgram polar
+PYTESTS := section bl panel milgram polar cfd
 
 .PHONY: $(addprefix t-,$(FAST) $(SLOW) $(PYTESTS) $(PYSLOW)) slow all-tests
 
@@ -146,6 +146,53 @@ all-tests: test slow
 fit: extract
 	$(VENV) scripts/fit_hull.py
 	$(MAKE) all
+
+# Офлайн-контур CFD (docs/cfd-validation.md, cfd/README.md).
+#
+# В `all` и в `test` расчёт не входит и войти не может: один случай корпуса —
+# это десятки миллионов ячеек и часы на чужой машине. В `test` входит только
+# батарея `t-cfd`, которая проверяет всё вокруг решателя за полсекунды.
+#
+# Цели — однострочные обёртки: §3.6 требует, чтобы то же самое работало и без
+# make, а на счётной машине его может не быть вовсе.
+.PHONY: cfd-validate cfd-image cfd-geometry cfd-case cfd-run cfd-collect \
+        cfd-convergence cfd-compare cfd-report
+
+CFD := $(VENV) cfd/cfd.py
+
+cfd-validate:
+	@$(CFD) validate
+
+# Образ решателя. Собирается редко, а digest из него уходит в каждый манифест:
+# закреплённый тег через полгода означает другую версию решателя, и расхождение
+# с эталоном спишут на физику (§3.1).
+cfd-image:
+	docker build -t sv20-openfoam:2306 cfd/images
+	@echo "digest в манифесты брать отсюда:"
+	@docker inspect --format='{{index .RepoDigests 0}}' sv20-openfoam:2306 \
+	  || echo "  образ ещё не отправлен в registry — digest появится после push"
+
+# Геометрия в связанных осях CFD плюс канонические тела этапа 0.
+cfd-geometry: export
+	@$(CFD) geometry --canonical
+
+cfd-case:
+	@$(CFD) case --case $(CASE) --force
+
+cfd-run:
+	@$(CFD) run --case $(CASE) --runner $(or $(RUNNER),local)
+
+cfd-collect:
+	@$(CFD) collect --run $(RUN)
+
+cfd-convergence:
+	@$(CFD) convergence $(if $(FAMILY),--family $(FAMILY),)
+
+cfd-compare: physics
+	@$(CFD) compare $(if $(FAMILY),--family $(FAMILY),)
+
+cfd-report: physics
+	@$(CFD) report $(if $(FAMILY),--family $(FAMILY),)
 
 # data/terrain/ не трогается: это кэш скачанного, а не результат сборки.
 clean:

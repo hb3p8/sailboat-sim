@@ -1,0 +1,33 @@
+{
+ "schema": 1,
+ "case_id": "naca0012-a10-fine",
+ "family": "verification",
+ "template": "openfoam-2d",
+ "convergence_group": "naca0012-a10",
+ "notes": "Тонкая сетка запускается только после того, как coarse и medium прошли автоматические проверки (§9). Одиночный тонкий расчёт без них ничего не доказывает.",
+ "geometry": {
+  "revision": "подставляется при разворачивании",
+  "bodies": ["naca0012"],
+  "files": {"naca0012": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+ },
+ "solver": {
+  "name": "OpenFOAM",
+  "image": "opencfd/openfoam-default:2306@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "application": "simpleFoam",
+  "turbulence": "kOmegaSST",
+  "wall_treatment": "wall-function"
+ },
+ "fluid": {"rho": 1.225, "nu": 1.5e-05},
+ "condition": {"speed_ms": 89.4, "alpha_deg": 10.0, "reynolds": 6000000.0},
+ "mesh": {
+  "level": "fine",
+  "family": "naca0012-v1",
+  "base_size_m": 0.25,
+  "boundary_layers": 7,
+  "yplus_target": 30.0,
+  "n_proc": 4,
+  "domain": {"fwd_l": 20.0, "aft_l": 20.0, "side_l": 20.0, "up_l": 1.0, "down_l": 1.0, "span_m": 0.1, "seed": [10.0, 10.0, 0.0]}
+ },
+ "numerics": {"iterations": 4000, "end_time": 4000, "write_interval": 500, "dt_s": 1.0, "residual_tol": 1e-06, "average_from": 2500},
+ "reference": {"area_m2": 0.1, "length_m": 1.0, "chord_m": 1.0, "rho": 1.225, "speed_ms": 89.4, "origin_m": [0.25, 0.0, 0.0]}
+}

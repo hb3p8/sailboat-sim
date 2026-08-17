@@ -1,0 +1,27 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volVectorField;
+    object      U;
+}
+
+dimensions      [0 1 -1 0 0 0 0];
+
+// Вектор набегающего потока в связанных осях CFD. Он уже содержит и дрейф, и
+// угол атаки, и знак: считается один раз в cfd/lib/axes.py и больше нигде.
+internalField   uniform ({{U_x}} {{U_y}} {{U_z}});
+
+boundaryField
+{
+    farfield
+    {
+        type            freestreamVelocity;
+        freestreamValue uniform ({{U_x}} {{U_y}} {{U_z}});
+    }
+
+    {{wall_patches}}
+    {
+        type            noSlip;
+    }
+}

@@ -1,0 +1,27 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      setFieldsDict;
+}
+
+// Вода наливается до z = 0. Это и есть определение невозмущённой поверхности,
+// от которого потом отсчитываются всплытие и дифферент; менять его нельзя, не
+// поменяв заодно осадку в геометрии.
+defaultFieldValues
+(
+    volScalarFieldValue alpha.water 0
+);
+
+regions
+(
+    boxToCell
+    {
+        box ({{dom_xmin}} {{dom_ymin}} {{dom_zmin}}) ({{dom_xmax}} {{dom_ymax}} 0);
+        fieldValues
+        (
+            volScalarFieldValue alpha.water 1
+        );
+    }
+);

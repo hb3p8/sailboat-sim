@@ -1,0 +1,31 @@
+{
+ "schema": 1,
+ "case_id": "axes-probe-mirror",
+ "family": "verification",
+ "template": "openfoam-aero",
+ "convergence_group": "axes-probe-mirror",
+ "notes": "Пара к axes-probe: тот же случай с обратным знаком дрейфа. Отличается ровно одним полем — так и задумано: если отличается что-то ещё, зеркальная проверка перестаёт что-либо проверять.",
+ "geometry": {
+  "revision": "подставляется при разворачивании",
+  "bodies": ["sign_probe"],
+  "files": {"sign_probe": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+ },
+ "solver": {
+  "name": "OpenFOAM",
+  "image": "opencfd/openfoam-default:2306@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "application": "simpleFoam",
+  "turbulence": "kOmegaSST"
+ },
+ "fluid": {"rho": 1.225, "nu": 1.5e-05},
+ "condition": {"speed_ms": 10.0, "leeway_deg": -6.0},
+ "mesh": {
+  "level": "coarse",
+  "family": "probe-v1",
+  "base_size_m": 0.5,
+  "boundary_layers": 3,
+  "n_proc": 4,
+  "domain": {"fwd_l": 10.0, "aft_l": 15.0, "side_l": 10.0, "up_l": 10.0, "down_l": 10.0}
+ },
+ "numerics": {"iterations": 1500, "end_time": 1500, "write_interval": 500, "dt_s": 1.0, "residual_tol": 1e-05, "average_from": 1000},
+ "reference": {"area_m2": 1.0, "length_m": 1.0, "rho": 1.225, "speed_ms": 10.0, "origin_m": [0.0, 0.0, 0.0]}
+}

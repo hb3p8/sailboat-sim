@@ -1,0 +1,85 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      snappyHexMeshDict;
+}
+
+castellatedMesh true;
+snap            true;
+addLayers       true;
+
+geometry
+{
+{{geometry_block}}
+}
+
+castellatedMeshControls
+{
+    maxLocalCells   4000000;
+    maxGlobalCells  {{cells_target}};
+    minRefinementCells 10;
+    maxLoadUnbalance 0.10;
+    nCellsBetweenLevels 3;
+
+    features ();
+
+    refinementSurfaces
+    {
+{{refinement_block}}
+    }
+
+    resolveFeatureAngle 30;
+    refinementRegions {}
+
+    // Точка в жидкости — в связанных осях, далеко впереди и в стороне от тела.
+    // Её положение проверяется тестом: попади она внутрь корпуса, сеточник
+    // молча оставит воду внутри и сила выйдет вдвое меньше.
+    locationInMesh ({{seed_x}} {{seed_y}} {{seed_z}});
+
+    allowFreeStandingZoneFaces true;
+}
+
+snapControls
+{
+    nSmoothPatch    3;
+    tolerance       2.0;
+    nSolveIter      50;
+    nRelaxIter      5;
+    nFeatureSnapIter 10;
+    implicitFeatureSnap false;
+    explicitFeatureSnap true;
+    multiRegionFeatureSnap false;
+}
+
+addLayersControls
+{
+    relativeSizes   true;
+    layers
+    {
+{{layers_block}}
+    }
+    expansionRatio  1.2;
+    finalLayerThickness 0.5;
+    minThickness    0.05;
+    nGrow           0;
+    featureAngle    130;
+    nRelaxIter      5;
+    nSmoothSurfaceNormals 1;
+    nSmoothNormals  3;
+    nSmoothThickness 10;
+    maxFaceThicknessRatio 0.5;
+    maxThicknessToMedialRatio 0.3;
+    minMedialAxisAngle 90;
+    nBufferCellsNoExtrude 0;
+    nLayerIter      50;
+}
+
+meshQualityControls
+{
+    #include "meshQualityDict"
+}
+
+writeFlags ( scalarLevels layerSets layerFields );
+mergeTolerance 1e-6;

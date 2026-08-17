@@ -1,0 +1,31 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      omega;
+}
+
+dimensions      [0 0 -1 0 0 0 0];
+
+internalField   uniform {{omega}};
+
+boundaryField
+{
+    farfield
+    {
+        type            inletOutlet;
+        inletValue      uniform {{omega}};
+        value           uniform {{omega}};
+    }
+
+    // Пристеночная функция здесь — не «модель попроще», а один из двух
+    // вариантов постановки, которые §4.4 требует сравнить между собой на
+    // опорных точках. Второй — разрешённый пограничный слой при y+ около
+    // единицы; он задаётся сеткой, а условие остаётся тем же.
+    {{wall_patches}}
+    {
+        type            omegaWallFunction;
+        value           uniform {{omega}};
+    }
+}

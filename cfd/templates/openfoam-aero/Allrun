@@ -1,0 +1,35 @@
+#!/bin/sh
+# Один случай от сетки до сил. Запускается изнутри контейнера с закреплённым
+# образом (cfd/lib/runners.py), поэтому здесь нет ни выбора версии, ни
+# подстройки окружения: всё это уже решено digest'ом образа.
+#
+# Правится этот файл только в шаблоне. Правка в развёрнутом каталоге делает
+# запуск грязным, и `collect_case.py` его не примет.
+set -e
+cd "$(dirname "$0")"
+mkdir -p log
+
+echo "=== {{case_id}} / {{mesh_level}} ==="
+
+runApplication()
+{
+    app=$1; shift
+    echo "--- $app $*"
+    "$app" "$@" > "log/$app.log" 2>&1
+}
+
+runApplication blockMesh
+runApplication surfaceFeatureExtract
+runApplication snappyHexMesh -overwrite
+runApplication checkMesh -writeAllFields
+
+if [ "{{n_proc}}" -gt 1 ]; then
+    runApplication decomposePar
+    echo "--- {{application}} на {{n_proc}} процессах"
+    mpirun -np {{n_proc}} {{application}} -parallel > log/{{application}}.log 2>&1
+    runApplication reconstructPar -latestTime
+else
+    runApplication {{application}}
+fi
+
+echo "=== готово: postProcessing/forces"

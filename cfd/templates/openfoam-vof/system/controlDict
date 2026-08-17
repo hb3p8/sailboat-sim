@@ -1,0 +1,76 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+application     {{application}};
+
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         {{end_time}};
+deltaT          {{dt}};
+
+writeControl    adjustableRunTime;
+writeInterval   {{write_interval}};
+purgeWrite      3;
+writeFormat     binary;
+writePrecision  8;
+writeCompression on;
+timeFormat      general;
+timePrecision   8;
+runTimeModifiable false;
+
+// Шаг подстраивается по Куранту, и по Куранту межфазному отдельно: граница
+// раздела рвётся раньше, чем поле скорости.
+adjustTimeStep  yes;
+maxCo           {{max_co}};
+maxAlphaCo      {{max_alpha_co}};
+maxDeltaT       {{dt}};
+
+functions
+{
+{{forces_block}}
+
+    yPlus
+    {
+        type            yPlus;
+        libs            (fieldFunctionObjects);
+        writeControl    writeTime;
+        log             yes;
+    }
+
+    // Профиль свободной поверхности вдоль диаметрали — §4 требует его для
+    // разбора причины расхождения по сопротивлению: волновая часть видна на
+    // профиле, вязкая нет.
+    waterLine
+    {
+        type            surfaces;
+        libs            (sampling);
+        writeControl    writeTime;
+        surfaceFormat   raw;
+        fields          (alpha.water);
+        surfaces
+        {
+            freeSurface
+            {
+                type            isoSurface;
+                isoField        alpha.water;
+                isoValue        0.5;
+                interpolate     true;
+            }
+        }
+    }
+
+    residuals
+    {
+        type            solverInfo;
+        libs            (utilityFunctionObjects);
+        fields          (U p_rgh alpha.water k omega);
+        writeControl    timeStep;
+        writeInterval   1;
+    }
+}

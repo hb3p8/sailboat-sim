@@ -1,0 +1,65 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      blockMeshDict;
+}
+
+// Плоская задача: одна ячейка поперёк, боковые грани `empty`.
+//
+// Отдельный шаблон, а не ключ в общем, — потому что двумерность меняет не одно
+// число, а весь набор граничных условий. Спрятать её в подстановку значило бы
+// получить словарь, который выглядит трёхмерным и считает плоское.
+//
+// Двумерное сечение считается в плоскости XY связанных осей: X в нос, Y на
+// левый борт. Угол атаки задаётся поворотом ВЕКТОРА ПОТОКА (cfd/lib/openfoam.py),
+// поэтому одна сетка обслуживает всю поляру, и сеточная погрешность не гуляет
+// от точки к точке.
+scale   1;
+
+vertices
+(
+    ({{dom_xmin}} {{dom_ymin}} {{span_lo}})
+    ({{dom_xmax}} {{dom_ymin}} {{span_lo}})
+    ({{dom_xmax}} {{dom_ymax}} {{span_lo}})
+    ({{dom_xmin}} {{dom_ymax}} {{span_lo}})
+    ({{dom_xmin}} {{dom_ymin}} {{span_hi}})
+    ({{dom_xmax}} {{dom_ymin}} {{span_hi}})
+    ({{dom_xmax}} {{dom_ymax}} {{span_hi}})
+    ({{dom_xmin}} {{dom_ymax}} {{span_hi}})
+);
+
+blocks
+(
+    hex (0 1 2 3 4 5 6 7) ({{n_x}} {{n_y}} 1) simpleGrading (1 1 1)
+);
+
+edges ();
+
+boundary
+(
+    farfield
+    {
+        type patch;
+        faces
+        (
+            (0 4 7 3)
+            (1 2 6 5)
+            (0 1 5 4)
+            (3 7 6 2)
+        );
+    }
+
+    frontAndBack
+    {
+        type empty;
+        faces
+        (
+            (0 3 2 1)
+            (4 5 6 7)
+        );
+    }
+);
+
+mergePatchPairs ();

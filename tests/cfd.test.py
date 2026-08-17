@@ -413,6 +413,52 @@ try:
                             b + "_solid")
               for _p, m in found for b in m["geometry"]["files"]))
 
+    # Рёбра тела обязаны быть ПЕРЕДАНЫ сеточнику, а не только извлечены.
+    # Пустой список `features` — самая дорогая из найденных ошибок: работа
+    # `surfaceFeatureExtract` пропадала впустую, задняя кромка пера скруглялась,
+    # и поляра киля вышла втрое ниже модели. Ничего при этом не падало.
+    for _p, m in found:
+        c = openfoam.context(m, geom)
+        bodies = m["geometry"].get("bodies") or sorted(m["geometry"]["files"])
+        if c["features_block"].count(".eMesh") != len(bodies):
+            check("рёбра переданы сеточнику: " + m["case_id"], False,
+                  c["features_block"][:120])
+        if c["extract_block"].count("extractionMethod") != len(bodies):
+            check("рёбра извлекаются у всех тел: " + m["case_id"], False,
+                  c["extract_block"][:120])
+    check("рёбра каждого тела извлекаются и передаются сеточнику",
+          all(openfoam.context(m, geom)["features_block"].count(".eMesh")
+              == len(m["geometry"].get("bodies")
+                     or m["geometry"]["files"])
+              and openfoam.context(m, geom)["extract_block"]
+              .count("extractionMethod")
+              == len(m["geometry"].get("bodies") or m["geometry"]["files"])
+              for _p, m in found))
+    # Уровень на ребре обязан быть не ниже поверхностного: ребро сгущают,
+    # чтобы разрешить кромку, а не чтобы отметить её.
+    check("уровень на ребре не ниже поверхностного",
+          all(openfoam.context(m, geom)["feature_level"]
+              >= openfoam.context(m, geom)["refine_max"] for _p, m in found))
+
+    # Кромка обязана быть разрешена сеткой, а не просто объявлена ребром.
+    # Ячейка у поверхности крупнее толщины кромки означает, что кромки в
+    # расчёте нет, какие бы рёбра ей ни назначили.
+    for _p, m in found:
+        if m["family"] != "appendages":
+            continue
+        c = openfoam.context(m, geom)
+        cell = c["base_size_m"] / (2 ** c["feature_level"])
+        te = 0.0164 * m["reference"].get("chord_m", m["reference"]["length_m"])
+        if cell > 0.5 * te:
+            check("кромка пера разрешена сеткой: " + m["case_id"], False,
+                  "ячейка на ребре %.5f м, толщина кромки %.5f м" % (cell, te))
+    check("у всех случаев киля кромка разрешена хотя бы двумя ячейками",
+          all((openfoam.context(m, geom)["base_size_m"]
+               / (2 ** openfoam.context(m, geom)["feature_level"]))
+              <= 0.5 * 0.0164 * m["reference"].get("chord_m",
+                                                   m["reference"]["length_m"])
+              for _p, m in found if m["family"] == "appendages"))
+
     # Области сгущения: ящик обязан попасть в словарь сеточника, иначе переход
     # от фоновой ячейки к поверхностной идёт в один скачок и сеточник его
     # срезает — на профиле остаётся тридцать ячеек на хорду.

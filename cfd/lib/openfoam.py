@@ -207,14 +207,34 @@ def _blocks(m, bodies, ctx):
             regions.append("        %s\n        {\n            mode distance;\n"
                            "            levels (%s);\n        }" % (b, levels))
         forces.append(_forces_fo(b, [b], ctx))
+    # Рёбра тела. Их извлекает `surfaceFeatureExtract`, но сеточник берёт их,
+    # только если они перечислены здесь. Первая версия оставляла список пустым
+    # — и это стоило всей поляры киля: задняя кромка пера толщиной 5.8 мм при
+    # ячейке 5.5 мм просто скруглялась, условие Кутты нарушалось, подъёмная
+    # сила падала втрое, а тупая кромка вдобавок срывала поток несимметрично и
+    # давала полтораста ньютонов боковой силы на нулевом угле.
+    #
+    # Уровень на ребре выше поверхностного: сгущать надо линию, а не всю
+    # обшивку, и стоит это немного.
+    feat = m["mesh"].get("feature_level", ctx["refine_max"] + 1)
+    features = ["        {\n            file \"%s.eMesh\";\n"
+                "            level %d;\n        }" % (b, feat) for b in bodies]
     # Отдельно — сумма по всем телам, всегда под именем `forces`. Она и
     # сравнивается с симулятором; силы по телам нужны, чтобы понять, КАКОЕ
     # тело разошлось. Постоянное имя важно: коллектор читает
     # `postProcessing/forces` и не должен знать состав случая.
     forces.append(_forces_fo("forces", bodies, ctx))
+    extract = ["%s.stl\n{\n    extractionMethod    extractFromSurface;\n"
+               "    includedAngle       %g;\n    subsetFeatures\n    {\n"
+               "        nonManifoldEdges no;\n        openEdges        yes;\n"
+               "    }\n    writeObj            no;\n}"
+               % (b, m["mesh"].get("feature_angle", 150.0)) for b in bodies]
     return {"geometry_block": "\n".join(geom),
             "refinement_block": "\n".join(refine),
             "regions_block": "\n".join(regions),
+            "features_block": "\n".join(features),
+            "extract_block": "\n\n".join(extract),
+            "feature_level": feat,
             "layers_block": "\n".join(layers),
             "forces_block": "\n".join(forces)}
 

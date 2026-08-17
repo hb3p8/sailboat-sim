@@ -133,7 +133,8 @@ def validate(m):
     mesh = m["mesh"]
     _extra(mesh, {"level", "family", "cells_target", "base_size_m",
                   "boundary_layers", "yplus_target", "domain", "n_proc",
-                  "refine", "regions", "surface_distance"}, "mesh")
+                  "refine", "regions", "surface_distance", "feature_level",
+                  "feature_angle"}, "mesh")
     for box in mesh.get("regions") or []:
         if set(box) != {"box", "level"} or len(box["box"]) != 2:
             raise ManifestError("mesh.regions: нужен {\"box\": [[x0,y0,z0], "

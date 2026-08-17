@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
 
 import { Pool } from './lib/pool.mjs';
+import { FULL, pick, modeLine } from './lib/mode.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PACK_PATH = join(ROOT, 'out/export/physics.json');
@@ -46,8 +47,13 @@ const wrapPi = a => {
 //
 // Оба прохода раздаются в пул целиком, по всем точкам сразу: чем крупнее
 // порция, тем меньше доля пересылки.
-const SH_COARSE = [6, 13, 20, 27, 34];
-const TW_COARSE = [0, 16, 32];
+// Сетка перебора. В регрессионном режиме она реже, и это единственное, чем
+// режимы отличаются: проверки одни и те же.
+const SH_COARSE = pick([6, 13, 20, 27, 34], [6, 20, 34]);
+const TW_COARSE = pick([0, 16, 32], [0, 16, 32]);
+// Уточнение вокруг найденного: восемь соседних узлов против четырёх по диагонали.
+const REFINE = pick([-3.5, 0, 3.5], [-3.5, 3.5]);
+const REFINE_TW = pick([-8, 0, 8], [-8, 8]);
 
 function specs(points, shs, tws) {
   const out = [];
@@ -87,8 +93,8 @@ async function bestMany(points) {
   const l2 = [];
   w1.forEach((w, k) => {
     const sh0 = w ? w.spec.sheet : 20, tw0 = w ? w.spec.twist : 16;
-    for (const dsh of [-3.5, 0, 3.5]) {
-      for (const dtw of [-8, 0, 8]) {
+    for (const dsh of REFINE) {
+      for (const dtw of REFINE_TW) {
         if (dsh === 0 && dtw === 0) continue;
         l2.push(Object.assign({}, points[k],
           { sheet: Math.max(2, sh0 + dsh), twist: Math.max(0, tw0 + dtw) }));
@@ -110,11 +116,12 @@ async function bestMany(points) {
     { sheet: w.spec.sheet, twist: w.spec.twist, fastest: w.fastest }));
 }
 
+console.log('\n' + modeLine());
 console.log('\nПоляра в лавировку, истинный ветер 6 м/с (11.7 уз), экипаж на борту.');
 console.log('Шкот на каждом курсе подобран под наибольший VMG.\n');
 console.log('  TWA  шкот твист  узлы   крен   дрейф   курс   VMG    руль  ошибка');
 const polarTwa = [];
-for (let twa = 30; twa <= 70; twa += 5) polarTwa.push(twa);
+for (let twa = 30; twa <= 70; twa += pick(5, 10)) polarTwa.push(twa);
 const polarRows = await bestMany(polarTwa.map(twa => ({ twa: twa, hike: 1 })));
 const polar = polarTwa.map((twa, i) => ({ twa: twa, r: polarRows[i] }));
 for (const p of polar) {
@@ -185,7 +192,7 @@ check('скорость нигде не выходит за разумное',
 console.log('\nЛавировка при разной силе ветра, экипаж на борту:\n');
 console.log('  ветер   лучший TWA  шкот твист   узлы   крен    VMG   лавир.угол');
 const WINDS = [3, 4.5, 6, 8, 11, 14];
-const WIND_TWA = [32, 37, 42, 47, 52];
+const WIND_TWA = pick([32, 37, 42, 47, 52], [37, 42, 47]);
 const windPoints = [];
 for (const wind of WINDS) {
   for (const twa of WIND_TWA) windPoints.push({ wind: wind, twa: twa, hike: 1 });

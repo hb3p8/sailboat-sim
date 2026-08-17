@@ -16,6 +16,7 @@ import { hullResistance } from '../sim/hydro.js';
 import { Terrain } from '../sim/terrain.js';
 
 import { Pool } from './lib/pool.mjs';
+import { pick, modeLine } from './lib/mode.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PACK_PATH = join(ROOT, 'out/export/physics.json');
@@ -38,7 +39,7 @@ const D = Math.PI / 180;
 // освобождения потоков, и если десятиминутный достанется последнему, он один и
 // будет держать всю батарею.
 const LONG = [
-  { run: 'looseDrift' },
+  { run: 'looseDrift', every: pick(150, 75), marks: 4 },
   { run: 'byStep', hz: 240 },
   { run: 'gybeJolt' },
   { run: 'downwindSheet', sheet: 15 },
@@ -100,6 +101,7 @@ function sail(twaDeg, sheetDeg, opts = {}) {
 }
 
 console.log("\nУстановившийся ход, истинный ветер 6 м/с (11.7 уз) на стандартных 10 м:\n");
+console.log(modeLine() + '\n');
 console.log('  TWA  шкот   узлы   крен   дрейф    AWA   тяга,Н   VMG   курс');
 const SCHEDULE = [[40, 8], [50, 20], [60, 20], [90, 44],
                   [120, 76], [150, 72], [175, 48]];
@@ -312,11 +314,11 @@ check('добранный в фордевинд парус почти не ве�
 // Отданные шкоты и брошенный руль.
 {
   const { at, t } = (await longAt('looseDrift'))[0];
-  console.log('Всё отдано, десять минут: ' +
+  console.log('Всё отдано, ' + pick('десять', 'пять') + ' минут: ' +
     at.map(v => v.toFixed(2)).join(' → ') + ' уз, TWA ' +
     t.twaAbsDeg.toFixed(0) + '°\n');
   check('с отданными шкотами лодка не разгоняется без конца',
-    at[3] - at[1] < 0.05, 'за последние пять минут ' +
+    at[3] - at[1] < 0.05, 'за последнюю половину прогона ' +
     (at[3] - at[1]).toFixed(2) + ' уз');
   check('и едет медленно', at[3] < 4.2, at[3].toFixed(2) + ' уз');
   // Стаксель на отданных шкотах складывается целиком: удержать его дальше

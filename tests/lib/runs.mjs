@@ -77,14 +77,20 @@ export const RUNS = {
     return { flips, jolt };
   },
 
-  // Отданные шкоты и брошенный руль, десять минут.
-  looseDrift(pack) {
+  // Отданные шкоты и брошенный руль. Ход снимается каждые `spec.every` секунд,
+  // всего `spec.marks` раз, — по последним двум и видно, разгоняется ли лодка.
+  //
+  // Длину задаёт батарея: полный прогон десять минут, регрессионный пять. Само
+  // утверждение от этого не меняется — «за последний отрезок прибавки нет», —
+  // но десять минут ловят медленное сползание, которого за пять не видно.
+  looseDrift(pack, spec) {
+    const every = spec.every || 150, marks = spec.marks || 4;
     const b = new Boat(pack);
     b.o.windSpeed = 6; b.o.windDir = 90 * D; b.o.sheet = 90 * D; b.o.rudder = 0;
     const at = [];
-    for (let i = 0; i < 600 * 30; i++) {
+    for (let i = 0; i < every * marks * 30; i++) {
       b.step(1 / 30);
-      if ((i + 1) % (150 * 30) === 0) at.push(b.telemetry.speedKn);
+      if ((i + 1) % (every * 30) === 0) at.push(b.telemetry.speedKn);
     }
     return { at, t: tele(b) };
   },

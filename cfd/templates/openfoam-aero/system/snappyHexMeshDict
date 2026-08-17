@@ -72,8 +72,11 @@ addLayersControls
 {{layers_block}}
     }
     expansionRatio  1.2;
-    finalLayerThickness 0.5;
-    minThickness    0.05;
+    // Мягче, чем принято, и нарочно. На тонком сечении паруса слои не
+    // помещались вовсе — «Added 0 out of 582864 cells», — а слой в ноль
+    // ячеек означает, что трение считается на голой сетке.
+    finalLayerThickness 0.4;
+    minThickness    0.02;
     nGrow           0;
     featureAngle    130;
     nRelaxIter      5;
@@ -92,5 +95,11 @@ meshQualityControls
     #include "meshQualityDict"
 }
 
-writeFlags ( scalarLevels layerSets layerFields );
+// Только уровни сгущения. `layerSets` и `layerFields` — отладочная запись
+// пограничных слоёв, и на теле, где слоёв добавить не удалось НИ ОДНОГО,
+// `snappyHexMesh` v2306 падает в ней с segmentation fault: пишет «Writing 0
+// added cells» и обрушивается в `writeLayerSets`. Диагностика, роняющая
+// сеточник, хуже отсутствующей — тем более что сам факт «слоёв ноль» виден в
+// логе и без неё.
+writeFlags ( scalarLevels );
 mergeTolerance 1e-6;

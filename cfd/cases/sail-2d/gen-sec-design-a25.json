@@ -22,7 +22,7 @@
  },
  "mesh": {
   "base_size_m": 8.0,
-  "boundary_layers": 4,
+  "boundary_layers": 3,
   "cells_target": 3000000,
   "domain": {
    "aft_l": 40.0,

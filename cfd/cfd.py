@@ -278,6 +278,7 @@ def cmd_collect(a):
             "cop_z_m": (M[0] / F[1]) if abs(F[1]) > 1e-9 else None,
         },
         "mesh": _read_log(logs, "checkMesh.log", fx.read_mesh_stats),
+        "layers": _read_log(logs, "snappyHexMesh.log", fx.read_layers),
         "yplus": _read_log(logs, m["solver"]["application"] + ".log", fx.read_yplus),
         "residuals": _read_log(logs, m["solver"]["application"] + ".log",
                                fx.read_residuals),
@@ -305,6 +306,12 @@ def cmd_collect(a):
     if summary["mesh"] and summary["mesh"].get("cells"):
         print("  ячеек %d, max non-ortho %.1f"
               % (summary["mesh"]["cells"], summary["mesh"].get("max_non_ortho", 0)))
+    lay = summary.get("layers")
+    if lay is not None:
+        print("  слоёв добавлено на %.0f%% граней%s"
+              % (lay["percent"],
+                 "  — пристеночная область НЕ разрешена, трение считать нельзя"
+                 if lay["percent"] < 40 else ""))
     if dirty:
         print("  ГРЯЗНЫЙ запуск, в golden/ не идёт: %s" % "; ".join(dirty))
     # Дрейфующей сила считается, только когда тренд велик И относительно

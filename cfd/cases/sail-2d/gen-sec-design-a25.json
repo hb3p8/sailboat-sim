@@ -21,29 +21,29 @@
   "revision": "подставляется при разворачивании"
  },
  "mesh": {
-  "base_size_m": 8.0,
+  "base_size_m": 2.0,
   "boundary_layers": 3,
   "cells_target": 3000000,
   "domain": {
-   "aft_l": 40.0,
+   "aft_l": 20.0,
    "down_l": 1.0,
-   "fwd_l": 40.0,
+   "fwd_l": 20.0,
    "seed": [
-    60.0,
-    60.0,
+    30.0,
+    30.0,
     0.0
    ],
-   "side_l": 40.0,
-   "span_m": 0.1,
+   "side_l": 20.0,
+   "span_m": 0.2,
    "up_l": 1.0
   },
   "family": "sail2d-v1",
-  "feature_level": 10,
+  "feature_level": 8,
   "level": "medium",
   "n_proc": 8,
   "refine": [
-   7,
-   9
+   5,
+   7
   ],
   "regions": [
    {
@@ -59,7 +59,7 @@
       0.3
      ]
     ],
-    "level": 2
+    "level": 1
    },
    {
     "box": [
@@ -74,7 +74,7 @@
       0.3
      ]
     ],
-    "level": 4
+    "level": 3
    },
    {
     "box": [
@@ -89,13 +89,13 @@
       0.3
      ]
     ],
-    "level": 6
+    "level": 5
    }
   ],
   "surface_distance": [
    [
     0.6,
-    8
+    6
    ]
   ],
   "yplus_target": 40.0
@@ -110,7 +110,7 @@
   "write_interval": 400
  },
  "reference": {
-  "area_m2": 0.39,
+  "area_m2": 0.78,
   "chord_m": 3.9,
   "length_m": 3.9,
   "origin_m": [

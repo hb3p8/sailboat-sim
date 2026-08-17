@@ -149,7 +149,7 @@ const G = PACK.rig.gennaker;
 {
   console.log('\nУстойчивость по длине шкота (TWA 140°, ветер 6 м/с):\n');
   const wrap = a => ((a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-  const run = len => {
+  const run = (len, twa = 140) => {
     const b = new Boat(PACK);
     b.o.freeWake = true; b.o.wakeForces = true;
     b.o.crewHike = -1; b.o.crewMass = 219.9;
@@ -158,7 +158,6 @@ const G = PACK.rig.gennaker;
     b.o.sheet = 70 * D; b.o.twist = 8 * D; b.o.genSheetLen = len;
     b.reset();
     b.o.windSpeed = 6; b.o.windDir = 100 * D; b.u = 3;
-    const twa = 140;
     b.psi = (100 - twa) * D;
     let gmax = 0;
     for (let i = 0; i < 25 * 30; i++) {
@@ -185,6 +184,39 @@ const G = PACK.rig.gennaker;
   console.log('');
   check('решение не разносится ни на одном положении шкота', worst < LIMIT,
         'худшее Γ = ' + worst.toExponential(1) + ' при шкоте ' + worstAt.toFixed(1) + ' м');
+
+  // И ТО ЖЕ САМОЕ ПО КУРСУ, потому что одной развёртки мало.
+  //
+  // Развёртка выше идёт при TWA 140° и однажды уже обманула: по ней объявили,
+  // что генакер сделан, а он держался на одном курсе. Двумерная карта показала,
+  // что здоровая область — диагональная полоса в (курс, шкот), и середина
+  // заявленного диапазона в неё не попадает: при TWA 120° и шкоте 4.5…5.5 м
+  // предохранитель звенит по три десятка раз за двадцать пять секунд.
+  //
+  // Заявленный диапазон назван владельцем лодки: «в основном бакштаг, но бывает
+  // близко к фордевинду», то есть TWA 120…180°. Проверка стоит на нём целиком, и
+  // пока она красная — генакер не сделан, как бы ни выглядела одна развёртка.
+  console.log('\nУстойчивость по курсу и шкоту (ветер 6 м/с), Γmax и срабатывания:\n');
+  const TWAS = [120, 135, 150, 165, 180];
+  const LENS = [3.5, 4.5, 5.5, 6.5, 7.5];
+  let head = '      шкот \\ курс';
+  for (const t of TWAS) head += (t + '°').padStart(12);
+  console.log(head);
+  let bad = 0, badAt = '';
+  for (const L of LENS) {
+    let line = ('    ' + L.toFixed(1) + ' м').padStart(17);
+    for (const t of TWAS) {
+      const r = run(L, t);
+      const ill = r.gmax > LIMIT || r.fuse > 2;
+      if (ill) { bad++; if (!badAt) badAt = 'TWA ' + t + '°, шкот ' + L.toFixed(1) + ' м'; }
+      line += ((ill ? '!' : ' ') + r.gmax.toExponential(1) +
+               (r.fuse ? '×' + r.fuse : '')).padStart(12);
+    }
+    console.log(line);
+  }
+  console.log('');
+  check('на всех заявленных курсах решение держится', bad === 0,
+        bad ? bad + ' клеток из 25, первая — ' + badAt : '');
 }
 
 console.log(failures ? '\n' + failures + ' проверок провалено' : '\nвсе проверки прошли');

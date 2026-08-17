@@ -23,6 +23,39 @@ const PACK = JSON.parse(readFileSync(PACK_PATH, 'utf8'));
 // Перебор настроек — по всем ядрам: прогоны друг от друга не зависят.
 const pool = new Pool(PACK_PATH, PACK);
 const D = Math.PI / 180;
+
+// Длинные одиночные прогоны заказываются ЗДЕСЬ, до всего остального, а
+// разбираются там, где проверяются.
+//
+// Раньше они шли друг за другом в главном потоке и съедали половину батареи:
+// одна десятиминутная посудина на отданных шкотах — сто секунд, пять
+// полутораминутных развёрток по шкоту — ещё сто. Всё это друг от друга не
+// зависит, и ждать их по очереди незачем. Теперь они считаются в пуле, пока
+// главный поток занят своими короткими разделами, а `await` стоит в точке, где
+// число впервые нужно, — порядок вывода от этого не меняется.
+//
+// Порядок в списке — от самого долгого: раздача идёт кусками по мере
+// освобождения потоков, и если десятиминутный достанется последнему, он один и
+// будет держать всю батарею.
+const LONG = [
+  { run: 'looseDrift' },
+  { run: 'byStep', hz: 240 },
+  { run: 'gybeJolt' },
+  { run: 'downwindSheet', sheet: 15 },
+  { run: 'downwindSheet', sheet: 35 },
+  { run: 'downwindSheet', sheet: 55 },
+  { run: 'downwindSheet', sheet: 75 },
+  { run: 'downwindSheet', sheet: 90 },
+  { run: 'balance', twa: 45, sheet: 14 },
+  { run: 'balance', twa: 60, sheet: 22 },
+  { run: 'balance', twa: 90, sheet: 40 },
+  { run: 'byStep', hz: 30 },
+];
+const longP = pool.map(LONG);
+const longAt = async name => {
+  const all = await longP;
+  return LONG.map((s, i) => [s, all[i]]).filter(([s]) => s.run === name).map(([, r]) => r);
+};
 const KN = 1.94384;
 
 let failures = 0;
@@ -183,21 +216,8 @@ check('галфвинд в 11.7 узлах ветра у рига около в�
 
 console.log('\nБалансировка: руль для удержания курса и поведение с брошенным рулём\n');
 console.log('  TWA   руль    через 10 с с брошенным рулём');
-const balance = [];
-for (const [twa, sheet] of [[45, 14], [60, 22], [90, 40]]) {
-  const b = new Boat(PACK);
-  b.o.windSpeed = 6; b.o.windDir = twa * D; b.o.sheet = sheet * D; b.u = 3.5;
-  for (let i = 0; i < 120 * 30; i++) {
-    const err = wrapPi(0 - b.psi);
-    b.o.rudderTarget = Math.max(-30 * D, Math.min(30 * D, -(2.2 * err - 0.9 * b.r)));
-    b.step(1 / 30);
-  }
-  const helm = b.o.rudder / D;
-  const twa0 = Math.abs(b.trueWindAngle()) / D;
-  b.o.rudderTarget = 0;
-  for (let i = 0; i < 10 * 30; i++) b.step(1 / 30);
-  const drift = twa0 - Math.abs(b.trueWindAngle()) / D;
-  balance.push({ twa, helm, drift });
+const balance = await longAt('balance');
+for (const { twa, helm, drift } of balance) {
   console.log('  ' + String(twa).padStart(3) + '° ' + helm.toFixed(1).padStart(6) +
     '°   ' + (drift >= 0 ? 'привелась на +' : 'увалилась на ') +
     drift.toFixed(0) + '°');
@@ -256,15 +276,7 @@ check('лавировочный угол не уже семидесяти гра
 console.log('\nФордевинд, шкот от добранного до отданного:\n');
 console.log('  шкот    α°   состояние потока   тяга,Н   скорость,уз');
 const runRows = [];
-for (const sheet of [15, 35, 55, 75, 90]) {
-  const b = new Boat(PACK);
-  b.o.windSpeed = 7; b.o.windDir = 180 * D; b.o.sheet = sheet * D; b.u = 3;
-  for (let i = 0; i < 150 * 30; i++) {
-    const err = wrapPi(0 - b.psi);
-    b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * err - 0.9 * b.r)));
-    b.step(1 / 30);
-  }
-  const t = b.telemetry;
+for (const { sheet, t } of await longAt('downwindSheet')) {
   // Поток прилипает и у нулевого угла, и у ста восьмидесяти: во втором
   // случае парус просто стоит вдоль потока задом наперёд, как флаг.
   const eff = Math.min(Math.abs(t.alphaDeg), 180 - Math.abs(t.alphaDeg));
@@ -289,23 +301,7 @@ check('добранный в фордевинд парус почти не ве�
 
 // Парус стоит на своём борту, пока не перекинется по-настоящему.
 {
-  const b = new Boat(PACK);
-  b.o.windSpeed = 7; b.o.windDir = 180 * D; b.o.sheet = 75 * D; b.u = 3;
-  b.wind.o.gust = 0.25; b.wind.o.shift = 0.25 * 45 * D;
-  // Борт паруса — величина непрерывная (гик переходит за секунду), поэтому
-  // считаются смены ЗНАКА, то есть настоящие перебросы, а не каждый шаг взмаха.
-  let flips = 0, prev = Math.sign(b.rigSide || 1), jolt = 0, prevSide = null;
-  for (let i = 0; i < 180 * 30; i++) {
-    const err = wrapPi(0 - b.psi);
-    b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * err - 0.9 * b.r)));
-    b.step(1 / 30);
-    if (i < 30 * 30) continue;
-    const now = Math.sign(b.rigSide || 1);
-    if (now !== prev) flips++;
-    prev = now;
-    if (prevSide !== null) jolt = Math.max(jolt, Math.abs(b.telemetry.sideN - prevSide));
-    prevSide = b.telemetry.sideN;
-  }
+  const { flips, jolt } = (await longAt('gybeJolt'))[0];
   console.log('Чистый фордевинд в порывистый ветер: борт паруса менялся ' + flips +
     ' раз, наибольший скачок боковой силы ' + jolt.toFixed(0) + ' Н за шаг\n');
   // Раньше здесь было по десятку перекидываний с рывком в две сотни ньютонов —
@@ -315,14 +311,7 @@ check('добранный в фордевинд парус почти не ве�
 
 // Отданные шкоты и брошенный руль.
 {
-  const b = new Boat(PACK);
-  b.o.windSpeed = 6; b.o.windDir = 90 * D; b.o.sheet = 90 * D; b.o.rudder = 0;
-  const at = [];
-  for (let i = 0; i < 600 * 30; i++) {
-    b.step(1 / 30);
-    if ((i + 1) % (150 * 30) === 0) at.push(b.telemetry.speedKn);
-  }
-  const t = b.telemetry;
+  const { at, t } = (await longAt('looseDrift'))[0];
   console.log('Всё отдано, десять минут: ' +
     at.map(v => v.toFixed(2)).join(' → ') + ' уз, TWA ' +
     t.twaAbsDeg.toFixed(0) + '°\n');
@@ -365,26 +354,13 @@ check('добранный в фордевинд парус почти не ве�
 
 console.log('\nОдин и тот же ход разным шагом интегрирования:\n');
 console.log('    шаг    размах крена   средний ход   пик скорости крена');
-const byStep = [];
-for (const hz of [30, 240]) {
-  const b = new Boat(PACK);
-  b.o.windSpeed = 9; b.o.windDir = 140 * D; b.o.sheet = 72 * D;
-  b.o.twist = 8 * D; b.o.crewHike = -1; b.o.crewMass = 240;   // наветренный борт
-  b.wind.o.gust = 0.45; b.wind.o.shift = 0.45 * 45 * D;
-  b.u = 3.2; b.o.rudder = 0; b.o.rudderTarget = null;
-  let lo = 9e9, hi = -9e9, sum = 0, n = 0, peak = 0;
-  for (let i = 0; i < 30 * hz; i++) {
-    b.step(1 / hz);
-    if (i < 8 * hz) continue;              // переходный процесс пропускаем
-    const h = b.telemetry.heelDeg;
-    lo = Math.min(lo, h); hi = Math.max(hi, h);
-    sum += b.telemetry.speedKn; n++;
-    peak = Math.max(peak, Math.abs(b.p_ / D));
-  }
-  byStep.push({ hz, range: hi - lo, speed: sum / n, peak });
-  console.log('   1/' + String(hz).padEnd(5) + (hi - lo).toFixed(2).padStart(10) +
-    '°' + (sum / n).toFixed(3).padStart(13) + ' уз' +
-    peak.toFixed(1).padStart(16) + '°/с');
+// Заказаны в LONG обоими шагами; в списке они лежат от долгого к короткому, а
+// здесь нужны от крупного шага к мелкому — как в отчёте.
+const byStep = (await longAt('byStep')).slice().sort((a, b) => a.hz - b.hz);
+for (const r of byStep) {
+  console.log('   1/' + String(r.hz).padEnd(5) + r.range.toFixed(2).padStart(10) +
+    '°' + r.speed.toFixed(3).padStart(13) + ' уз' +
+    r.peak.toFixed(1).padStart(16) + '°/с');
 }
 console.log('');
 const [coarse, fine] = byStep;

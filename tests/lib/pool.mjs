@@ -17,6 +17,7 @@ import { cpus } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { steady } from './steady.mjs';
+import { RUNS } from './runs.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -40,9 +41,43 @@ export class Pool {
     }
   }
 
+  // Одно условие — в главном потоке. Развилка та же, что в рабочем потоке, и
+  // живёт она в одном месте: разъедутся — параллельный прогон начнёт отвечать
+  // не то, что последовательный.
+  one(spec) {
+    return spec.run ? RUNS[spec.run](this.pack, spec) : steady(this.pack, spec);
+  }
+
   // Посчитать список условий. Возвращает результаты в том же порядке.
+  //
+  // Порог «меньше трёх — считаем сами» стоял на установившихся ходах: они
+  // короткие, и заводить под них потоки дороже. Именованные сценарии длинные —
+  // десять минут модельного времени, — и их в главном потоке держать нельзя
+  // даже поодиночке.
   async map(specs) {
-    if (specs.length <= 2) return specs.map(s => steady(this.pack, s));
+    if (specs.length <= 2 && !specs.some(s => s.run)) return specs.map(s => this.one(s));
+    // Вызовы выстраиваются в очередь, и это не осторожность, а необходимость.
+    //
+    // Внутри висит по одному `once('message')` на поток за раз; два `map`,
+    // работающих одновременно, разбирают чужие ответы, и результаты съезжают —
+    // молча, потому что форма у них одинаковая. Ловилось это тем, что заказ
+    // длинных прогонов вперёд обычного перебора ронял таблицу курсов с
+    // «undefined.toFixed».
+    //
+    // Заказать работу заранее и разобрать её позже это не мешает: пока очередь
+    // считает, главный поток свободен.
+    const prev = this._chain || Promise.resolve();
+    let release;
+    this._chain = new Promise(r => { release = r; });
+    await prev;
+    try {
+      return await this._run(specs);
+    } finally {
+      release();
+    }
+  }
+
+  async _run(specs) {
     this._start();
     const chunks = [];
     const per = Math.max(1, Math.ceil(specs.length / (this.n * 3)));

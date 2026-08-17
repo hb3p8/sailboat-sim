@@ -33,8 +33,10 @@ sys.path.insert(0, ROOT)
 
 from cfd.lib import axes as ax                       # noqa: E402
 from cfd.lib import convergence as conv              # noqa: E402
+from cfd.lib import fields                           # noqa: E402
 from cfd.lib import forces as fx                     # noqa: E402
 from cfd.lib import geometry as geo                  # noqa: E402
+from cfd.lib import htmlreport, payload, story       # noqa: E402
 from cfd.lib import hashing, manifest, openfoam      # noqa: E402
 from cfd.lib import report as rep                    # noqa: E402
 from cfd.lib import runners, simbridge               # noqa: E402
@@ -236,6 +238,8 @@ def cmd_collect(a):
     q = case["coefficient_basis"]["q_pa"]
     A = case["coefficient_basis"]["area_m2"]
     L = case["coefficient_basis"]["length_m"]
+    ctx = case["context"]
+    along, cross = ax.flow_frame((ctx["U_x"], ctx["U_y"], ctx["U_z"]))
 
     logs = os.path.join(run_dir, "log")
     summary = {
@@ -252,14 +256,23 @@ def cmd_collect(a):
         "force": force,
         "moment": moment,
         "frames": ax.both_frames(F, M),
+        "flow_frame": {"along": list(along), "cross": list(cross)},
         "derived": {
             "Rt_n": ax.drag(F), "Fy_n": ax.side(F),
             "Fx": F[0], "Fy": F[1], "Fz": F[2],
             "Mx": M[0], "My": M[1], "Mz": M[2],
             # §3.7: коэффициент без записанного основания не принимается,
             # поэтому он и лежит рядом с `coefficient_basis`, а не отдельно.
-            "Cd": ax.drag(F) / (q * A), "Cy": ax.side(F) / (q * A),
-            "Cl": F[2] / (q * A),
+            #
+            # Cx/Cy — в СВЯЗАННЫХ осях: с ними сравнивается симулятор, который
+            # тоже считает силы в осях лодки. Cd/Cl — ОТНОСИТЕЛЬНО ПОТОКА: в
+            # этом смысле их печатают в справочниках, и только так их можно
+            # сверить с опубликованной полярой профиля.
+            "Cx": ax.drag(F) / (q * A), "Cy": ax.side(F) / (q * A),
+            "Cz": F[2] / (q * A),
+            "Cd": ax.dot(F, along) / (q * A),
+            "Cl": ax.dot(F, cross) / (q * A),
+            "D_n": ax.dot(F, along), "L_n": ax.dot(F, cross),
             "Cmz": M[2] / (q * A * L),
             "cop_x_m": (-M[1] / F[2]) if abs(F[2]) > 1e-9 else None,
             "cop_z_m": (M[0] / F[1]) if abs(F[1]) > 1e-9 else None,
@@ -284,8 +297,11 @@ def cmd_collect(a):
         s = force[k]
         print("  %s = %12.4f ± %.4f Н  (размах %.4f, дрейф %.2f от разброса)"
               % (k, s["mean"], s["std"], s["range"], s["drift"]))
-    print("  Rt = %.4f Н, Cd = %.5f при q = %.2f Па, S = %.4f м²"
-          % (summary["derived"]["Rt_n"], summary["derived"]["Cd"], q, A))
+    d = summary["derived"]
+    print("  Rt(связ.) = %.4f Н;  по потоку: D = %.4f Н, L = %.4f Н"
+          % (d["Rt_n"], d["D_n"], d["L_n"]))
+    print("  Cd = %.5f, Cl = %.5f при q = %.2f Па, S = %.4f м²"
+          % (d["Cd"], d["Cl"], q, A))
     if summary["mesh"] and summary["mesh"].get("cells"):
         print("  ячеек %d, max non-ortho %.1f"
               % (summary["mesh"]["cells"], summary["mesh"].get("max_non_ortho", 0)))
@@ -305,6 +321,55 @@ def _read_log(logs, name, fn):
         return fn(p)
     except (OSError, ValueError):
         return None
+
+
+# --- slices -------------------------------------------------------------------
+
+# Какие разрезы имеют смысл для семейства. Плоскость поперёк размаха показывает
+# сечение и след; продольная вертикальная — распределение по глубине.
+def _planes_for(m, ctx):
+    fam, r = m["family"], m["reference"]
+    o = r.get("origin_m", [0, 0, 0])
+    L, half = r["length_m"], r.get("chord_m", r["length_m"])
+    if fam in ("verification", "sail-2d") and m["template"] == "openfoam-2d":
+        # Профиль: смотреть надо на хорду и ближний след, а не на домен в
+        # сорок хорд, поэтому разрезу задана рамка.
+        return [{"name": "sliceSpan", "point": [o[0], 0.0, 0.0],
+                 "normal": [0, 0, 1], "axes": (0, 1),
+                 "box": [[-0.8 * half, -1.1 * half], [3.0 * half, 1.1 * half]]}]
+    if fam == "appendages":
+        return [{"name": "sliceSpan", "point": [o[0], 0.0, o[2]],
+                 "normal": [0, 0, 1], "axes": (0, 1),
+                 "box": [[o[0] - 3 * half, -2.5 * half],
+                         [o[0] + 8 * half, 2.5 * half]]},
+                {"name": "sliceCentre", "point": [o[0], 0.0, o[2]],
+                 "normal": [0, 1, 0], "axes": (0, 2),
+                 "box": [[o[0] - 3 * half, -2.2], [o[0] + 8 * half, 0.05]]}]
+    # Корпус: горизонт на половине осадки и диаметральная плоскость.
+    return [{"name": "sliceSpan", "point": [o[0], 0.0, -0.075],
+             "normal": [0, 0, 1], "axes": (0, 1),
+             "box": [[-0.35 * L, -0.45 * L], [1.45 * L, 0.45 * L]]},
+            {"name": "sliceCentre", "point": [o[0], 0.0, -0.4],
+             "normal": [0, 1, 0], "axes": (0, 2),
+             "box": [[-0.35 * L, -1.8], [1.45 * L, 0.05]]}]
+
+
+def cmd_slices(a):
+    run_dir = a.run
+    with open(os.path.join(run_dir, "case.json"), encoding="utf-8") as f:
+        case = json.load(f)
+    m = case["manifest"]
+    planes = _planes_for(m, case["context"])
+    path, out = fields.extract(run_dir, m["solver"]["image"], planes,
+                               nx=a.nx, ny=a.ny)
+    print("срезы: %s" % rel(path))
+    for name, s in sorted(out.items()):
+        if "error" in s:
+            print("  %-13s не снят: %s" % (name, s["error"]))
+        else:
+            print("  %-13s %d×%d, время %g, |U| до %.3f м/с"
+                  % (name, s["nx"], s["ny"], s["time"], s["speed"]["hi"]))
+    return 0
 
 
 # --- convergence --------------------------------------------------------------
@@ -490,6 +555,130 @@ def cmd_compare(a):
     return 0
 
 
+# --- html ---------------------------------------------------------------------
+
+def _blocks_for(summaries):
+    out = []
+    for s in summaries:
+        run_dir = os.path.join(ROOT, s["run_dir"])
+        if not os.path.isdir(run_dir):
+            run_dir = os.path.join(OUT_RUNS, s["case_id"])
+        out.append(payload.case_block(s, run_dir))
+    return out
+
+
+def _keel_sim_curve(cases):
+    """Кривая `foilCoeffs` симулятора и его же значения в точках CFD.
+
+    Кривая берётся у самого симулятора, а не пересчитывается здесь: §6
+    требует звать те же функции, которыми считает лодка.
+    """
+    ok, _why = simbridge.available()
+    if not ok:
+        return [], {}
+    grid = [i * 0.5 for i in range(0, 61)]      # 0…30° с шагом полградуса
+    ans = simbridge.query([{"fn": "foil", "alpha_deg": a, "foil": "keel"}
+                           for a in grid])
+    curve = [{"x": a, "y": r["cl"]} for a, r in zip(grid, ans)]
+    pts = {}
+    if cases:
+        alphas = sorted({round(c["condition"].get("leeway_deg", 0.0), 3)
+                         for c in cases})
+        got = simbridge.query([{"fn": "foil", "alpha_deg": a, "foil": "keel"}
+                               for a in alphas])
+        pts = {a: r["cl"] for a, r in zip(alphas, got)}
+    return curve, pts
+
+
+def _bars_for(family):
+    ok, _why = simbridge.available()
+    if not ok:
+        return []
+    try:
+        rows, points = compare_rows(family)
+    except (SystemExit, simbridge.BridgeError):
+        return []
+    return [{"label": "%s · %s" % (p["case"], p["quantity"]),
+             "cfd": p["cfd"], "sim": p["sim"]} for p in points]
+
+
+def cmd_html(a):
+    summaries = _summaries()
+    if not summaries:
+        raise SystemExit("нет сводок: сначала посчитать и собрать")
+    blocks = _blocks_for(summaries)
+    by_family = {}
+    for b in blocks:
+        by_family.setdefault(b["family"], []).append(b)
+
+    conv_by_family = {}
+    for fam in sorted(by_family):
+        rows = [(n, r) for n, r, _w in convergence_results(fam) if r]
+        conv_by_family[fam] = rows
+
+    ver = sorted(by_family.get("verification", []),
+                 key=lambda b: conv.MESH_ORDER.index(b["level"]))
+    keel = by_family.get("appendages", [])
+    hull_r = sorted(by_family.get("hull-resistance", []),
+                    key=lambda b: b["condition"]["speed_ms"])
+    hull_l = by_family.get("hull-lateral", [])
+
+    curve, simpts = _keel_sim_curve(keel)
+    sections = []
+
+    rev = hashing.git_revision(ROOT)
+    solved = ", ".join(sorted({b["turbulence"] for b in blocks})) or "—"
+    sections.append(story.overview({}, [
+        {"kind": "text", "html":
+         ("Считал OpenFOAM v2306, нативная сборка arm64, отпечаток закреплён "
+          "в каждом манифесте случая. Модель турбулентности: %s. "
+          "Дерево: <code>%s</code>%s. Собрано %s."
+          % (solved, (rev["sha"] or "?")[:12],
+             ", грязное" if rev["dirty"] else "", htmlreport.stamp()))},
+        {"kind": "tiles", "items": [
+            ["случаев посчитано", str(len(blocks)), None],
+            ["семейств", str(len(by_family)), None],
+            ["ячеек всего", "{:,}".format(sum(b["cells"] or 0 for b in blocks))
+             .replace(",", " "), None],
+            ["чистых запусков", "%d из %d"
+             % (sum(1 for b in blocks if b["clean"]), len(blocks)), None]]},
+        {"kind": "text", "html":
+         ("Порядок разделов повторяет §5 документа: сначала метод на "
+          "каноническом теле, потом отдельные части лодки, потом их сумма. "
+          "Каждый график продублирован таблицей — она под спойлером «таблица "
+          "тех же чисел».")},
+    ]))
+    sections.append(story.verification_section(
+        ver, conv_by_family.get("verification", [])))
+    sections.append(story.keel_section(
+        keel, curve, simpts, conv_by_family.get("appendages", [])))
+    sections.append(story.hull_section(
+        hull_r, _bars_for("hull-resistance"),
+        conv_by_family.get("hull-resistance", []), "res"))
+    sections.append(story.hull_section(
+        hull_l, _bars_for("hull-lateral"),
+        conv_by_family.get("hull-lateral", []), "lat"))
+
+    pair = [b for b in hull_l
+            if abs(b["condition"].get("leeway_deg", 0)) == 4.0]
+    mirror = story.mirror_section(sorted(
+        pair, key=lambda b: -b["condition"]["leeway_deg"])) if len(pair) == 2 else None
+    if mirror:
+        sections.append(mirror)
+    sections.append(story.limits_section(a.limit or []))
+
+    data = payload.sanitise({"sections": [s for s in sections if s]})
+    dst = a.out or os.path.join(REPORTS, "hydro.html")
+    htmlreport.build(data, "SV20 — офлайн CFD: гидродинамика",
+                     "Что посчитано, чем это отличается от realtime-модели и "
+                     "чего эти расчёты не показывают.", dst)
+    size = os.path.getsize(dst) / 1024.0
+    print("отчёт: %s (%.0f КБ)" % (rel(dst), size))
+    for fam, bl in sorted(by_family.items()):
+        print("  %-16s случаев %d" % (fam, len(bl)))
+    return 0
+
+
 # --- report -------------------------------------------------------------------
 
 def cmd_report(a):
@@ -567,11 +756,21 @@ def main(argv=None):
     co.add_argument("--window", type=float, default=0.5,
                     help="доля хвоста для усреднения, если случай её не задал")
 
+    sl = sub.add_parser("slices", help="снять поля на плоскостях для отчёта")
+    sl.add_argument("--run", required=True, help="каталог запуска")
+    sl.add_argument("--nx", type=int, default=200)
+    sl.add_argument("--ny", type=int, default=130)
+
     cv = sub.add_parser("convergence", help="тройка сеток по сводкам")
     cv.add_argument("--family", choices=manifest.FAMILIES)
 
     cp = sub.add_parser("compare", help="сравнение с realtime-моделью")
     cp.add_argument("--family", choices=manifest.FAMILIES)
+
+    hm = sub.add_parser("html", help="собрать HTML-отчёт с графиками")
+    hm.add_argument("--out", help="куда писать (умолчание cfd/reports/hydro.html)")
+    hm.add_argument("--limit", action="append",
+                    help="добавить строку в раздел границ применимости")
 
     rp = sub.add_parser("report", help="собрать Markdown-отчёт")
     rp.add_argument("--family", choices=manifest.FAMILIES)
@@ -581,9 +780,9 @@ def main(argv=None):
         p.print_help()
         return 2
     return {"validate": cmd_validate, "geometry": cmd_geometry, "case": cmd_case,
-            "run": cmd_run, "collect": cmd_collect,
+            "run": cmd_run, "collect": cmd_collect, "slices": cmd_slices,
             "convergence": cmd_convergence, "compare": cmd_compare,
-            "report": cmd_report}[a.cmd](a)
+            "html": cmd_html, "report": cmd_report}[a.cmd](a)
 
 
 if __name__ == "__main__":

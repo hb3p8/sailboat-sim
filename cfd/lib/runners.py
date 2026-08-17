@@ -14,7 +14,9 @@
 
 import json
 import os
+import re
 import shlex
+import shutil
 import subprocess
 
 
@@ -42,16 +44,53 @@ def _exec(args, cwd=None, log=None, env=None):
     return p.returncode
 
 
-def container_cmd(image, workdir, inner):
-    """Обёртка запуска в контейнере.
+_VERSION = re.compile(r"[:\-v](\d{4})(?:@|$|\s)")
 
-    Образ обязателен и обязан быть с digest (проверяется в манифесте): без
-    закреплённого образа «тот же расчёт» через полгода считается другой версией
-    решателя, и расхождение с эталоном спишут на физику.
+
+def foam_version(image):
+    """Версия решателя из строки образа: `...:2306@sha256:...` -> `2306`."""
+    m = _VERSION.search(str(image))
+    return m.group(1) if m else None
+
+
+def detect_runtime(image):
+    """Чем запускать решатель: контейнером или нативной установкой.
+
+    Порядок такой, а не обратный, нарочно. На счётной машине стоит контейнер, и
+    выбор там однозначен. На машине разработчика OpenFOAM чаще поставлен
+    нативно (на Apple Silicon это к тому же вдесятеро быстрее эмуляции
+    x86-образа), и требовать там контейнер значило бы запретить отладку
+    постановки на той машине, где её и отлаживают.
+
+    Что при этом НЕ меняется: `solver.image` остаётся обязательным и остаётся с
+    отпечатком. У нативной установки отпечаток — sha256 распространяемой сборки
+    (у Homebrew-cask он записан в формуле). Смысл поля не в том, что это
+    непременно контейнер, а в том, что по нему восстановима та же самая
+    программа.
     """
-    runtime = os.environ.get("CFD_CONTAINER", "docker")
+    forced = os.environ.get("CFD_RUNTIME")
+    if forced:
+        return forced
+    v = foam_version(image)
+    if v and shutil.which("openfoam" + v):
+        return "native"
+    for runtime in ("docker", "podman", "apptainer"):
+        if shutil.which(runtime):
+            return runtime
+    return "native" if shutil.which("openfoam") else "none"
+
+
+def solver_cmd(image, workdir, inner, runtime=None):
+    """Как войти в окружение решателя и выполнить `inner` в каталоге случая."""
+    runtime = runtime or detect_runtime(image)
+    line = " ".join(shlex.quote(a) for a in inner)
     if runtime == "none":
         return inner
+    if runtime == "native":
+        wrapper = ("openfoam" + (foam_version(image) or "")
+                   if shutil.which("openfoam" + (foam_version(image) or ""))
+                   else "openfoam")
+        return [wrapper, "-c", line]
     if runtime in ("apptainer", "singularity"):
         return [runtime, "exec", "--pwd", "/case",
                 "--bind", "%s:/case" % workdir, image] + inner
@@ -70,8 +109,7 @@ class LocalRunner:
     def run(self, run_dir, script="Allrun", log=None):
         log = log or os.path.join(run_dir, "log", "run.log")
         inner = ["./" + script]
-        cmd = container_cmd(self.image, os.path.abspath(run_dir), inner) \
-            if self.image else inner
+        cmd = solver_cmd(self.image, os.path.abspath(run_dir), inner)
         _exec(cmd, cwd=run_dir, log=log)
         return {"runner": "local", "log": log}
 
@@ -87,11 +125,17 @@ class SshRunner:
     name = "ssh"
     FETCH = ("postProcessing", "log", "case.json", "constant/polyMesh/blockMeshDict")
 
-    def __init__(self, host, remote_root, image=None, fetch=None):
+    def __init__(self, host, remote_root, image=None, fetch=None,
+                 runtime="docker"):
         self.host = host
         self.remote_root = remote_root
         self.image = image
         self.fetch = tuple(fetch) if fetch else self.FETCH
+        # Способ запуска на удалённой машине задаётся, а не определяется:
+        # определять его можно только там, где можно посмотреть, что стоит.
+        # Умолчание — контейнер: на счётной машине именно он и стоит, и именно
+        # он делает запуск воспроизводимым.
+        self.runtime = runtime
 
     def run(self, run_dir, script="Allrun", log=None):
         log = log or os.path.join(run_dir, "log", "run.log")
@@ -101,7 +145,7 @@ class SshRunner:
         _exec(["rsync", "-a", "--delete", os.path.abspath(run_dir) + "/",
                "%s:%s/" % (self.host, remote)], log=log)
         inner = ["./" + script]
-        cmd = container_cmd(self.image, remote, inner) if self.image else inner
+        cmd = solver_cmd(self.image, remote, inner, self.runtime)
         remote_cmd = "cd %s && %s" % (shlex.quote(remote),
                                       " ".join(shlex.quote(a) for a in cmd))
         _exec(["ssh", self.host, remote_cmd], log=log)
@@ -136,8 +180,8 @@ class SlurmRunner(SshRunner):
     name = "slurm"
 
     def __init__(self, host, remote_root, image=None, nodes=1, tasks=16,
-                 time="12:00:00", extra="", fetch=None):
-        SshRunner.__init__(self, host, remote_root, image, fetch)
+                 time="12:00:00", extra="", fetch=None, runtime="docker"):
+        SshRunner.__init__(self, host, remote_root, image, fetch, runtime)
         self.nodes, self.tasks, self.time, self.extra = nodes, tasks, time, extra
 
     def run(self, run_dir, script="Allrun", log=None):
@@ -145,7 +189,7 @@ class SlurmRunner(SshRunner):
         name = os.path.basename(os.path.abspath(run_dir))
         remote = os.path.join(self.remote_root, name)
         inner = ["./" + script]
-        cmd = container_cmd(self.image, remote, inner) if self.image else inner
+        cmd = solver_cmd(self.image, remote, inner, self.runtime)
         job = SBATCH.format(name=name, nodes=self.nodes, tasks=self.tasks,
                             time=self.time, extra=self.extra,
                             command=" ".join(shlex.quote(a) for a in cmd))

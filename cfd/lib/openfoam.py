@@ -117,7 +117,12 @@ def context(m, geometry_dir=None):
     ctx = {
         "bodies": " ".join(bodies),
         "body_patch": bodies[0],
-        "wall_patches": '"(%s)"' % "|".join(bodies),
+        # Маска патчей тела. Точка со звёздочкой на конце обязательна: у
+        # составного STL `snappyHexMesh` называет патч не по файлу, а по паре
+        # «файл_solid» — тело `keel` из двух solid'ов даёт `keel_keel_fin` и
+        # `keel_bulb`. Без хвоста поля не находят такой патч, и решатель падает
+        # уже ПОСЛЕ построения сетки, потеряв минуту на каждый случай.
+        "wall_patches": '"(%s).*"' % "|".join(bodies),
         "geometry_file": bodies[0] + ".stl",
         "case_id": m["case_id"],
         "family": m["family"],
@@ -168,6 +173,24 @@ def _blocks(m, bodies, ctx):
     тестом, а в шаблоне остаётся одна понятная строка `{{geometry_block}}`.
     """
     geom, refine, layers, forces = [], [], [], []
+    regions, boxes = [], m["mesh"].get("regions") or []
+    # Ящики сгущения. Без них переход от фоновой ячейки к поверхностной идёт
+    # шестью уровнями в одной ячейке, и `snappyHexMesh` его срезает: на профиле
+    # с хордой в метр остаётся тридцать ячеек, а поляра по такой сетке
+    # бессмысленна. Ящик — это способ сказать, ГДЕ решение меняется быстро:
+    # у крыла это его окрестность и след за ним.
+    for i, box in enumerate(boxes):
+        name = "box%d" % i
+        (x0, y0, z0), (x1, y1, z1) = box["box"]
+        geom.append("    %s\n    {\n        type searchableBox;\n"
+                    "        min (%r %r %r);\n        max (%r %r %r);\n    }"
+                    % (name, x0, y0, z0, x1, y1, z1))
+        regions.append("        %s\n        {\n            mode inside;\n"
+                       "            levels ((1e15 %d));\n        }"
+                       % (name, box["level"]))
+    # Сгущение по расстоянию от самого тела: пограничный слой и ближний след
+    # живут не в ящике, а вокруг поверхности, какой бы она ни была.
+    dist = m["mesh"].get("surface_distance") or []
     for b in bodies:
         geom.append("    %s.stl\n    {\n        type triSurfaceMesh;\n"
                     "        name %s;\n    }" % (b, b))
@@ -179,6 +202,10 @@ def _blocks(m, bodies, ctx):
         layers.append("            \"%s.*\"\n            {\n"
                       "                nSurfaceLayers %d;\n            }"
                       % (b, ctx["n_layers"]))
+        if dist:
+            levels = " ".join("(%r %d)" % (d, lv) for d, lv in dist)
+            regions.append("        %s\n        {\n            mode distance;\n"
+                           "            levels (%s);\n        }" % (b, levels))
         forces.append(_forces_fo(b, [b], ctx))
     # Отдельно — сумма по всем телам, всегда под именем `forces`. Она и
     # сравнивается с симулятором; силы по телам нужны, чтобы понять, КАКОЕ
@@ -187,6 +214,7 @@ def _blocks(m, bodies, ctx):
     forces.append(_forces_fo("forces", bodies, ctx))
     return {"geometry_block": "\n".join(geom),
             "refinement_block": "\n".join(refine),
+            "regions_block": "\n".join(regions),
             "layers_block": "\n".join(layers),
             "forces_block": "\n".join(forces)}
 
@@ -234,8 +262,27 @@ def _mesh_context(m):
     side = dom.get("side_l", 8.0) * L
     up = dom.get("up_l", 8.0) * L
     down = dom.get("down_l", 8.0) * L
-    base = mesh.get("base_size_m", L / 8.0) * LEVEL_SCALE[mesh["level"]]
-    lo, hi = LEVEL_REFINE[mesh["level"]]
+    # Сгущение задаётся одним из двух способов, и смешивать их нельзя.
+    #
+    # По умолчанию тройка различается размером фоновой ячейки, а уровни
+    # сгущения у поверхности одни и те же. Это годится для тел, у которых
+    # характерный размер сравним с размером домена, — для корпуса.
+    #
+    # Крыло так мерить нельзя: домен вокруг профиля в сорок хорд, и фоновая
+    # ячейка, из которой видно профиль, дала бы миллионы ячеек в пустоте.
+    # Поэтому у таких случаев задаются УРОВНИ (`mesh.refine`), а фоновая
+    # ячейка остаётся одна на всю тройку. Тогда масштабировать её ещё и по
+    # уровню значило бы сгущать дважды, и наблюдаемый порядок вышел бы
+    # посчитанным не по тому отношению.
+    #
+    # Отношение сеток для оценки погрешности берётся не отсюда, а из
+    # настоящего числа ячеек в `checkMesh` (cfd/lib/convergence.py), поэтому
+    # оба способа дают верную оценку — лишь бы не применялись разом.
+    explicit = mesh.get("refine")
+    base = mesh.get("base_size_m", L / 8.0)
+    if not explicit:
+        base *= LEVEL_SCALE[mesh["level"]]
+    lo, hi = tuple(explicit) if explicit else LEVEL_REFINE[mesh["level"]]
     nx = max(4, int(round((front + back) / base)))
     ny = max(4, int(round(2 * side / base)))
     nz = max(4, int(round((up + down) / base)))
@@ -244,13 +291,19 @@ def _mesh_context(m):
     # там, где тело охватывает начало координат необычным образом.
     seed = mesh.get("domain", {}).get("seed") or [0.4 * front, 0.4 * side,
                                                   0.4 * up]
-    # Толщина плоского случая. Значение не влияет ни на что, кроме масштаба
-    # силы: она снимается на одну ячейку поперёк и делится на эту же толщину
-    # при переходе к коэффициенту. Отсюда и требование задавать `reference.
-    # area_m2` как хорда × толщина, а не как площадь настоящего паруса.
+    # Толщина плоского случая. На решение она не влияет — оно от координаты
+    # поперёк не зависит, — но влияет на масштаб силы: сила снимается со всего
+    # слоя. Отсюда требование задавать `reference.area_m2` как хорда × толщина,
+    # а не как площадь настоящего паруса.
+    #
+    # Толщина берётся равной базовому размеру ячейки, чтобы ячейки слоя
+    # остались близкими к кубическим при любом уровне сгущения: при сгущении
+    # `snappyHexMesh` делит ячейку во всех трёх направлениях, и слой,
+    # заведомо тонкий по сравнению с ячейкой, дал бы иглы с аспектом в сотни.
     span = dom.get("span_m", base)
     return {
         "span_lo": -0.5 * span, "span_hi": 0.5 * span, "span_m": span,
+        "n_span": max(1, int(round(span / base))),
         "seed_x": seed[0], "seed_y": seed[1], "seed_z": seed[2],
         "n_proc": mesh.get("n_proc", 4),
         "dom_xmin": -back, "dom_xmax": front,

@@ -156,7 +156,7 @@ fit: extract
 # Цели — однострочные обёртки: §3.6 требует, чтобы то же самое работало и без
 # make, а на счётной машине его может не быть вовсе.
 .PHONY: cfd-validate cfd-image cfd-geometry cfd-case cfd-run cfd-collect \
-        cfd-convergence cfd-compare cfd-report
+        cfd-slices cfd-convergence cfd-compare cfd-report cfd-html
 
 CFD := $(VENV) cfd/cfd.py
 
@@ -185,6 +185,12 @@ cfd-run:
 cfd-collect:
 	@$(CFD) collect --run $(RUN)
 
+# Поля на плоскостях для картинок в отчёте. Отдельной целью и ПОСЛЕ расчёта:
+# функция-объект писала бы только то, о чём её попросили заранее, а `postProcess`
+# режет уже сохранённые поля — в том числе у случая, посчитанного неделю назад.
+cfd-slices:
+	@$(CFD) slices --run $(RUN)
+
 cfd-convergence:
 	@$(CFD) convergence $(if $(FAMILY),--family $(FAMILY),)
 
@@ -193,6 +199,11 @@ cfd-compare: physics
 
 cfd-report: physics
 	@$(CFD) report $(if $(FAMILY),--family $(FAMILY),)
+
+# HTML-отчёт: один самодостаточный файл с графиками и полями течения.
+# Открывается двойным щелчком, в сеть не ходит.
+cfd-html: physics
+	@$(CFD) html $(if $(OUT),--out $(OUT),)
 
 # data/terrain/ не трогается: это кэш скачанного, а не результат сборки.
 clean:

@@ -23,4 +23,9 @@ boundaryField
         type            nutUSpaldingWallFunction;
         value           uniform 0;
     }
+
+    // Патчи-связи (symmetry, symmetryPlane, empty, wedge) получают свои
+    // условия сами. Благодаря этому шаблоны с плоскостью симметрии не
+    // держат своих копий полей: у них меняется только blockMeshDict.
+    #includeEtc "caseDicts/setConstraintTypes"
 }

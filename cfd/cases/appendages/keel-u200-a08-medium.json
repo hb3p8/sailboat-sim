@@ -1,0 +1,116 @@
+{
+ "case_id": "keel-u200-a08-medium",
+ "condition": {
+  "leeway_deg": 8.0,
+  "speed_ms": 2.0
+ },
+ "convergence_group": "keel-u200-a08",
+ "family": "appendages",
+ "fluid": {
+  "nu": 1.19e-06,
+  "rho": 1025.0
+ },
+ "geometry": {
+  "bodies": [
+   "keel"
+  ],
+  "files": {
+   "keel": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "revision": "подставляется при разворачивании"
+ },
+ "mesh": {
+  "base_size_m": 0.35,
+  "boundary_layers": 4,
+  "cells_target": 4000000,
+  "domain": {
+   "aft_l": 25.0,
+   "down_l": 15.0,
+   "fwd_l": 12.0,
+   "seed": [
+    -3.0,
+    3.0,
+    -3.0
+   ],
+   "side_l": 15.0,
+   "up_l": 0.0
+  },
+  "family": "keel-half-v1",
+  "level": "medium",
+  "n_proc": 4,
+  "refine": [
+   4,
+   6
+  ],
+  "regions": [
+   {
+    "box": [
+     [
+      2.4,
+      -0.8,
+      -2.0
+     ],
+     [
+      5.2,
+      0.8,
+      0.05
+     ]
+    ],
+    "level": 2
+   },
+   {
+    "box": [
+     [
+      2.6,
+      -0.35,
+      -1.75
+     ],
+     [
+      3.9,
+      0.35,
+      0.05
+     ]
+    ],
+    "level": 4
+   }
+  ],
+  "surface_distance": [
+   [
+    0.05,
+    5
+   ]
+  ],
+  "yplus_target": 40.0
+ },
+ "notes": "Изолированное перо киля с бульбом, корень на плоскости симметрии. Зеркало даёт удлинение вдвое против геометрического — верхнюю границу эффекта концевой шайбы, который в симуляторе учтён множителем 1.5 (effective_ar). Сравнение и показывает, насколько этот множитель верен. Свободной поверхности нет: §5, этап 3 прямо разрешает начать так.",
+ "numerics": {
+  "average_from": 900,
+  "dt_s": 1.0,
+  "end_time": 1200,
+  "iterations": 1200,
+  "residual_tol": 1e-05,
+  "write_interval": 300
+ },
+ "reference": {
+  "area_m2": 0.46196,
+  "chord_m": 0.3511,
+  "length_m": 0.3511,
+  "origin_m": [
+   3.05,
+   0.0,
+   -0.66
+  ],
+  "rho": 1025.0,
+  "span_m": 1.31575,
+  "speed_ms": 2.0
+ },
+ "schema": 1,
+ "solver": {
+  "application": "simpleFoam",
+  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
+  "name": "OpenFOAM",
+  "turbulence": "kOmegaSST",
+  "wall_treatment": "wall-function"
+ },
+ "template": "openfoam-halfspace"
+}

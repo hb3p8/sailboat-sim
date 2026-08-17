@@ -26,8 +26,8 @@ FAMILIES = ("verification", "sail-2d", "rig-3d", "appendages",
 # поверхности, у VOF нет угла атаки паруса. Разделять же семейства и шаблоны
 # нужно потому, что одно семейство может считаться двумя шаблонами (киль без
 # воды и он же под поверхностью).
-TEMPLATES = ("openfoam-aero", "openfoam-2d", "openfoam-vof",
-             "openfoam-manoeuvre")
+TEMPLATES = ("openfoam-aero", "openfoam-2d", "openfoam-halfspace",
+             "openfoam-vof", "openfoam-manoeuvre")
 
 TURBULENCE = ("kOmegaSST", "SpalartAllmaras", "laminar")
 MESH_LEVELS = ("coarse", "medium", "fine")
@@ -132,7 +132,22 @@ def validate(m):
 
     mesh = m["mesh"]
     _extra(mesh, {"level", "family", "cells_target", "base_size_m",
-                  "boundary_layers", "yplus_target", "domain", "n_proc"}, "mesh")
+                  "boundary_layers", "yplus_target", "domain", "n_proc",
+                  "refine", "regions", "surface_distance"}, "mesh")
+    for box in mesh.get("regions") or []:
+        if set(box) != {"box", "level"} or len(box["box"]) != 2:
+            raise ManifestError("mesh.regions: нужен {\"box\": [[x0,y0,z0], "
+                                "[x1,y1,z1]], \"level\": n}, а не %r" % (box,))
+    for pair in mesh.get("surface_distance") or []:
+        if len(pair) != 2:
+            raise ManifestError("mesh.surface_distance: пары [расстояние, "
+                                "уровень], а не %r" % (pair,))
+    if "refine" in mesh:
+        r2 = mesh["refine"]
+        if (not isinstance(r2, list) or len(r2) != 2
+                or not all(isinstance(x, int) for x in r2) or r2[0] > r2[1]):
+            raise ManifestError("mesh.refine: нужна пара целых [min, max], "
+                                "min <= max, а не %r" % (r2,))
     _need(mesh, {"level", "family"}, "mesh")
     if mesh["level"] not in MESH_LEVELS:
         raise ManifestError("mesh.level %r не из списка %s"

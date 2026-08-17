@@ -31,7 +31,11 @@ castellatedMeshControls
     }
 
     resolveFeatureAngle 30;
-    refinementRegions {}
+
+    refinementRegions
+    {
+{{regions_block}}
+    }
 
     // Точка в жидкости — в связанных осях, далеко впереди и в стороне от тела.
     // Её положение проверяется тестом: попади она внутрь корпуса, сеточник

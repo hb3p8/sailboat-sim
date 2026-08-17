@@ -12,7 +12,7 @@
  },
  "solver": {
   "name": "OpenFOAM",
-  "image": "opencfd/openfoam-default:2306@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
   "application": "simpleFoam",
   "turbulence": "kOmegaSST"
  },

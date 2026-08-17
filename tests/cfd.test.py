@@ -343,8 +343,8 @@ try:
     geo.canonical(geom, span=0.1, chord=1.0)
     # Тела лодки для случаев, которым они нужны, подменяются канонической
     # заглушкой: здесь проверяется разворачивание, а не обводы.
-    for name in ("underwater", "keel_fin", "bulb", "rudder", "hull",
-                 "main", "jib", "sail_section"):
+    for name in ("underwater", "keel", "keel_fin", "bulb", "rudder",
+                 "hull", "main", "jib", "sail_section"):
         shutil.copyfile(os.path.join(geom, "sign_probe.stl"),
                         os.path.join(geom, name + ".stl"))
 
@@ -393,6 +393,58 @@ try:
     os.remove(os.path.join(victim, "system", "fvSchemes"))
     check("удалённый файл тоже виден",
           any("fvSchemes" in x for x in openfoam.verify_clean(victim)))
+
+    # Маска патчей тела обязана ловить составные имена. `snappyHexMesh`
+    # называет патч по паре «файл_solid»: тело `keel` из двух solid'ов даёт
+    # `keel_keel_fin`. Без хвоста `.*` решатель падает уже ПОСЛЕ построения
+    # сетки — минута на случай, и так двенадцать раз подряд.
+    import re as _re
+    for _p, m in found:
+        c = openfoam.context(m, geom)
+        mask = c["wall_patches"].strip('"')
+        for body in m["geometry"]["files"]:
+            if not _re.fullmatch(mask, body + "_part"):
+                check("маска патчей ловит составное имя: " + m["case_id"],
+                      False, "%s не ловит %s_part" % (mask, body))
+    check("маска патчей ловит и простое имя, и составное",
+          all(_re.fullmatch(openfoam.context(m, geom)["wall_patches"].strip('"'),
+                            b) and
+              _re.fullmatch(openfoam.context(m, geom)["wall_patches"].strip('"'),
+                            b + "_solid")
+              for _p, m in found for b in m["geometry"]["files"]))
+
+    # Области сгущения: ящик обязан попасть в словарь сеточника, иначе переход
+    # от фоновой ячейки к поверхностной идёт в один скачок и сеточник его
+    # срезает — на профиле остаётся тридцать ячеек на хорду.
+    boxed = [m for _p, m in found if m["mesh"].get("regions")]
+    if boxed:
+        c = openfoam.context(boxed[0], geom)
+        check("ящики сгущения попадают в словарь",
+              c["regions_block"].count("mode inside")
+              == len(boxed[0]["mesh"]["regions"]))
+        check("ящики объявлены геометрией",
+              c["geometry_block"].count("searchableBox")
+              == len(boxed[0]["mesh"]["regions"]))
+    dist = [m for _p, m in found if m["mesh"].get("surface_distance")]
+    if dist:
+        c = openfoam.context(dist[0], geom)
+        check("сгущение по расстоянию попадает в словарь",
+              "mode distance" in c["regions_block"])
+
+    # Явные уровни сгущения отменяют масштабирование фоновой ячейки: иначе
+    # тройка сгущалась бы дважды, и наблюдаемый порядок считался бы не по тому
+    # отношению.
+    expl = [m for _p, m in found if m["mesh"].get("refine")]
+    if expl:
+        sizes = {}
+        for m in expl:
+            if m["convergence_group"] not in sizes:
+                sizes[m["convergence_group"]] = set()
+            sizes[m["convergence_group"]].add(
+                round(openfoam.context(m, geom)["base_size_m"], 9))
+        check("при явных уровнях фоновая ячейка одна на всю тройку",
+              all(len(v) == 1 for v in sizes.values()),
+              str({k: sorted(v) for k, v in sizes.items() if len(v) > 1}))
 
     # Поток: угол атаки обязан поворачивать вектор, а не сетку.
     m2d = [m for _p, m in found if m["condition"].get("alpha_deg")][0]
@@ -530,8 +582,8 @@ tmp = tempfile.mkdtemp(prefix="sv20-cfd-e2e-")
 try:
     geom = os.path.join(tmp, "geom")
     geo.canonical(geom, span=0.1, chord=1.0)
-    for name in ("underwater", "keel_fin", "bulb", "rudder", "hull",
-                 "main", "jib", "sail_section"):
+    for name in ("underwater", "keel", "keel_fin", "bulb", "rudder",
+                 "hull", "main", "jib", "sail_section"):
         shutil.copyfile(os.path.join(geom, "sign_probe.stl"),
                         os.path.join(geom, name + ".stl"))
     triple = [(p, m) for p, m in found
@@ -603,9 +655,32 @@ try:
                 check("сопротивление снято как −Fx",
                       near(s["derived"]["Rt_n"], rt, 0.05),
                       "%.4f против %.4f" % (s["derived"]["Rt_n"], rt))
-                check("Cd посчитан по записанному основанию",
-                      near(s["derived"]["Cd"],
+                # Cx — в связанных осях, и он равен −Fx/(qS) всегда.
+                check("Cx посчитан по записанному основанию",
+                      near(s["derived"]["Cx"],
                            rt / (q * m["reference"]["area_m2"]), 1e-3))
+                # Cd и Cl — ОТНОСИТЕЛЬНО ПОТОКА, и на угле атаки в десять
+                # градусов это другие числа. Проверяются независимым
+                # разложением того же вектора силы по тем же ортам: если
+                # коллектор перепутает оси, совпадения не будет.
+                al = s["flow_frame"]["along"]
+                cr = s["flow_frame"]["cross"]
+                F = [s["derived"][k] for k in ("Fx", "Fy", "Fz")]
+                qa = q * m["reference"]["area_m2"]
+                check("Cd — проекция силы на направление потока",
+                      near(s["derived"]["Cd"],
+                           sum(F[i] * al[i] for i in range(3)) / qa, 1e-9))
+                check("Cl — проекция силы поперёк потока",
+                      near(s["derived"]["Cl"],
+                           sum(F[i] * cr[i] for i in range(3)) / qa, 1e-9))
+                check("на угле атаки Cd и Cx — разные числа",
+                      abs(s["derived"]["Cd"] - s["derived"]["Cx"]) > 1e-4,
+                      "Cd %.5f, Cx %.5f" % (s["derived"]["Cd"],
+                                            s["derived"]["Cx"]))
+                check("орты потока единичны и ортогональны",
+                      near(sum(x * x for x in al), 1.0, 1e-9)
+                      and near(sum(x * x for x in cr), 1.0, 1e-9)
+                      and near(sum(al[i] * cr[i] for i in range(3)), 0.0, 1e-9))
                 check("основание коэффициента лежит рядом с ним",
                       set(s["coefficient_basis"]) >=
                       {"area_m2", "length_m", "rho", "speed_ms", "q_pa"})

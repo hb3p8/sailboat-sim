@@ -270,7 +270,11 @@ def read_continuity(log_path):
 
 
 _CELLS = re.compile(r"^\s*cells:\s*(\d+)")
-_NONORTHO = re.compile(r"Max non-orthogonality = ([-+0-9.eE]+)")
+# `checkMesh` печатает неортогональность не так, как остальные показатели:
+# «Mesh non-orthogonality Max: 64.9 average: 10.9», а не «Max ... = ...».
+# Первая версия ловила несуществующую форму и клала в сводку ноль — то есть
+# «идеальная сетка» вместо «не знаю». Ноль в графе качества хуже прочерка.
+_NONORTHO = re.compile(r"non-orthogonality Max:\s*([-+0-9.eE]+)")
 _SKEW = re.compile(r"Max skewness = ([-+0-9.eE]+)")
 _ASPECT = re.compile(r"Max aspect ratio = ([-+0-9.eE]+)")
 
@@ -298,12 +302,20 @@ def read_mesh_stats(log_path):
     return out
 
 
-_YPLUS = re.compile(r"[Yy]\+ .*min: ([-+0-9.eE]+) max: ([-+0-9.eE]+) "
-                    r"average: ([-+0-9.eE]+)")
+# Формат строки y+ в OpenFOAM v2306: «patch <имя> y+ : min = 2.9 max = 1511
+# average = 81». Ни двоеточий после min, ни запятых. Разделители допущены оба
+# на случай другой версии — но проверено на той, которая считала.
+_YPLUS = re.compile(r"y\+\s*:?\s*min\s*[=:]\s*([-+0-9.eE]+)\s+"
+                    r"max\s*[=:]\s*([-+0-9.eE]+)\s+"
+                    r"average\s*[=:]\s*([-+0-9.eE]+)")
 
 
 def read_yplus(log_path):
-    """Диапазон y+ из лога `yPlus`. Последняя запись — на сошедшемся поле."""
+    """Диапазон y+ из лога `yPlus`. Последняя запись — на сошедшемся поле.
+
+    Пустое место в графе y+ означает не «хорошо», а «не знаю»: пристеночная
+    функция вне своего диапазона портит трение, и не увидеть этого нельзя.
+    """
     last = None
     with open(log_path, encoding="utf-8", errors="replace") as f:
         for line in f:

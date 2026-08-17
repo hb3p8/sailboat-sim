@@ -783,9 +783,13 @@ def cmd_html(a):
     # предохранителем.
     sail = by_family.get("sail-2d", [])
     gen = [c for c in sail if c["case_id"].startswith("gen-sec")]
-    if gen:
+    point = _gennaker_point()
+    # Раздел появляется, как только есть ЧТО-НИБУДЬ: опрошенный риг без
+    # расчётов — это уже половина ответа, и прятать её до конца очереди
+    # значит прятать самое интересное на несколько часов.
+    if gen or point:
         sections.append(story.gennaker_section(
-            gen, _sail_sim_points(gen), _gennaker_point()))
+            gen, _sail_sim_points(gen), point))
 
     sections.append(story.verification_section(
         ver, conv_by_family.get("verification", [])))

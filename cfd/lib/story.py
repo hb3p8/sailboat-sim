@@ -241,6 +241,20 @@ def keel_section(cases, sim_curve, sim_points, conv_rows):
         a = c["condition"].get("leeway_deg", 0.0)
         pts.append({"x": a, "y": c["derived"]["Cl"], "label": c["case_id"],
                     "sim": sim_points.get(round(a, 3))})
+    # Поляра по одной точке — не поляра. Пока точек меньше двух, показывается
+    # то, что есть, а кривая не рисуется: одна точка рядом с кривой модели
+    # читается как совпадение или расхождение, хотя не означает ни того, ни
+    # другого.
+    if len(pts) < 2:
+        blocks.append({"kind": "tiles", "items":
+                       [_tile("угол %.0f°" % p["x"], p["y"], "Cl", 4)
+                        for p in pts]
+                       + [_tile("модель на том же угле", p["sim"], "Cl", 4)
+                          for p in pts if p.get("sim") is not None]})
+        blocks.append({"kind": "note", "html":
+                       "Точек пока меньше двух — наклон кривой по ним не "
+                       "считается, а он здесь и есть предмет спора."})
+        return {"title": "Киль: поляра пера", "blocks": blocks}
     blocks.append({
         "kind": "polar", "pts": pts, "curve": sim_curve,
         "xlab": "угол атаки, °", "ylab": "Cl", "opt": {"yd": 2},
@@ -431,7 +445,9 @@ def gennaker_section(cases, sim_pts, strips):
                  "за двадцать пять секунд. Считается именно эта точка, а не "
                  "удобная.")}]
     if strips:
-        rows = [[g["strip"], g["alpha_deg"], g["camber"], g["design"],
+        # Номер полоски — строкой: иначе он печатается как «12.0000»,
+        # потому что таблица форматирует числа единым правилом.
+        rows = [[str(g["strip"]), g["alpha_deg"], g["camber"], g["design"],
                  g["slack"], g["cl"], g["ceiling"], g["at_ceiling"]]
                 for g in strips.get("strips", [])]
         worst = max((g["at_ceiling"] for g in strips.get("strips", [])),

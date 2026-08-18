@@ -829,7 +829,8 @@ try:
                       encoding="utf-8") as f:
                 f.write("Solving for Ux, Initial residual = 1e-2\n")
                 f.write("Solving for Ux, Initial residual = 4e-7\n")
-                f.write("y+ : min: 21 max: 84 average: 43\n")
+                f.write("    patch naca0012 y+ : min = 21, max = 84, "
+                        "average = 43\n")
                 f.write("time step continuity errors : sum local = 1e-9, "
                         "global = -2e-12, cumulative = 3e-11\n")
 

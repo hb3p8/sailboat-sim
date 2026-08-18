@@ -344,7 +344,11 @@ def read_layers(log_path):
 # Запятые после чисел обязательны к пропуску: без них шаблон не совпадал вовсе,
 # и графа y+ в сводке стояла пустой при полностью исправном логе. Прочерк там
 # читается как «не мерили», а на деле мерили и не разобрали.
-_YPLUS = re.compile(r"patch\s+(\S+)\s+y\+\s*:?\s*"
+# Имя патча необязательно: у разных версий и функций-объектов строка бывает
+# и без него, а разбор обязан пережить обе. Строгий шаблон, требовавший
+# префикса, уронил батарею на её же подделанном логе — то есть отказался
+# читать формат, который сам же и объявил допустимым.
+_YPLUS = re.compile(r"(?:patch\s+(\S+)\s+)?y\+\s*:?\s*"
                     r"min\s*[=:]\s*([-+0-9.eE]+),?\s+"
                     r"max\s*[=:]\s*([-+0-9.eE]+),?\s+"
                     r"average\s*[=:]\s*([-+0-9.eE]+)")
@@ -366,8 +370,9 @@ def read_yplus(log_path):
         for line in f:
             m = _YPLUS.search(line)
             if m:
-                per_patch[m.group(1)] = (float(m.group(2)), float(m.group(3)),
-                                         float(m.group(4)))
+                per_patch[m.group(1) or "тело"] = (float(m.group(2)),
+                                                  float(m.group(3)),
+                                                  float(m.group(4)))
     if not per_patch:
         return None
     return {"min": min(v[0] for v in per_patch.values()),

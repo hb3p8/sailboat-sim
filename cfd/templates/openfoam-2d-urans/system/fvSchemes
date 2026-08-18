@@ -1,0 +1,54 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSchemes;
+}
+
+// Время — вторым порядком с ограничителем. Чистый `Euler` первого порядка на
+// вихревом следе размазывает как раз то, ради чего расчёт и ведётся: амплитуду
+// колебания силы. Чистый `backward` на сорванном режиме звенит.
+ddtSchemes
+{
+    default         CrankNicolson 0.9;
+}
+
+gradSchemes
+{
+    default         cellLimited Gauss linear 1;
+}
+
+// Без `bounded` — в отличие от стационарного случая. Поправка `bounded`
+// вычитает невязку неразрывности из конвективного члена и нужна там, где поле
+// ещё не сошлось; в нестационарном расчёте она искажает сам переходный
+// процесс, ради которого всё и считается.
+divSchemes
+{
+    default         none;
+    div(phi,U)      Gauss linearUpwind grad(U);
+    div(phi,k)      Gauss limitedLinear 1;
+    div(phi,omega)  Gauss limitedLinear 1;
+    div(phi,nuTilda) Gauss limitedLinear 1;
+    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+}
+
+laplacianSchemes
+{
+    default         Gauss linear corrected;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+snGradSchemes
+{
+    default         corrected;
+}
+
+wallDist
+{
+    method          meshWave;
+}

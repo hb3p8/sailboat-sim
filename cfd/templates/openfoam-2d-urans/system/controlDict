@@ -1,0 +1,63 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+// Нестационарный расчёт плоского сечения.
+//
+// Заведён не для полноты, а по необходимости. На углах атаки в тридцать пять
+// градусов сечение сорвано, поток сходит вихрями, и установившегося решения не
+// существует. Steady RANS на таком режиме даёт не ответ, а место, где он
+// перестал двигаться: у плоской пластины разброс силы вышел треть от среднего,
+// у сечения с пузом — всемеро больше среднего. Это ровно тот случай, для
+// которого §4.3 требует URANS с усреднением по времени.
+//
+// Сила пишется КАЖДЫЙ шаг: усредняет её коллектор по окну, и окно обязано
+// накрывать несколько периодов схода, а не несколько записей поля.
+
+application     {{application}};
+
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         {{end_time}};
+deltaT          {{dt}};
+
+writeControl    adjustableRunTime;
+writeInterval   {{write_interval}};
+purgeWrite      3;
+writeFormat     binary;
+writePrecision  8;
+writeCompression on;
+timeFormat      general;
+timePrecision   8;
+runTimeModifiable false;
+
+adjustTimeStep  yes;
+maxCo           {{max_co}};
+maxDeltaT       {{dt}};
+
+functions
+{
+{{forces_block}}
+
+    yPlus
+    {
+        type            yPlus;
+        libs            (fieldFunctionObjects);
+        writeControl    writeTime;
+        log             yes;
+    }
+
+    residuals
+    {
+        type            solverInfo;
+        libs            (utilityFunctionObjects);
+        fields          (U p k omega);
+        writeControl    timeStep;
+        writeInterval   1;
+    }
+}

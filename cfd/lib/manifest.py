@@ -26,7 +26,8 @@ FAMILIES = ("verification", "sail-2d", "rig-3d", "appendages",
 # поверхности, у VOF нет угла атаки паруса. Разделять же семейства и шаблоны
 # нужно потому, что одно семейство может считаться двумя шаблонами (киль без
 # воды и он же под поверхностью).
-TEMPLATES = ("openfoam-aero", "openfoam-2d", "openfoam-halfspace",
+TEMPLATES = ("openfoam-aero", "openfoam-2d", "openfoam-2d-urans",
+             "openfoam-halfspace",
              "openfoam-vof", "openfoam-manoeuvre")
 
 TURBULENCE = ("kOmegaSST", "SpalartAllmaras", "laminar")

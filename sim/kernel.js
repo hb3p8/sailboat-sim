@@ -77,8 +77,11 @@ export const kernelReady = X !== null;
 // Наружу выставлен и признак: отладочная панель и стенды спрашивают его, не
 // залезая в область сборки.
 if (typeof globalThis !== 'undefined') globalThis.SV20_KERNEL = kernelReady;
-if (typeof console !== 'undefined' && console.info) {
-  console.info(kernelReady
+// Строка о кернеле — в STDERR, а не в stdout: в браузере разницы нет, а в
+// node на stdout сидит мост CFD-контура и ждёт там чистый JSON. Первая же
+// версия с console.info уронила батарею t-cfd — «мост ответил не JSON».
+if (typeof console !== 'undefined' && console.error) {
+  console.error(kernelReady
     ? 'кернел Био — Савара: wasm SIMD'
     : 'кернел Био — Савара: ОТКАТ НА JS — пелена будет стоить вдвое'
       + (OFF ? ' (выключен SV20_NO_WASM)' : ''));

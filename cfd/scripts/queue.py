@@ -54,6 +54,10 @@ QUEUE = [
     ("gen-sec-design-a35", GEOM_SAIL),
     ("gen-sec-design-a25", GEOM_SAIL),
     ("gen-sec-design-a45", GEOM_SAIL),
+    # Тройка сеток опорной точки генакера: без неё у пары flat/design нет
+    # сеточной оценки, и по §13.4 её строки не имеют права на вердикт.
+    ("gen-sec-design-a35-coarse", GEOM_SAIL),
+    ("gen-sec-design-a35-fine", GEOM_SAIL),
     ("keel-u200-a06-medium", GEOM_KEEL),
     ("hull-db-u250-b00-medium", GEOM_MAIN),
     ("keel-u200-a04-medium", GEOM_KEEL),

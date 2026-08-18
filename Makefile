@@ -115,7 +115,7 @@ serve: viewer/terrain.html $(TERRAIN_PACK)
 # Полный прогон (`--full`) и вся батарея — когда есть основания думать, что
 # сломалось. Подробнее и почему именно так — в CLAUDE.md.
 # Отдельную батарею можно позвать по имени: `make t-wind`, `make t-upwind`.
-FAST := axes buoyancy membrane vlm waves ocean wind terrain replay physics sailcoeffs
+FAST := axes buoyancy membrane vlm waves ocean wind terrain replay physics sailcoeffs kernel
 # Пелена в медленных: две сорокапятисекундные прогонки подряд, восемнадцать
 # секунд. Проверка там при этом самая важная — что пелена не трогает силы.
 SLOW := upwind wake wing
@@ -140,6 +140,28 @@ test: physics $(addprefix t-,$(PYTESTS)) $(addprefix t-,$(FAST))
 slow: physics $(addprefix t-,$(PYSLOW)) $(addprefix t-,$(SLOW))
 
 all-tests: test slow
+
+# Кернел Био — Савара: wasm для симулятора, dylib для нативного замера.
+#
+# Тулчейн — llvm и lld из Homebrew, а НЕ системный clang: у эппловского нет
+# wasm-бэкенда вовсе. Обе сборки идут с `-ffp-contract=off`, и это не
+# перестраховка: без него clang на ARM сливает a*b+c в FMA, нативная сборка
+# расходится с wasm (там инструкции FMA нет), и побитовая сверка перестаёт быть
+# возможной. Проверяет её `make t-kernel`.
+LLVM := /opt/homebrew/opt/llvm/bin
+LLD  := /opt/homebrew/opt/lld/bin
+CFLAGS_FP := -O3 -ffp-contract=off -fno-fast-math
+
+.PHONY: kernel
+kernel: kernel/biot.wasm kernel/biot.dylib
+
+kernel/biot.wasm: kernel/biot.c
+	PATH=$(LLVM):$(LLD):$$PATH $(LLVM)/clang --target=wasm32 $(CFLAGS_FP) -msimd128 \
+	  -nostdlib -Wl,--no-entry -Wl,--export-dynamic -Wl,--initial-memory=16777216 \
+	  -o $@ $<
+
+kernel/biot.dylib: kernel/biot.c
+	$(LLVM)/clang $(CFLAGS_FP) -dynamiclib -o $@ $<
 
 # Ф3: оптимизатор, нужен scipy из .venv. Пишет out/params.json, который
 # дальше автоматически подхватывает build_hull.

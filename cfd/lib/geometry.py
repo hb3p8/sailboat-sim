@@ -281,6 +281,26 @@ def prepare(src_dir, dst_dir, bodies=BODIES, unions=(), heel_deg=0.0,
 # строятся они здесь, а не берутся файлами: файл без скрипта через год никто не
 # повторит, а тридцать строк тригонометрии повторяются всегда.
 
+
+# Носок сечения обязан смотреть В ПОТОК, то есть лежать при БОЛЬШИХ x.
+#
+# Связанные оси CFD: X в нос, и набегающий поток идёт в сторону убывающего x
+# (cfd/lib/axes.py, `onset_flow`). У обводов лодки это так само собой — нос
+# корпуса стоит при x = 6.1, — а вот построенное здесь сечение по привычке
+# аэродинамических таблиц начиналось с носка при x = 0 и встречало поток
+# ХВОСТОМ. Обращённый профиль — это острый нос и тупая корма, он срывается
+# сразу, и именно это показывали и NACA 0012 на десяти градусах, и сечение
+# генакера, у которого пузо якобы снижало подъёмную силу вчетверо.
+#
+# Заодно переворачивается знак y: после разворота пузо должно выпирать в ту
+# сторону, куда смотрит подъёмная сила при положительном угле атаки, иначе
+# «положительное пузо» означало бы вогнутый в поток парус.
+def _nose_to_flow(pts, chord):
+    out = pts.copy()
+    out[:, 0] = chord - out[:, 0]
+    out[:, 1] = -out[:, 1]
+    return out
+
 def naca_symmetric(thickness=0.12, chord=1.0, n=120):
     """Контур симметричного профиля NACA 00xx, замкнутый на задней кромке.
 
@@ -299,7 +319,7 @@ def naca_symmetric(thickness=0.12, chord=1.0, n=120):
     upper = np.stack([x, y], axis=1)
     lower = np.stack([x[::-1], -y[::-1]], axis=1)
     loop = np.concatenate([upper, lower[1:-1]]) * chord
-    return loop
+    return _nose_to_flow(loop, chord)
 
 
 def extrude(loop_xy, span=0.1, z0=None):
@@ -390,8 +410,8 @@ def sail_section(camber, draft=0.5, chord=1.0, thickness=0.015, n=200,
     if keep.sum() < 8:
         keep[:] = True
     xu, yu, xl, yl = xu[keep], yu[keep], xl[keep], yl[keep]
-    return (np.stack([xu, yu], axis=1) * chord,
-            np.stack([xl, yl], axis=1) * chord)
+    return (_nose_to_flow(np.stack([xu, yu], axis=1) * chord, chord),
+            _nose_to_flow(np.stack([xl, yl], axis=1) * chord, chord))
 
 
 def extrude_section(upper, lower, span=0.1, z0=None):

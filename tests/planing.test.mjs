@@ -24,7 +24,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
-import { hullResistance } from '../sim/hydro.js';
+import { hullResistance, planing, humpSquat } from '../sim/hydro.js';
+import { Buoyancy } from '../sim/buoyancy.js';
 import { modeLine } from './lib/mode.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -76,6 +77,41 @@ console.log('  вес %s Н, LWL %s м, BWL %s м, смоченная %s м²\n'
     worst < 1e-9, worst.toExponential(1) + ' Н при ' + (at * KN).toFixed(1) + ' уз');
 }
 
+// --- буксировка: полное сопротивление модели --------------------------------------
+//
+// ЗДЕСЬ БЫЛА ОШИБКА СВИДЕТЕЛЯ, и она стоит записи: первые версии проверок горба
+// и события мерили голую таблицу `hullResistance(P, v, 0)` — а Савицкий и
+// просадка кормы живут в шаге физики и в таблицу не попадают. Свидетель был
+// слеп к той самой модели, которую должен был принимать: он остался бы красным
+// при любой правильной правке. Проверки переведены на буксировочное равновесие —
+// решается посадка (всплытие и дифферент) чистого корпуса при заданном ходе, с
+// собственной волной и днищем, и сопротивление снимается с РЕШЁННОЙ посадки.
+// Это то же, что меряют в опытовом бассейне.
+const buoy = new Buoyancy(PACK);
+const cgx = PACK.mass.cg_m[0], cgz = PACK.mass.cg_m[2];
+function towed(v) {
+  let zc = -0.0001, th = 0;
+  const hump = humpSquat(PACK, v);
+  for (let it = 0; it < 400; it++) {
+    const h = buoy.at(zc, 0, th, hump);
+    const pl = planing(PACK, v, th, h);
+    const lift = pl ? pl.lift : 0;
+    const fb = E.rho_water * E.g * h.volume;
+    const nx = Math.sin(th), nz = Math.cos(th);
+    let mth = fb * ((h.cbx - cgx) * nz - (h.cbz - cgz) * nx);
+    if (lift > 0) mth += lift * (pl.xcp - cgx) * nz;
+    const kh = E.rho_water * E.g * Math.max(0.5, h.awp);
+    const kp = E.rho_water * E.g * Math.max(0.5, h.ilong);
+    zc += 0.6 * (fb + lift - W) / kh;
+    th = Math.max(-0.3, Math.min(0.3, th + 0.6 * mth / kp));
+  }
+  const h = buoy.at(zc, 0, th, hump);
+  const pl = planing(PACK, v, th, h);
+  const rt = hullResistance(PACK, v, 0, pl ? pl.mods : null) +
+             (pl && pl.lift > 0 ? pl.lift * Math.tan(pl.tau * Math.PI / 180) : 0);
+  return { rt, th, pl, wetted: h.wetted };
+}
+
 // --- горб и полка ---------------------------------------------------------------
 //
 // У вытесняющего корпуса удельное сопротивление растёт с ходом без предела. У
@@ -95,13 +131,13 @@ console.log('  вес %s Н, LWL %s м, BWL %s м, смоченная %s м²\n'
 // внутри таблицы, а то, что за её краем модели нечего сказать, — отдельная
 // дыра, которую глиссирование обязано закрыть.
 {
-  console.log('  Удельное сопротивление по ходу (крен ноль, ровный киль):\n');
+  console.log('  Удельное сопротивление по ходу (буксировка, посадка решается):\n');
   console.log('     уз     Fn    Rt, Н    Rt/W    прирост Rt/W на узел');
   const vTop = PACK.resistance.curve[PACK.resistance.curve.length - 1].v_ms;
   const rows = [];
   for (let kn = 4; kn / KN <= vTop; kn += 1) {
     const v = kn / KN;
-    const rt = hullResistance(PACK, v, 0);
+    const rt = towed(v).rt;
     rows.push({ kn, v, fn: FN(v), rt, sp: rt / W });
   }
   for (let i = 0; i < rows.length; i++) {
@@ -116,17 +152,31 @@ console.log('  вес %s Н, LWL %s м, BWL %s м, смоченная %s м²\n'
   console.log('');
   console.log('    (таблица кончается на Fn %s, дальше модели сказать нечего)\n',
     FN(vTop).toFixed(2));
-  // Горб — там, где удельное сопротивление наибольшее. У вытесняющей кривой это
-  // всегда последняя точка развёртки, и проверка на убывание её и ловит.
-  const top = rows.reduce((a, r) => (r.sp > a.sp ? r : a), rows[0]);
-  const after = rows.filter(r => r.fn > top.fn);
-  const drop = after.length ? top.sp - Math.min(...after.map(r => r.sp)) : 0;
-  check('за горбом удельное сопротивление ИДЁТ ВНИЗ, а не выполаживается',
-    drop > 0.02 * top.sp,
-    'горб Rt/W = ' + top.sp.toFixed(3) + ' при Fn ' + top.fn.toFixed(2) +
-    (after.length ? ', падение за ним ' + drop.toFixed(4) : ', за ним ничего нет'));
+  // Горб — ПЕРВЫЙ локальный максимум удельного сопротивления, а не глобальный:
+  // у вытесняющей кривой максимума внутри развёртки нет вовсе (она монотонна),
+  // так что существование локального горба подделать нечем. Полка — отдельным
+  // пунктом: за провалом кривая не имеет права снова уйти выше горба, иначе
+  // «выход» кончается стенкой.
+  let hump = null;
+  for (let i = 1; i < rows.length - 1; i++) {
+    if (rows[i].fn > 0.45 && rows[i].sp > rows[i - 1].sp && rows[i].sp >= rows[i + 1].sp) {
+      hump = rows[i]; break;
+    }
+  }
+  const after = hump ? rows.filter(r => r.fn > hump.fn) : [];
+  const dip = after.length ? Math.min(...after.map(r => r.sp)) : Infinity;
+  check('горб есть: локальный максимум, за которым сопротивление идёт вниз',
+    hump !== null && dip < 0.95 * hump.sp,
+    hump ? 'горб Rt/W ' + hump.sp.toFixed(3) + ' при Fn ' + hump.fn.toFixed(2) +
+           ', провал за ним ' + (isFinite(dip) ? dip.toFixed(3) : '—')
+         : 'локального максимума нет — кривая монотонна');
   check('горб стоит там, где ему положено — Fn 0.45…0.85',
-    top.fn > 0.45 && top.fn < 0.85, 'Fn ' + top.fn.toFixed(2));
+    hump !== null && hump.fn > 0.45 && hump.fn < 0.85,
+    hump ? 'Fn ' + hump.fn.toFixed(2) : '');
+  const wall = after.length ? Math.max(...after.map(r => r.sp)) : 0;
+  check('полка держится: за провалом кривая не уходит выше горба',
+    hump !== null && wall <= hump.sp,
+    hump ? 'за горбом до Rt/W ' + wall.toFixed(3) + ' против горба ' + hump.sp.toFixed(3) : '');
 }
 
 // --- выход на глиссирование — событие -------------------------------------------
@@ -139,21 +189,22 @@ console.log('  вес %s Н, LWL %s м, BWL %s м, смоченная %s м²\n'
 // производная dV/dT. У неё обязан быть выраженный максимум, а не полка.
 {
   const speedAt = drive => {
-    // Установившийся ход: сопротивление равно тяге. Ищется делением отрезка —
-    // кривая монотонна по ходу, и другого корня у неё нет.
-    let lo = 0, hi = 12;
-    for (let k = 0; k < 60; k++) {
-      const mid = 0.5 * (lo + hi);
-      if (hullResistance(PACK, mid, 0) < drive) lo = mid; else hi = mid;
+    // Установившийся ход: сопротивление равно тяге. У кривой С ГОРБОМ корней
+    // может быть три (до горба, в провале, на стенке) — берётся НАИБОЛЬШИЙ ход,
+    // при котором сопротивление ещё не превышает тягу: разогнавшаяся лодка
+    // остаётся на дальней ветви, в этом и есть выход.
+    let best = 0;
+    for (let v = 0.2; v <= 12; v += 0.05) {
+      if (towed(v).rt <= drive) best = v;
     }
-    return 0.5 * (lo + hi);
+    return best;
   };
   console.log('  Ход от тяги (сколько узлов даёт лишняя сотня ньютонов):\n');
   console.log('    тяга, Н    ход, уз    прибавка на 100 Н');
   // Верх развёртки — сопротивление на последней точке таблицы: дальше искать
   // установившийся ход бессмысленно, там у модели данных нет.
   const vTop = PACK.resistance.curve[PACK.resistance.curve.length - 1].v_ms;
-  const tTop = hullResistance(PACK, vTop, 0);
+  const tTop = towed(vTop).rt;
   const rows = [];
   for (let T = 200; T <= tTop; T += 100) rows.push({ T, v: speedAt(T) });
   for (let i = 1; i < rows.length; i++)

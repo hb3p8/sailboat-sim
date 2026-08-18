@@ -26,7 +26,7 @@ import { seaState, addedResistance } from './waves.js';
 import { Buoyancy } from './buoyancy.js';
 import { wrapPi, clamp, DEG } from './util.js';
 import { lerpTable, foilCoeffs, hullResistance, hullLateral, hullHeelYaw,
-         foilForce, planing } from './hydro.js';
+         foilForce, planing, humpSquat } from './hydro.js';
 import { Rig, windage, sailCoeffs, STRIPS, NCHORD, LATTICE_EVERY,
          BOOM_INERTIA, BOOM_DAMP } from './aero.js';
 import { telemetryOf } from './telemetry.js';
@@ -611,8 +611,13 @@ export class Boat {
     const waveRoll = Math.atan(-this.waveSE * spsi0 + this.waveSN * cpsi0);
     let hyd = null;
     if (this.buoy.ready) {
+      // Собственная волна корпуса — сюда же, в срез шпангоутов: корма садится во
+      // впадину, нос встаёт, и это единственный источник ходового дифферента,
+      // который включает глиссирование. Ниже окна по Фруду её нет ВООБЩЕ, и
+      // вытесняющий режим не может сдвинуться ни на разряд.
       hyd = this.buoy.at(this.zc - this.waveZ,
-                         this.phi - waveRoll, this.th - wavePitch);
+                         this.phi - waveRoll, this.th - wavePitch,
+                         humpSquat(P, Math.abs(this.u)));
     }
     // Глиссирование. Ниже окна по Фруду возвращает пусто, и тогда всё ниже по
     // тексту идёт ровно так, как шло всегда.

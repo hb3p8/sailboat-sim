@@ -571,6 +571,44 @@ try:
               / max(openfoam.context(m, geom)["span_m"], 1e-9) <= 20
               for _p, m in found if m["template"] == "openfoam-2d"))
 
+    # В тройке сеток меняться должен РОВНО ОДИН параметр — размер фоновой
+    # ячейки. Первая тройка киля меняла заодно уровень на ребре (7, 8, 9) и
+    # число слоёв (3, 4, 5), а от разрешения задней кромки ответ зависит
+    # сильнее всего. Итог: разность medium→fine 8.5% при пороге 2%,
+    # сходимость немонотонная, наблюдаемый порядок 3.3 и 6.6 — то есть
+    # оценка Ричардсона мерила смесь трёх изменений и не значила ничего.
+    #
+    # §4.2 требует того же словами: на всех трёх сетках сохраняются одинаковые
+    # геометрия, граничные условия, модель турбулентности и критерии
+    # усреднения. Здесь это доведено до проверки.
+    SAME = ("refine", "feature_level", "surface_distance", "boundary_layers",
+            "regions", "domain", "family", "n_proc", "yplus_target")
+    by_group = {}
+    for _p, m in found:
+        by_group.setdefault(m["convergence_group"], []).append(m)
+    for group, ms in sorted(by_group.items()):
+        if len(ms) < 2:
+            continue
+        for key in SAME:
+            vals = {json.dumps(m["mesh"].get(key), sort_keys=True) for m in ms}
+            if len(vals) > 1:
+                check("в тройке %s меняется только размер ячейки" % group,
+                      False, "различается mesh.%s" % key)
+        # Условие и численность тоже обязаны совпадать: тройка меряет сетку, а
+        # не режим.
+        for key, where in (("condition", "condition"), ("fluid", "fluid")):
+            vals = {json.dumps(m[where], sort_keys=True) for m in ms}
+            if len(vals) > 1:
+                check("в тройке %s совпадает режим" % group, False,
+                      "различается %s" % where)
+        sizes = {round(m["mesh"].get("base_size_m", 0), 9) for m in ms}
+        if len(ms) > 1 and len(sizes) != len(ms):
+            check("в тройке %s размеры ячейки различны" % group, False,
+                  str(sorted(sizes)))
+    check("в каждой тройке меняется только размер фоновой ячейки",
+          all(len({json.dumps(m["mesh"].get(k), sort_keys=True) for m in ms}) == 1
+              for ms in by_group.values() if len(ms) > 1 for k in SAME))
+
     # Области сгущения: ящик обязан попасть в словарь сеточника, иначе переход
     # от фоновой ячейки к поверхностной идёт в один скачок и сеточник его
     # срезает — на профиле остаётся тридцать ячеек на хорду.
@@ -588,21 +626,6 @@ try:
         c = openfoam.context(dist[0], geom)
         check("сгущение по расстоянию попадает в словарь",
               "mode distance" in c["regions_block"])
-
-    # Явные уровни сгущения отменяют масштабирование фоновой ячейки: иначе
-    # тройка сгущалась бы дважды, и наблюдаемый порядок считался бы не по тому
-    # отношению.
-    expl = [m for _p, m in found if m["mesh"].get("refine")]
-    if expl:
-        sizes = {}
-        for m in expl:
-            if m["convergence_group"] not in sizes:
-                sizes[m["convergence_group"]] = set()
-            sizes[m["convergence_group"]].add(
-                round(openfoam.context(m, geom)["base_size_m"], 9))
-        check("при явных уровнях фоновая ячейка одна на всю тройку",
-              all(len(v) == 1 for v in sizes.values()),
-              str({k: sorted(v) for k, v in sizes.items() if len(v) > 1}))
 
     # Поток: угол атаки обязан поворачивать вектор, а не сетку.
     m2d = [m for _p, m in found if m["condition"].get("alpha_deg")][0]

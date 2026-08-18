@@ -21,8 +21,8 @@
   "revision": "подставляется при разворачивании"
  },
  "mesh": {
-  "base_size_m": 0.5,
-  "boundary_layers": 3,
+  "base_size_m": 0.707107,
+  "boundary_layers": 4,
   "cells_target": 5000000,
   "domain": {
    "aft_l": 2.5,
@@ -36,12 +36,13 @@
    "side_l": 1.5,
    "up_l": 0.0
   },
-  "family": "hull-db-v1",
+  "family": "hull-db-v2",
+  "feature_level": 6,
   "level": "coarse",
   "n_proc": 8,
   "refine": [
-   2,
-   4
+   3,
+   5
   ],
   "regions": [
    {
@@ -78,7 +79,7 @@
   "surface_distance": [
    [
     0.25,
-    3
+    4
    ]
   ],
   "yplus_target": 60.0

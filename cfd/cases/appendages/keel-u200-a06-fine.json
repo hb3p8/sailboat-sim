@@ -20,8 +20,8 @@
   "revision": "подставляется при разворачивании"
  },
  "mesh": {
-  "base_size_m": 0.35,
-  "boundary_layers": 5,
+  "base_size_m": 0.247487,
+  "boundary_layers": 4,
   "cells_target": 4000000,
   "domain": {
    "aft_l": 25.0,
@@ -35,13 +35,13 @@
    "side_l": 15.0,
    "up_l": 0.0
   },
-  "family": "keel-half-v2",
-  "feature_level": 9,
+  "family": "keel-half-v3",
+  "feature_level": 8,
   "level": "fine",
   "n_proc": 8,
   "refine": [
-   6,
-   8
+   5,
+   7
   ],
   "regions": [
    {
@@ -78,7 +78,7 @@
   "surface_distance": [
    [
     0.05,
-    7
+    6
    ]
   ],
   "yplus_target": 40.0

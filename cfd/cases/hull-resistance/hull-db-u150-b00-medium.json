@@ -36,7 +36,8 @@
    "side_l": 1.5,
    "up_l": 0.0
   },
-  "family": "hull-db-v1",
+  "family": "hull-db-v2",
+  "feature_level": 6,
   "level": "medium",
   "n_proc": 8,
   "refine": [

@@ -28,8 +28,8 @@
   "revision": "подставляется при разворачивании"
  },
  "mesh": {
-  "base_size_m": 0.35,
-  "boundary_layers": 7,
+  "base_size_m": 0.247487,
+  "boundary_layers": 4,
   "cells_target": 24000000,
   "domain": {
    "aft_l": 3.0,
@@ -43,9 +43,19 @@
    "side_l": 2.0,
    "up_l": 0.6
   },
-  "family": "hull-v1",
+  "family": "hull-vof-v2",
   "level": "fine",
   "n_proc": 8,
+  "refine": [
+   3,
+   5
+  ],
+  "surface_distance": [
+   [
+    0.25,
+    4
+   ]
+  ],
   "yplus_target": 60.0
  },
  "notes": "Тонкая сетка: десятки миллионов ячеек и много шагов (§9). Запускается на 32+ ядрах и только после того, как coarse и medium прошли автоматические проверки.",

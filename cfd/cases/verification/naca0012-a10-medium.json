@@ -37,7 +37,7 @@
    "span_m": 0.1,
    "up_l": 1.0
   },
-  "family": "naca0012-v1",
+  "family": "naca0012-v2",
   "level": "medium",
   "n_proc": 8,
   "refine": [

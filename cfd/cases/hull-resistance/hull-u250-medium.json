@@ -29,7 +29,7 @@
  },
  "mesh": {
   "base_size_m": 0.35,
-  "boundary_layers": 5,
+  "boundary_layers": 4,
   "cells_target": 8000000,
   "domain": {
    "aft_l": 3.0,
@@ -43,9 +43,19 @@
    "side_l": 2.0,
    "up_l": 0.6
   },
-  "family": "hull-v1",
+  "family": "hull-vof-v2",
   "level": "medium",
   "n_proc": 8,
+  "refine": [
+   3,
+   5
+  ],
+  "surface_distance": [
+   [
+    0.25,
+    4
+   ]
+  ],
   "yplus_target": 60.0
  },
  "notes": "Средняя сетка тройки. Всё, кроме mesh.level, обязано совпадать с coarse и fine: §4.2 требует одинаковых геометрии, граничных условий, модели турбулентности и критериев усреднения.",

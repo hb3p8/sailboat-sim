@@ -21,8 +21,8 @@
   "revision": "подставляется при разворачивании"
  },
  "mesh": {
-  "base_size_m": 0.5,
-  "boundary_layers": 3,
+  "base_size_m": 0.707107,
+  "boundary_layers": 4,
   "cells_target": 6000000,
   "domain": {
    "aft_l": 20.0,
@@ -37,12 +37,12 @@
    "span_m": 0.1,
    "up_l": 1.0
   },
-  "family": "naca0012-v1",
+  "family": "naca0012-v2",
   "level": "coarse",
   "n_proc": 8,
   "refine": [
-   5,
-   6
+   6,
+   7
   ],
   "regions": [
    {
@@ -79,7 +79,7 @@
   "surface_distance": [
    [
     0.08,
-    5
+    6
    ]
   ],
   "yplus_target": 30.0

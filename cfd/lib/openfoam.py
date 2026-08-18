@@ -325,7 +325,12 @@ def _mesh_context(m):
         "span_lo": -0.5 * span, "span_hi": 0.5 * span, "span_m": span,
         "n_span": max(1, int(round(span / base))),
         "seed_x": seed[0], "seed_y": seed[1], "seed_z": seed[2],
-        "n_proc": mesh.get("n_proc", 4),
+        # Число процессов решателя можно перекрыть снаружи (SV20_CFD_NPROC), и
+        # это намеренно НЕ правка манифеста: манифест описывает задачу, а
+        # декомпозиция — свойство машины и на физический ответ не влияет.
+        # Править её в манифестах значило бы инвалидировать готовые сводки,
+        # которые сверяются с манифестом по содержимому.
+        "n_proc": int(os.environ.get("SV20_CFD_NPROC", 0)) or mesh.get("n_proc", 4),
         "dom_xmin": -back, "dom_xmax": front,
         "dom_ymin": -side, "dom_ymax": side,
         "dom_zmin": -down, "dom_zmax": up,

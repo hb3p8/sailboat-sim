@@ -92,7 +92,12 @@ const cgx = PACK.mass.cg_m[0], cgz = PACK.mass.cg_m[2];
 function towed(v) {
   let zc = -0.0001, th = 0;
   const hump = humpSquat(PACK, v);
-  for (let it = 0; it < 400; it++) {
+  // Шаг релаксации мал не из осторожности: у посадки с днищем есть складка
+  // (τ растёт — подъёмная сила растёт — лодка всплывает — хорда круче), и
+  // крупный шаг перепрыгивал её на скачке между ветвями, разлетаясь до 450%
+  // веса. Динамика в физике демпфирована и этого не видит; решателю стенда
+  // хватает мелкого шага.
+  for (let it = 0; it < 800; it++) {
     const h = buoy.at(zc, 0, th, hump);
     const pl = planing(PACK, v, th, h);
     const lift = pl ? pl.lift : 0;
@@ -102,8 +107,8 @@ function towed(v) {
     if (lift > 0) mth += lift * (pl.xcp - cgx) * nz;
     const kh = E.rho_water * E.g * Math.max(0.5, h.awp);
     const kp = E.rho_water * E.g * Math.max(0.5, h.ilong);
-    zc += 0.6 * (fb + lift - W) / kh;
-    th = Math.max(-0.3, Math.min(0.3, th + 0.6 * mth / kp));
+    zc += 0.3 * (fb + lift - W) / kh;
+    th = Math.max(-0.3, Math.min(0.3, th + 0.3 * mth / kp));
   }
   const h = buoy.at(zc, 0, th, hump);
   const pl = planing(PACK, v, th, h);

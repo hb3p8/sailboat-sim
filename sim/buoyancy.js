@@ -59,6 +59,15 @@ export class Buoyancy {
     for (const y of this.py) most = Math.max(most, y.length);
     this.qy = new Float64Array(most + 4);
     this.qz = new Float64Array(most + 4);
+    // Линия киля: самая нижняя точка каждого шпангоута. Нужна глиссированию —
+    // угол днища берётся по хорде её СМОЧЕННОЙ части, — и считается один раз.
+    this.keelZ = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      let zm = Infinity;
+      const pz = this.pz[i];
+      for (let k = 0; k < pz.length; k++) if (pz[k] < zm) zm = pz[k];
+      this.keelZ[i] = zm;
+    }
   }
 
   // Площадь погружённой части шпангоута, её центр и ширина по ватерлинии.
@@ -139,7 +148,7 @@ export class Buoyancy {
     // вида «сравнили два состояния, а это одно и то же»: на такой я уже
     // попался в собственном тесте, где `до` и `после` оказались одним объектом.
     const o = { volume: 0, cbx: 0, cby: 0, cbz: 0, awp: 0, ilong: 0, lcf: 0,
-                wetted: 0, wetAft: 0 };
+                wetted: 0, wetAft: 0, wetFwd: 0, tauChordDeg: null };
     if (!this.ready) return o;
     const cth = Math.cos(th), sth = Math.sin(th);
     const nx = sth, ny = Math.sin(phi) * cth, nz = Math.cos(phi) * cth;
@@ -168,6 +177,29 @@ export class Buoyancy {
       if (a0 > 1e-9 && !o.wetAft) o.wetAft = xs[i];
       awp += wv;
       sx += wv * 0.5 * (xs[i] + xs[i + 1]);
+    }
+    // Носовой край смоченной части — парой к кормовому: из них двоих
+    // глиссирование берёт свою смоченную длину.
+    let iFwd = -1, iAft = -1;
+    for (let i = n - 1; i > 0; i--) {
+      if (this.area[i] > 1e-9) { o.wetFwd = xs[i]; iFwd = i; break; }
+    }
+    for (let i = 0; i < n; i++) {
+      if (this.area[i] > 1e-9) { iAft = i; break; }
+    }
+    // Угол днища к невозмущённой поверхности — по ХОРДЕ смоченной части линии
+    // киля, в текущей посадке. Именно он входит в Савицкого: плоской пластине
+    // соответствует хорда, а не средний наклон обводов. Линия киля у SV20
+    // кривая (седловатость), и хорда её полной длины почти горизонтальна —
+    // считать угол через среднюю седловатость значило занижать его на три
+    // градуса. С коротким смоченным куском у кормы хорда сама ложится на крутой
+    // кормовой участок — самостабилизация выходит из геометрии.
+    if (iFwd > iAft && iAft >= 0) {
+      const hA = zc + nx * xs[iAft] + nz * this.keelZ[iAft];
+      const hF = zc + nx * xs[iFwd] + nz * this.keelZ[iFwd];
+      o.tauChordDeg = Math.atan2(hF - hA, xs[iFwd] - xs[iAft]) * 180 / Math.PI;
+    } else {
+      o.tauChordDeg = null;
     }
     o.volume = vol;
     o.cbx = vol > 1e-9 ? mx / vol : 0;

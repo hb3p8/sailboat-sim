@@ -166,21 +166,23 @@ console.log('\nЦена на рабочем размере (2000 рёбер × 5
   check('wasm не медленнее JS', tW < tJS, (tJS / tW).toFixed(2) + '×');
 }
 
-// --- лодка целиком ---------------------------------------------------------------
+// --- где сверяется решётка ------------------------------------------------------
 //
-// Сверка кернела с образцом — необходима, но недостаточна: она проверяет
-// функцию, а не то, что симулятор ею пользуется правильно. Здесь прогоняется
-// лодка на шестистах шагах в трёх режимах и сверяется КОНЕЧНОЕ СОСТОЯНИЕ.
+// У кернела решётки (`kernel/lattice.c`) свидетель СВОЙ и лежит в другом месте —
+// `tests/vlm.test.mjs` сверяет собранную матрицу влияния с поточечным
+// `Lattice.induced`, который считает то же поле совсем другим кодом и в другом
+// порядке. Согласие там 5.2e-18, и проверяется оно каждый прогон.
 //
-// Вторая копия запускается отдельным процессом с SV20_NO_WASM=1: модуль
-// загружается один раз при импорте, и переключить его внутри одного процесса
-// нельзя. Заодно это проверяет сам откат — что он рабочий, а не декоративный.
-console.log('\nЛодка целиком, 600 шагов (кернел против отката):\n');
+// Второй копии здесь заводить не стали НАРОЧНО. Дубликат, который сверяют, —
+// свидетель; дубликат, который не сверяют, — обуза, и разойдётся он молча.
+// Свидетель у решётки уже есть, и он независимее любого, который написали бы
+// тут: `induced` не переписан с кернела, а существовал до него.
+
+console.log('\nЦена шага физики целиком:\n');
 {
   const probe = `
     import { readFileSync } from 'node:fs';
     import { Boat } from '${join(ROOT, 'sim/physics.js')}';
-    import { kernelReady } from '${join(ROOT, 'sim/kernel.js')}';
     const PACK = JSON.parse(readFileSync('${join(ROOT, 'out/export/physics.json')}', 'utf8'));
     const D = Math.PI / 180;
     const out = {};
@@ -190,44 +192,22 @@ console.log('\nЛодка целиком, 600 шагов (кернел прот�
       b.o.windSpeed = 6; b.o.windDir = 100 * D; b.psi = 100 * D - twa * D;
       b.o.sheet = 70 * D; b.o.draft = 1; b.o.twist = 8 * D;
       b.o.crewHike = -1; b.o.crewMass = 219.9; b.u = 4;
+      for (let i = 0; i < 100; i++) b.step(1 / 30);
       const t = process.hrtime.bigint();
-      for (let i = 0; i < 600; i++) b.step(1 / 30);
-      out[twa + '/' + gen] = { u: b.u, v: b.v, r: b.r, psi: b.psi, phi: b.phi,
-                               ms: Number(process.hrtime.bigint() - t) / 1e6 / 600 };
+      for (let i = 0; i < 500; i++) b.step(1 / 30);
+      out[twa + '/' + gen] = Number(process.hrtime.bigint() - t) / 1e6 / 500;
     }
-    console.log(JSON.stringify({ kernelReady, out }));
+    console.log(JSON.stringify(out));
   `;
-  // Берётся ПОСЛЕДНЯЯ строка вывода, а не весь он: модуль кернела говорит о себе
-  // вслух при загрузке (и правильно делает — см. docs/stability.md §4), и это
-  // сообщение стоит в stdout перед ответом.
-  const run = (env) => {
-    const out = execFileSync(process.execPath, ['--input-type=module', '-e', probe],
-                             { env: { ...process.env, ...env }, encoding: 'utf8' });
-    const lines = out.trim().split('\n');
-    return JSON.parse(lines[lines.length - 1]);
-  };
-  const on = run({ SV20_NO_WASM: '0' }), off = run({ SV20_NO_WASM: '1' });
-  check('кернел включён в одном прогоне и выключен в другом',
-        on.kernelReady === true && off.kernelReady === false,
-        'on=' + on.kernelReady + ' off=' + off.kernelReady);
-  let bad = 0, first = '';
-  for (const k of Object.keys(on.out)) {
-    for (const f of ['u', 'v', 'r', 'psi', 'phi']) {
-      if (!Object.is(on.out[k][f], off.out[k][f])) {
-        bad++;
-        if (!first) first = k + '.' + f + ': ' + on.out[k][f] + ' против ' + off.out[k][f];
-      }
-    }
-  }
-  check('состояние лодки после 600 шагов совпадает ПОБИТОВО', bad === 0,
-        bad === 0 ? 'три режима, пять величин' : bad + ' расхождений — ' + first);
-  console.log('');
-  console.log('      режим        с кернелом    без      ускорение шага');
-  for (const k of Object.keys(on.out)) {
-    console.log('    %s %s мс %s мс   %s×', k.padEnd(12),
-      on.out[k].ms.toFixed(2).padStart(8), off.out[k].ms.toFixed(2).padStart(8),
-      (off.out[k].ms / on.out[k].ms).toFixed(2).padStart(6));
-  }
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', probe],
+                           { encoding: 'utf8' }).trim().split('\n');
+  const ms = JSON.parse(out[out.length - 1]);
+  for (const k of Object.keys(ms)) console.log('    %s %s мс', k.padEnd(12), ms[k].toFixed(2).padStart(7));
+  // Порог грубый и стоит затем, чтобы заметить обвал, а не чтобы ловить проценты:
+  // цена шага зависит от машины, а батарея гоняется на разных.
+  check('шаг физики укладывается в бюджет кадра с запасом',
+        Math.max(...Object.values(ms)) < 8,
+        'худший ' + Math.max(...Object.values(ms)).toFixed(2) + ' мс при 33 мс кадра');
 }
 
 console.log('\n' + (failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');

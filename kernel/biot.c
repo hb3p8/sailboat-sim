@@ -30,36 +30,7 @@
 // а не умножает на ноль: в отброшенной полосе деление на нулевую длину даёт
 // бесконечность, и 0·inf вернуло бы NaN.
 
-// Нативная сборка нужна только для замера и отладки, экспорт там ни при чём.
-#if defined(__wasm__)
-#define KEXPORT(name) __attribute__((export_name(name)))
-#else
-#define KEXPORT(name)
-#endif
-
-typedef double f64x2 __attribute__((vector_size(16)));
-typedef long long i64x2 __attribute__((vector_size(16)));
-
-#define EPS     1e-10
-#define FOURPI  12.566370614359172   // 4*Math.PI, ровно то же double
-
-static inline f64x2 vsplat(double a) { return (f64x2){ a, a }; }
-
-// Обнулить полосы, где маска ложна. Битовое И, см. примечание про 0·inf.
-static inline f64x2 vkeep(i64x2 mask, f64x2 v) {
-  return (f64x2)(mask & (i64x2)v);
-}
-
-static inline f64x2 vsqrt(f64x2 v) {
-  return (f64x2){ __builtin_sqrt(v[0]), __builtin_sqrt(v[1]) };
-}
-
-// Максимум без семантики NaN: оба аргумента здесь конечны и неотрицательны, а
-// `fmax` втянул бы за собой лишнюю проверку и разошёлся бы с Math.max формой,
-// а не значением.
-static inline f64x2 vmax(f64x2 a, f64x2 b) {
-  return (f64x2){ a[0] > b[0] ? a[0] : b[0], a[1] > b[1] ? a[1] : b[1] };
-}
+#include "vec.h"
 
 // e — плотная запись рёбер по восемь чисел: начало (3), вектор до конца (3),
 // сила, знаменатель ограничителя. Ровно `FreeWake.pack`.

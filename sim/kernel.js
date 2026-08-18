@@ -14,12 +14,27 @@
 // весь vlm.js, пришлось бы городить асинхронную готовность и решать, что делать
 // на первых кадрах; здесь этого не нужно вовсе.
 //
-// ОТКАТ ОБЯЗАТЕЛЕН И ПРОВЕРЯЕТСЯ. Если модуль не собрался — старый браузер, CSP,
-// что угодно, — `fieldEdges` возвращает false, и вызывающий считает по-старому
-// на JS. Обе ветки дают ПОБИТОВО один ответ (kernel/biot.c, tests/kernel.test.mjs),
-// поэтому откат не меняет поведение, а только цену.
+// ОТКАТА НА JS ЗДЕСЬ НЕТ, и это осознанно.
+//
+// Сперва он был: обе ветки давали побитово один ответ, и казалось, что запасной
+// путь бесплатен. Довод против сильнее: две копии одной формулы — это две
+// формулы, и расходятся они МОЛЧА. Запасная ветка не исполняется никогда (wasm
+// собирается всегда), значит её никто не проверяет, значит первая же правка
+// кернела оставит её позади — и обнаружится это на том единственном устройстве,
+// где wasm не собрался.
+//
+// Поэтому копия ровно одна, а образец, с которым её сверяют, живёт в батарее
+// (`tests/kernel.test.mjs`) и сравнивается КАЖДЫЙ ПРОГОН. Разница между
+// дубликатом и свидетелем в том и состоит: свидетеля проверяют, дубликат — нет.
+//
+// Раз запасного пути нет, модули обязаны быть готовы ДО первого шага физики.
+// Ждёт этого сам импорт: страница собирается как `<script type="module">`, и
+// верхнеуровневый `await` останавливает весь граф модулей до готовности. Не
+// стартовать симулятор, пока не загружен кернел, оказалось проще, чем городить
+// готовность.
 
 import { BIOT_WASM_B64 } from './biotwasm.js';
+import { LATTICE_WASM_B64 } from './latticewasm.js';
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
@@ -44,47 +59,56 @@ function unb64(s) {
   return out;
 }
 
-// Выключатель для A/B и для проверки самого отката. Не «на всякий случай»:
-// обе ветки обязаны давать побитово одно, и единственный способ это утверждать —
-// уметь прогнать лодку и так, и так на одном состоянии.
-const OFF = typeof process !== 'undefined' && process.env &&
-            process.env.SV20_NO_WASM === '1';
-
-let X = null;           // экспорты модуля
-let F64 = null;         // вид на линейную память, заводится один раз
-let buf = null;         // отведённые под обмен куски
-
+// Оба модуля инстанцируются ЗДЕСЬ, на верхнем уровне, и ошибка не глотается:
+// без кернела считать нечем, и притворяться, что всё в порядке, значит отдать
+// пользователю страницу, которая молча не работает.
+let biot, lat;
 try {
-  if (OFF) throw new Error('выключен SV20_NO_WASM');
-  const inst = new WebAssembly.Instance(new WebAssembly.Module(unb64(BIOT_WASM_B64)), {});
-  X = inst.exports;
-  F64 = new Float64Array(X.memory.buffer);
+  biot = (await WebAssembly.instantiate(unb64(BIOT_WASM_B64), {})).instance.exports;
+  lat = (await WebAssembly.instantiate(unb64(LATTICE_WASM_B64), {})).instance.exports;
 } catch (err) {
-  X = null;
+  // Сообщение своё, потому что родное («CompileError», «magic word») ничего не
+  // говорит о том, что случилось с лодкой. А случилось то, что физики не будет.
+  throw new Error('кернелы wasm не собрались, физику считать нечем: ' + err.message);
 }
 
-export const kernelReady = X !== null;
+const X = biot, F64 = new Float64Array(X.memory.buffer);
+const L = lat, LF64 = new Float64Array(L.memory.buffer), LU8 = new Uint8Array(L.memory.buffer);
+let buf = null, lbuf = null;
 
-// Исход загрузки говорится ВСЛУХ, и это не отладочный мусор.
-//
-// Молчащий откат — ровно тот дефект, что перечислен в docs/stability.md §4:
-// неверный ответ (здесь — вдвое более дорогой) сделан невидимым. Кернел
-// затевался ради телефона, а телефон как раз то место, где он с наибольшей
-// вероятностью не соберётся — старый WebKit, жёсткий CSP. Отвалиться молча он
-// не имеет права: тогда на мобильном тихо вернётся выключенная пелена, ради
-// которой всё и делалось.
-//
-// Наружу выставлен и признак: отладочная панель и стенды спрашивают его, не
-// залезая в область сборки.
-if (typeof globalThis !== 'undefined') globalThis.SV20_KERNEL = kernelReady;
-// Строка о кернеле — в STDERR, а не в stdout: в браузере разницы нет, а в
-// node на stdout сидит мост CFD-контура и ждёт там чистый JSON. Первая же
-// версия с console.info уронила батарею t-cfd — «мост ответил не JSON».
-if (typeof console !== 'undefined' && console.error) {
-  console.error(kernelReady
-    ? 'кернел Био — Савара: wasm SIMD'
-    : 'кернел Био — Савара: ОТКАТ НА JS — пелена будет стоить вдвое'
-      + (OFF ? ' (выключен SV20_NO_WASM)' : ''));
+
+function lensure(n) {
+  if (lbuf && lbuf.n >= n) return lbuf;
+  const m = Math.max(n, lbuf ? lbuf.n * 2 : 64);
+  const v3 = () => L.alloc(m * 3 * 8);
+  lbuf = {
+    n: m,
+    a: v3(), b: v3(), ta: v3(), tb: v3(),
+    ma: v3(), mb: v3(), mta: v3(), mtb: v3(),
+    cpt: v3(), nrm: v3(), mid: v3(),
+    lead: L.alloc(m), trail: L.alloc(m), tw: L.alloc(m * 8),
+    k: L.alloc(m * m * 8), kw: L.alloc(m * m * 8),
+  };
+  return lbuf;
+}
+
+// `g` — набор уже плотно уложенных массивов, его собирает `Lattice.build`.
+export function latticeBuild(g, n, ux, uy, uz, rc2, self, ground, k, kw) {
+  if (n <= 0) return false;
+  const b = lensure(n);
+  const o = (p) => p >> 3;
+  for (const nm of ['a', 'b', 'ta', 'tb', 'ma', 'mb', 'mta', 'mtb', 'cpt', 'nrm', 'mid']) {
+    LF64.set(g[nm].subarray(0, n * 3), o(b[nm]));
+  }
+  LF64.set(g.tw.subarray(0, n), o(b.tw));
+  LU8.set(g.lead.subarray(0, n), b.lead);
+  LU8.set(g.trail.subarray(0, n), b.trail);
+  L.lattice_build(b.a, b.b, b.ta, b.tb, b.ma, b.mb, b.mta, b.mtb,
+                  b.cpt, b.nrm, b.mid, b.lead, b.trail, b.tw, n,
+                  ux, uy, uz, rc2, self ? 1 : 0, ground ? 1 : 0, b.k, b.kw);
+  k.set(LF64.subarray(o(b.k), o(b.k) + n * n));
+  kw.set(LF64.subarray(o(b.kw), o(b.kw) + n * n));
+  return true;
 }
 
 // Обмен идёт КОПИЕЙ, а не видами на линейную память, и это осознанный размен.
@@ -128,7 +152,7 @@ function outFrom(dst, n, off) {
 // идут вторым проходом по тем же выходным массивам, и разделение здесь повторяет
 // разделение там. Выход НЕ обнуляется — добавляется к посчитанному рёбрами.
 export function tailsAt(t, nt, qx, qy, qz, np, ox, oy, oz) {
-  if (!X || nt <= 0) return false;
+  if (nt <= 0) return false;
   const b = ensure(nt, np);
   const o = (p) => p >> 3;
   inTo(t, nt * 8, o(b.t));
@@ -140,7 +164,7 @@ export function tailsAt(t, nt, qx, qy, qz, np, ox, oy, oz) {
 }
 
 export function fieldEdges(e, ne, qx, qy, qz, np, ox, oy, oz) {
-  if (!X || ne <= 0) return false;
+  if (ne <= 0) return false;
   const b = ensure(ne, np);
   const o = (p) => p >> 3;
   inTo(e, ne * 8, o(b.e));

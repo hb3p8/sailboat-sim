@@ -153,15 +153,20 @@ LLD  := /opt/homebrew/opt/lld/bin
 CFLAGS_FP := -O3 -ffp-contract=off -fno-fast-math
 
 .PHONY: kernel
-kernel: sim/biotwasm.js kernel/biot.dylib
+kernel: sim/biotwasm.js kernel/biot.dylib kernel/lattice.wasm
 
 # Блоб — ЧАСТЬ цели, а не отдельный шаг. Собранный .wasm без пересобранного
 # блоба это симулятор со старым кернелом, и узнаётся это падением на не
 # экспортированной функции, а не сообщением сборщика.
-sim/biotwasm.js: kernel/biot.wasm
+sim/biotwasm.js: kernel/biot.wasm kernel/lattice.wasm
 	$(PY) scripts/wasm_blob.py
 
-kernel/biot.wasm: kernel/biot.c
+kernel/biot.wasm: kernel/biot.c kernel/vec.h
+	PATH=$(LLVM):$(LLD):$$PATH $(LLVM)/clang --target=wasm32 $(CFLAGS_FP) -msimd128 \
+	  -nostdlib -Wl,--no-entry -Wl,--export-dynamic -Wl,--initial-memory=16777216 \
+	  -o $@ $<
+
+kernel/lattice.wasm: kernel/lattice.c kernel/vec.h
 	PATH=$(LLVM):$(LLD):$$PATH $(LLVM)/clang --target=wasm32 $(CFLAGS_FP) -msimd128 \
 	  -nostdlib -Wl,--no-entry -Wl,--export-dynamic -Wl,--initial-memory=16777216 \
 	  -o $@ $<

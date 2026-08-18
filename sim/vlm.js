@@ -42,7 +42,7 @@
 // именно там. Решётка даёт только скос — величину линейную и хорошо себя
 // ведущую, — а всё остальное остаётся за sailCoeffs, как и было.
 
-import { fieldEdges, tailsAt } from './kernel.js';
+import { fieldEdges, tailsAt, latticeBuild } from './kernel.js';
 
 const EPS = 1e-10;
 
@@ -213,129 +213,34 @@ export class Lattice {
       lead[j] = same(P[j].ta, P[j].a) ? 0 : 1;
       trail[j] = same(P[j].b, P[j].tb) ? 0 : 1;
     }
-    for (let i = 0; i < n; i++) {
-      const ci = P[i].c, ni = P[i].nrm;
-      for (let j = 0; j < n; j++) {
-        const A = P[j].a, B = P[j].b, TA = P[j].ta, TB = P[j].tb, o = j * 3;
-        // Замкнутый контур: из бесконечности в TA, вдоль хорды в A, связанный
-        // отрезок A→B, обратно по хорде в TB, и оттуда пелена на бесконечность.
-        //
-        // Пелена сходит с ЗАДНЕЙ ШКАТОРИНЫ, а не с четверти хорды, и это здесь
-        // принципиально. Стаксель стоит вплотную впереди грота: если пустить
-        // его пелену с четверти хорды, грот окажется внутри неё и получит скос
-        // втрое больше настоящего — в расчёте он просто умирал. На деле грот
-        // стоит ВПЕРЕДИ того места, где сходит пелена стакселя, и попадает не в
-        // скос, а в подпор от его присоединённого вихря. В этом и весь смысл
-        // щели: стаксель не отбирает у грота поток, а подкручивает его.
-        //
-        // Собственный присоединённый вихрь пропускается — его вклад уже сидит
-        // в двумерной модели сечения. Отрезки вдоль хорды и пелена остаются:
-        // они и дают скос от собственной сходящей вихревой пелены.
-        v[0] = v[1] = v[2] = 0;
-        if (self || i !== j) {
-          segment(ci[0], ci[1], ci[2], A[0], A[1], A[2], B[0], B[1], B[2], v, rc2);
-        }
-        if (lead[j]) {
-          segment(ci[0], ci[1], ci[2], TA[0], TA[1], TA[2], A[0], A[1], A[2], t, rc2);
-          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        }
-        if (trail[j]) {
-          segment(ci[0], ci[1], ci[2], B[0], B[1], B[2], TB[0], TB[1], TB[2], t, rc2);
-          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        }
-        const tw = tailW ? tailW[j] : 1;
-        if (tw > 0) {
-          tail(ci[0], ci[1], ci[2], TB[0], TB[1], TB[2], ux, uy, uz, t, rc2);
-          v[0] += tw * t[0]; v[1] += tw * t[1]; v[2] += tw * t[2];
-          tail(ci[0], ci[1], ci[2], TA[0], TA[1], TA[2], ux, uy, uz, t, rc2);
-          v[0] -= tw * t[0]; v[1] -= tw * t[1]; v[2] -= tw * t[2];
-        }
-        let kij = v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
-        if (ground) {
-          // Зеркальный контур: та же геометрия, отражённая в z = 0, и обратная
-          // циркуляция — тогда на самой плоскости нормальная скорость нулевая.
-          v[0] = v[1] = v[2] = 0;
-          segment(ci[0], ci[1], ci[2], M.a[o], M.a[o + 1], M.a[o + 2],
-                  M.b[o], M.b[o + 1], M.b[o + 2], t, rc2);
-          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          if (lead[j]) {
-            segment(ci[0], ci[1], ci[2], M.ta[o], M.ta[o + 1], M.ta[o + 2],
-                    M.a[o], M.a[o + 1], M.a[o + 2], t, rc2);
-            v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          }
-          if (trail[j]) {
-            segment(ci[0], ci[1], ci[2], M.b[o], M.b[o + 1], M.b[o + 2],
-                    M.tb[o], M.tb[o + 1], M.tb[o + 2], t, rc2);
-            v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          }
-          if (tw > 0) {
-            tail(ci[0], ci[1], ci[2], M.tb[o], M.tb[o + 1], M.tb[o + 2], ux, uy, uz, t, rc2);
-            v[0] += tw * t[0]; v[1] += tw * t[1]; v[2] += tw * t[2];
-            tail(ci[0], ci[1], ci[2], M.ta[o], M.ta[o + 1], M.ta[o + 2], ux, uy, uz, t, rc2);
-            v[0] -= tw * t[0]; v[1] -= tw * t[1]; v[2] -= tw * t[2];
-          }
-          kij -= v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
-        }
-        this.k[i * n + j] = kij;
-
-        // Вторая матрица — для индуктивного сопротивления, и она другая.
-        //
-        // Скос в контрольной точке годится, чтобы найти эффективный угол атаки,
-        // но не годится, чтобы наклонить подъёмную силу назад: в нём сидит
-        // вклад ПРИСОЕДИНЁННЫХ вихрей соседей. У двух парусов, стоящих один за
-        // другим, стаксель наводит на грот подпор, скос выходит отрицательным,
-        // и «индуктивное сопротивление» получается тягой. Явление настоящее
-        // (это и есть щелевой эффект), а вот вывод неверный: подпор от
-        // присоединённого вихря сопротивления не создаёт, он перекладывает
-        // подъёмную силу между парусами.
-        //
-        // Сопротивление даёт только сходящая пелена. Поэтому здесь берутся
-        // одни продольные отрезки — вдоль хорды и хвосты, — а связанный отрезок
-        // A→B пропускается у обоих контуров, и настоящего, и зеркального.
-        // Считается скос в середине присоединённого вихря, где и приложена
-        // сила по Жуковскому.
-        const mx = (P[i].a[0] + P[i].b[0]) / 2;
-        const my = (P[i].a[1] + P[i].b[1]) / 2;
-        const mz = (P[i].a[2] + P[i].b[2]) / 2;
-        v[0] = v[1] = v[2] = 0;
-        if (lead[j]) {
-          segment(mx, my, mz, TA[0], TA[1], TA[2], A[0], A[1], A[2], t, rc2);
-          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        }
-        if (trail[j]) {
-          segment(mx, my, mz, B[0], B[1], B[2], TB[0], TB[1], TB[2], t, rc2);
-          v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-        }
-        if (tw > 0) {
-          tail(mx, my, mz, TB[0], TB[1], TB[2], ux, uy, uz, t, rc2);
-          v[0] += tw * t[0]; v[1] += tw * t[1]; v[2] += tw * t[2];
-          tail(mx, my, mz, TA[0], TA[1], TA[2], ux, uy, uz, t, rc2);
-          v[0] -= tw * t[0]; v[1] -= tw * t[1]; v[2] -= tw * t[2];
-        }
-        let kwij = v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
-        if (ground) {
-          v[0] = v[1] = v[2] = 0;
-          if (lead[j]) {
-            segment(mx, my, mz, M.ta[o], M.ta[o + 1], M.ta[o + 2],
-                    M.a[o], M.a[o + 1], M.a[o + 2], t, rc2);
-            v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          }
-          if (trail[j]) {
-            segment(mx, my, mz, M.b[o], M.b[o + 1], M.b[o + 2],
-                    M.tb[o], M.tb[o + 1], M.tb[o + 2], t, rc2);
-            v[0] += t[0]; v[1] += t[1]; v[2] += t[2];
-          }
-          if (tw > 0) {
-            tail(mx, my, mz, M.tb[o], M.tb[o + 1], M.tb[o + 2], ux, uy, uz, t, rc2);
-            v[0] += tw * t[0]; v[1] += tw * t[1]; v[2] += tw * t[2];
-            tail(mx, my, mz, M.ta[o], M.ta[o + 1], M.ta[o + 2], ux, uy, uz, t, rc2);
-            v[0] -= tw * t[0]; v[1] -= tw * t[1]; v[2] -= tw * t[2];
-          }
-          kwij -= v[0] * ni[0] + v[1] * ni[1] + v[2] * ni[2];
-        }
-        this.kw[i * n + j] = kwij;
-      }
+    // Плотная укладка геометрии — цена входа в кернел и единственное, что тут
+    // добавилось на JS. Панели живут объектами (`P[j].a` и прочие массивы по
+    // три), а вектору нужны сплошные ряды. Пересобирается каждый шаг вместе с
+    // матрицей: форма рига меняется, а хранить два представления и следить за
+    // их согласованностью дороже, чем переложить n×3 чисел.
+    let G = this._pk;
+    if (!G || G.a.length !== n * 3) {
+      const v3 = () => new Float64Array(n * 3);
+      G = this._pk = { a: v3(), b: v3(), ta: v3(), tb: v3(),
+                       cpt: v3(), nrm: v3(), mid: v3(), tw: new Float64Array(n) };
     }
+    for (let j = 0; j < n; j++) {
+      const p = P[j], o = j * 3;
+      for (let c = 0; c < 3; c++) {
+        G.a[o + c] = p.a[c]; G.b[o + c] = p.b[c];
+        G.ta[o + c] = p.ta[c]; G.tb[o + c] = p.tb[c];
+        G.cpt[o + c] = p.c[c]; G.nrm[o + c] = p.nrm[c];
+        // Середина связанного вихря — точка, в которой считается `kw`: сила по
+        // Жуковскому приложена там, а не в контрольной точке.
+        G.mid[o + c] = (p.a[c] + p.b[c]) / 2;
+      }
+      G.tw[j] = tailW ? tailW[j] : 1;
+    }
+    // Зеркальные ряды уже плотные — их считает блок выше. Когда `ground` ложно,
+    // они не заполнены, и кернел их не читает, ровно как цикл ниже.
+    G.ma = M.a; G.mb = M.b; G.mta = M.ta; G.mtb = M.tb;
+    G.lead = lead; G.trail = trail;
+    latticeBuild(G, n, ux, uy, uz, rc2, self, ground, this.k, this.kw);
   }
 
   // Скос от одной пелены — тот, по которому наклоняется подъёмная сила.
@@ -976,31 +881,7 @@ export class FreeWake {
     // Хвосты ниже остаются на JS нарочно: их F штук против двух тысяч рёбер, а
     // всякая перенесённая строка — это строка, где порядок сложения можно
     // случайно изменить.
-    if (fieldEdges(this.eg, this.ne, qx, qy, qz, np, ox, oy, oz)) {
-      return this.fieldTails(qx, qy, qz, np, ox, oy, oz);
-    }
-    const e = this.eg, ne = this.ne;
-    for (let m = 0, k8 = 0; m < ne; m++, k8 += 8) {
-      const ax = e[k8], ay = e[k8 + 1], az = e[k8 + 2];
-      const r0x = e[k8 + 3], r0y = e[k8 + 4], r0z = e[k8 + 5];
-      const g = e[k8 + 6], den = e[k8 + 7];
-      for (let j = 0; j < np; j++) {
-        const r1x = qx[j] - ax, r1y = qy[j] - ay, r1z = qz[j] - az;
-        const r2x = r1x - r0x, r2y = r1y - r0y, r2z = r1z - r0z;
-        const cx = r1y * r2z - r1z * r2y;
-        const cy = r1z * r2x - r1x * r2z;
-        const cz = r1x * r2y - r1y * r2x;
-        const c2 = cx * cx + cy * cy + cz * cz;
-        if (c2 < EPS) continue;
-        const l1 = Math.sqrt(r1x * r1x + r1y * r1y + r1z * r1z);
-        const l2 = Math.sqrt(r2x * r2x + r2y * r2y + r2z * r2z);
-        if (l1 < EPS || l2 < EPS) continue;
-        const fq = (r0x * r1x + r0y * r1y + r0z * r1z) / l1 -
-                   (r0x * r2x + r0y * r2y + r0z * r2z) / l2;
-        const kk = fq / (FOURPI * Math.max(c2, den));
-        ox[j] += g * (cx * kk); oy[j] += g * (cy * kk); oz[j] += g * (cz * kk);
-      }
-    }
+    fieldEdges(this.eg, this.ne, qx, qy, qz, np, ox, oy, oz);
     return this.fieldTails(qx, qy, qz, np, ox, oy, oz);
   }
 
@@ -1043,22 +924,7 @@ export class FreeWake {
       tg[k + 3] = dx; tg[k + 4] = dy; tg[k + 5] = -dz;
       tg[k + 6] = -g; tg[k + 7] = rc2; nt++;
     }
-    if (tailsAt(tg, nt, qx, qy, qz, np, ox, oy, oz)) return;
-    const t = [0, 0, 0];
-    for (let f = 0; f < F; f++) {
-      const p = f * L + N - 1, g = this.et[p];
-      if (!g) continue;
-      const rc2 = this.rc[p] * this.rc[p];
-      const hx = this.x[p], hy = this.y[p], hz = this.z[p];
-      const dx = this.tdx[N - 1], dy = this.tdy[N - 1], dz = this.tdz[N - 1];
-      for (let j = 0; j < np; j++) {
-        tail(qx[j], qy[j], qz[j], hx, hy, hz, dx, dy, dz, t, rc2);
-        ox[j] += g * t[0]; oy[j] += g * t[1]; oz[j] += g * t[2];
-        if (!mirror) continue;
-        tail(qx[j], qy[j], qz[j], hx, hy, -hz, dx, dy, -dz, t, rc2);
-        ox[j] -= g * t[0]; oy[j] -= g * t[1]; oz[j] -= g * t[2];
-      }
-    }
+    tailsAt(tg, nt, qx, qy, qz, np, ox, oy, oz);
   }
 
   // Скорость, наведённая пеленой на саму себя, — сразу ВО ВСЕХ узлах.

@@ -33,7 +33,7 @@ GLTF_BUNDLE = "three.gltf.js"
 MODULES = ["util.js", "terrain.js", "axes.js", "wind.js",
            # Кернел — ДО vlm.js: порядок здесь это порядок вклейки в общую
            # область, и обратный дал бы временную мёртвую зону.
-           "biotwasm.js", "kernel.js", "vlm.js",
+           "biotwasm.js", "latticewasm.js", "kernel.js", "vlm.js",
            "membrane.js", "polar.js", "waves.js", "buoyancy.js", "ocean.js", "wake.js",
            "aero.js", "hydro.js", "telemetry.js", "trace.js", "physics.js",
            "main.js", "debug.js", "mobile.js", "controls.js", "bench.js",

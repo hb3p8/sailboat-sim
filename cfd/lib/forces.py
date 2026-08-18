@@ -339,22 +339,39 @@ def read_layers(log_path):
     return last
 
 
-_YPLUS = re.compile(r"y\+\s*:?\s*min\s*[=:]\s*([-+0-9.eE]+)\s+"
-                    r"max\s*[=:]\s*([-+0-9.eE]+)\s+"
+# Формат строки y+ в OpenFOAM v2306:
+# «patch keel_keel_fin y+ : min = 1.01, max = 130.03, average = 24.23».
+# Запятые после чисел обязательны к пропуску: без них шаблон не совпадал вовсе,
+# и графа y+ в сводке стояла пустой при полностью исправном логе. Прочерк там
+# читается как «не мерили», а на деле мерили и не разобрали.
+_YPLUS = re.compile(r"patch\s+(\S+)\s+y\+\s*:?\s*"
+                    r"min\s*[=:]\s*([-+0-9.eE]+),?\s+"
+                    r"max\s*[=:]\s*([-+0-9.eE]+),?\s+"
                     r"average\s*[=:]\s*([-+0-9.eE]+)")
 
 
 def read_yplus(log_path):
-    """Диапазон y+ из лога `yPlus`. Последняя запись — на сошедшемся поле.
+    """Диапазон y+ по ВСЕМ патчам тела на последней записи.
 
-    Пустое место в графе y+ означает не «хорошо», а «не знаю»: пристеночная
-    функция вне своего диапазона портит трение, и не увидеть этого нельзя.
+    Печатается он по каждому патчу отдельно, а в сводку нужен худший: если у
+    бульба y+ доходит до двухсот, а у пера держится в тридцати, то двести и
+    есть то число, по которому судят о применимости пристеночной функции.
+    Первая версия брала последнюю строку, то есть случайный патч — тот, что
+    печатался последним.
+
+    Пустое место в графе означает не «хорошо», а «не знаю».
     """
-    last = None
+    per_patch = {}
     with open(log_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             m = _YPLUS.search(line)
             if m:
-                last = {"min": float(m.group(1)), "max": float(m.group(2)),
-                        "avg": float(m.group(3))}
-    return last
+                per_patch[m.group(1)] = (float(m.group(2)), float(m.group(3)),
+                                         float(m.group(4)))
+    if not per_patch:
+        return None
+    return {"min": min(v[0] for v in per_patch.values()),
+            "max": max(v[1] for v in per_patch.values()),
+            "avg": sum(v[2] for v in per_patch.values()) / len(per_patch),
+            "patches": {k: {"min": v[0], "max": v[1], "avg": v[2]}
+                        for k, v in per_patch.items()}}

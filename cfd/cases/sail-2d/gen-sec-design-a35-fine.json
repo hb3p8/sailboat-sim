@@ -38,7 +38,7 @@
       "up_l": 1.0
     },
     "family": "sail2d-v1",
-    "feature_level": 6,
+    "feature_level": 7,
     "level": "fine",
     "n_proc": 8,
     "refine": [

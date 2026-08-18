@@ -153,7 +153,13 @@ LLD  := /opt/homebrew/opt/lld/bin
 CFLAGS_FP := -O3 -ffp-contract=off -fno-fast-math
 
 .PHONY: kernel
-kernel: kernel/biot.wasm kernel/biot.dylib
+kernel: sim/biotwasm.js kernel/biot.dylib
+
+# Блоб — ЧАСТЬ цели, а не отдельный шаг. Собранный .wasm без пересобранного
+# блоба это симулятор со старым кернелом, и узнаётся это падением на не
+# экспортированной функции, а не сообщением сборщика.
+sim/biotwasm.js: kernel/biot.wasm
+	$(PY) scripts/wasm_blob.py
 
 kernel/biot.wasm: kernel/biot.c
 	PATH=$(LLVM):$(LLD):$$PATH $(LLVM)/clang --target=wasm32 $(CFLAGS_FP) -msimd128 \

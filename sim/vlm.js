@@ -42,7 +42,7 @@
 // именно там. Решётка даёт только скос — величину линейную и хорошо себя
 // ведущую, — а всё остальное остаётся за sailCoeffs, как и было.
 
-import { fieldEdges } from './kernel.js';
+import { fieldEdges, tailsAt } from './kernel.js';
 
 const EPS = 1e-10;
 
@@ -538,6 +538,10 @@ export class Lattice {
   // Поле связанного контура сразу в наборе точек. Кернел тот же, что у пелены.
   fieldBound(qx, qy, qz, np, ox, oy, oz) {
     for (let j = 0; j < np; j++) { ox[j] = 0; oy[j] = 0; oz[j] = 0; }
+    // Тот же кернел, что у пелены, и без единой новой строки на C: связанный
+    // контур пакуется `packBound` в ТУ ЖЕ плотную запись по восемь чисел, а
+    // цикл здесь посимвольно тот же. Хвостов у контура нет — только рёбра.
+    if (fieldEdges(this.bg, this.nb || 0, qx, qy, qz, np, ox, oy, oz)) return;
     const e = this.bg, ne = this.nb || 0;
     for (let m = 0, k8 = 0; m < ne; m++, k8 += 8) {
       const ax = e[k8], ay = e[k8 + 1], az = e[k8 + 2];
@@ -1013,6 +1017,33 @@ export class FreeWake {
     // поточечный `induced(..., ground=false)` считал один настоящий. Два способа
     // получить одно поле расходились, и проверялась не та модель.
     const mirror = this.ground !== false;
+    // Упаковка в ту же запись по восемь чисел: начало, направление, сила,
+    // квадрат ядра. Зеркало кладётся ОТДЕЛЬНОЙ записью сразу за своей нитью —
+    // не ради краткости, а чтобы сохранить порядок обхода: в цикле ниже на
+    // каждую точку сперва идёт настоящий хвост, потом её зеркальный, и кернел
+    // обязан складывать в том же порядке. Знак уносится в силу: `x + ((-g)*y)`
+    // и `x - (g*y)` в IEEE равны точно, знак там отдельный от мантиссы.
+    const cap = 2 * F * 8;
+    if (!this.tg || this.tg.length < cap) this.tg = new Float64Array(cap);
+    const tg = this.tg;
+    let nt = 0;
+    for (let f = 0; f < F; f++) {
+      const p = f * L + N - 1, g = this.et[p];
+      if (!g) continue;
+      const rc2 = this.rc[p] * this.rc[p];
+      const hx = this.x[p], hy = this.y[p], hz = this.z[p];
+      const dx = this.tdx[N - 1], dy = this.tdy[N - 1], dz = this.tdz[N - 1];
+      let k = nt * 8;
+      tg[k] = hx; tg[k + 1] = hy; tg[k + 2] = hz;
+      tg[k + 3] = dx; tg[k + 4] = dy; tg[k + 5] = dz;
+      tg[k + 6] = g; tg[k + 7] = rc2; nt++;
+      if (!mirror) continue;
+      k = nt * 8;
+      tg[k] = hx; tg[k + 1] = hy; tg[k + 2] = -hz;
+      tg[k + 3] = dx; tg[k + 4] = dy; tg[k + 5] = -dz;
+      tg[k + 6] = -g; tg[k + 7] = rc2; nt++;
+    }
+    if (tailsAt(tg, nt, qx, qy, qz, np, ox, oy, oz)) return;
     const t = [0, 0, 0];
     for (let f = 0; f < F; f++) {
       const p = f * L + N - 1, g = this.et[p];

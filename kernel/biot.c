@@ -135,6 +135,75 @@ void field_edges(const double *e, int ne,
   }
 }
 
+
+// Полубесконечные нити: те же Био — Савар, только второй конец ушёл в
+// бесконечность. Запись такая же, по восемь чисел: начало (3), единичное
+// направление (3), сила, квадрат ядра.
+//
+// НЕ ОБНУЛЯЕТ выход, а добавляет к нему: в JS хвосты всегда идут после рёбер и
+// складываются в те же массивы. Обнулять здесь значило бы стереть рёбра.
+//
+// Зеркало от воды кладётся отдельной записью с перевёрнутым z и обратным знаком
+// силы — ровно как у конечных рёбер в `pack`. Это не сокращение записи, а
+// сохранение ПОРЯДКА: в JS на каждую точку сперва идёт настоящий хвост нити,
+// потом её зеркальный, и порядок обхода должен остаться тем же, иначе
+// побитового совпадения не будет. Что `x + ((-g)*y)` и `x - (g*y)` равны точно,
+// следует из того, что знак в IEEE отдельный от мантиссы.
+KEXPORT("tails_at")
+void tails_at(const double *t, int nt,
+              const double *qx, const double *qy, const double *qz, int np,
+              double *ox, double *oy, double *oz) {
+  if (nt <= 0) return;
+  const f64x2 eps = vsplat(EPS), fourpi = vsplat(FOURPI), one = vsplat(1.0);
+  const int np2 = np & ~1;
+
+  for (int m = 0, k8 = 0; m < nt; m++, k8 += 8) {
+    const f64x2 ax = vsplat(t[k8]),     ay = vsplat(t[k8 + 1]), az = vsplat(t[k8 + 2]);
+    const f64x2 ux = vsplat(t[k8 + 3]), uy = vsplat(t[k8 + 4]), uz = vsplat(t[k8 + 5]);
+    const f64x2 g = vsplat(t[k8 + 6]),  rc2 = vsplat(t[k8 + 7]);
+
+    for (int j = 0; j < np2; j += 2) {
+      f64x2 p1 = { qx[j], qx[j + 1] };
+      f64x2 p2 = { qy[j], qy[j + 1] };
+      f64x2 p3 = { qz[j], qz[j + 1] };
+
+      const f64x2 rx = p1 - ax, ry = p2 - ay, rz = p3 - az;
+      const f64x2 cx = uy * rz - uz * ry;
+      const f64x2 cy = uz * rx - ux * rz;
+      const f64x2 cz = ux * ry - uy * rx;
+      const f64x2 c2 = cx * cx + cy * cy + cz * cz;
+      const f64x2 l = vsqrt(rx * rx + ry * ry + rz * rz);
+
+      const i64x2 ok = (c2 >= eps) & (l >= eps);
+      const f64x2 k = (one + (ux * rx + uy * ry + uz * rz) / l) /
+                      (fourpi * vmax(c2, rc2));
+
+      const f64x2 vx = vkeep(ok, g * (cx * k));
+      const f64x2 vy = vkeep(ok, g * (cy * k));
+      const f64x2 vz = vkeep(ok, g * (cz * k));
+
+      ox[j] += vx[0]; ox[j + 1] += vx[1];
+      oy[j] += vy[0]; oy[j + 1] += vy[1];
+      oz[j] += vz[0]; oz[j + 1] += vz[1];
+    }
+
+    for (int j = np2; j < np; j++) {
+      const double rx = qx[j] - t[k8], ry = qy[j] - t[k8 + 1], rz = qz[j] - t[k8 + 2];
+      const double ux0 = t[k8 + 3], uy0 = t[k8 + 4], uz0 = t[k8 + 5];
+      const double cx = uy0 * rz - uz0 * ry;
+      const double cy = uz0 * rx - ux0 * rz;
+      const double cz = ux0 * ry - uy0 * rx;
+      const double c2 = cx * cx + cy * cy + cz * cz;
+      const double l = __builtin_sqrt(rx * rx + ry * ry + rz * rz);
+      if (c2 < EPS || l < EPS) continue;
+      const double rc = t[k8 + 7], g0 = t[k8 + 6];
+      const double k = (1.0 + (ux0 * rx + uy0 * ry + uz0 * rz) / l) /
+                       (FOURPI * (c2 > rc ? c2 : rc));
+      ox[j] += g0 * (cx * k); oy[j] += g0 * (cy * k); oz[j] += g0 * (cz * k);
+    }
+  }
+}
+
 // Бамп-распределитель. Ничего не освобождает нарочно: буферы пелены заводятся
 // один раз на жизнь лодки и дальше только переиспользуются, а настоящий
 // аллокатор здесь стоил бы больше, чем экономил.

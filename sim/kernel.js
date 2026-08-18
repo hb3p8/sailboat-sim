@@ -101,6 +101,7 @@ function ensure(neCap, npCap) {
   buf = {
     ne, np,
     e: X.alloc(ne * 8 * 8),
+    t: X.alloc(ne * 8 * 8),
     qx: X.alloc(np * 8), qy: X.alloc(np * 8), qz: X.alloc(np * 8),
     ox: X.alloc(np * 8), oy: X.alloc(np * 8), oz: X.alloc(np * 8),
   };
@@ -121,6 +122,21 @@ function inTo(src, n, off) {
 }
 function outFrom(dst, n, off) {
   for (let i = 0; i < n; i++) dst[i] = F64[off + i];
+}
+
+// Полубесконечные нити. Отдельным вызовом, а не флагом к `fieldEdges`: в JS они
+// идут вторым проходом по тем же выходным массивам, и разделение здесь повторяет
+// разделение там. Выход НЕ обнуляется — добавляется к посчитанному рёбрами.
+export function tailsAt(t, nt, qx, qy, qz, np, ox, oy, oz) {
+  if (!X || nt <= 0) return false;
+  const b = ensure(nt, np);
+  const o = (p) => p >> 3;
+  inTo(t, nt * 8, o(b.t));
+  inTo(qx, np, o(b.qx)); inTo(qy, np, o(b.qy)); inTo(qz, np, o(b.qz));
+  inTo(ox, np, o(b.ox)); inTo(oy, np, o(b.oy)); inTo(oz, np, o(b.oz));
+  X.tails_at(b.t, nt, b.qx, b.qy, b.qz, np, b.ox, b.oy, b.oz);
+  outFrom(ox, np, o(b.ox)); outFrom(oy, np, o(b.oy)); outFrom(oz, np, o(b.oz));
+  return true;
 }
 
 export function fieldEdges(e, ne, qx, qy, qz, np, ox, oy, oz) {

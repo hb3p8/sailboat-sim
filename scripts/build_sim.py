@@ -30,7 +30,10 @@ THREE_BUNDLE = "three.webgpu.js"
 GLTF_BUNDLE = "three.gltf.js"
 
 # Всё, что вклеивается в страницу, в порядке объявления.
-MODULES = ["util.js", "terrain.js", "axes.js", "wind.js", "vlm.js",
+MODULES = ["util.js", "terrain.js", "axes.js", "wind.js",
+           # Кернел — ДО vlm.js: порядок здесь это порядок вклейки в общую
+           # область, и обратный дал бы временную мёртвую зону.
+           "biotwasm.js", "kernel.js", "vlm.js",
            "membrane.js", "polar.js", "waves.js", "buoyancy.js", "ocean.js", "wake.js",
            "aero.js", "hydro.js", "telemetry.js", "trace.js", "physics.js",
            "main.js", "debug.js", "mobile.js", "controls.js", "bench.js",
@@ -191,8 +194,16 @@ def main():
     # первом же обращении к нему, и узнать об этом только в браузере. Так уже
     # дважды и вышло.
     for name in MODULES:
-        html = html.replace("/*__%s__*/" % name.split(".")[0].upper(),
-                            strip_modules(open(os.path.join(sim, name)).read()))
+        mark = "/*__%s__*/" % name.split(".")[0].upper()
+        # Метки может не быть, и раньше это проходило МОЛЧА: `replace` без
+        # совпадения ничего не делает, модуль просто не попадал на страницу, а
+        # проверка ниже ловит только обратный случай — метку без модуля. Стоило
+        # это одной сборки, где кернел Био — Савара отсутствовал целиком, а
+        # сборщик отчитался успехом.
+        if mark not in html:
+            raise SystemExit("модуль %s есть в MODULES, а метки %s в шаблоне нет"
+                             % (name, mark))
+        html = html.replace(mark, strip_modules(open(os.path.join(sim, name)).read()))
 
     have = set(f for f in os.listdir(sim) if f.endswith(".js"))
     missed = have - set(MODULES)

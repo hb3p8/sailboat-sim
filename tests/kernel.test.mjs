@@ -12,6 +12,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 let failures = 0;
@@ -163,6 +164,70 @@ console.log('\nЦена на рабочем размере (2000 рёбер × 5
   console.log('    JS    %s мс', tJS.toFixed(2).padStart(6));
   console.log('    wasm  %s мс   ускорение %s×', tW.toFixed(2).padStart(6), (tJS / tW).toFixed(2));
   check('wasm не медленнее JS', tW < tJS, (tJS / tW).toFixed(2) + '×');
+}
+
+// --- лодка целиком ---------------------------------------------------------------
+//
+// Сверка кернела с образцом — необходима, но недостаточна: она проверяет
+// функцию, а не то, что симулятор ею пользуется правильно. Здесь прогоняется
+// лодка на шестистах шагах в трёх режимах и сверяется КОНЕЧНОЕ СОСТОЯНИЕ.
+//
+// Вторая копия запускается отдельным процессом с SV20_NO_WASM=1: модуль
+// загружается один раз при импорте, и переключить его внутри одного процесса
+// нельзя. Заодно это проверяет сам откат — что он рабочий, а не декоративный.
+console.log('\nЛодка целиком, 600 шагов (кернел против отката):\n');
+{
+  const probe = `
+    import { readFileSync } from 'node:fs';
+    import { Boat } from '${join(ROOT, 'sim/physics.js')}';
+    import { kernelReady } from '${join(ROOT, 'sim/kernel.js')}';
+    const PACK = JSON.parse(readFileSync('${join(ROOT, 'out/export/physics.json')}', 'utf8'));
+    const D = Math.PI / 180;
+    const out = {};
+    for (const [twa, gen] of [[45, false], [120, true], [140, false]]) {
+      const b = new Boat(PACK);
+      if (gen) b.setGennaker(true);
+      b.o.windSpeed = 6; b.o.windDir = 100 * D; b.psi = 100 * D - twa * D;
+      b.o.sheet = 70 * D; b.o.draft = 1; b.o.twist = 8 * D;
+      b.o.crewHike = -1; b.o.crewMass = 219.9; b.u = 4;
+      const t = process.hrtime.bigint();
+      for (let i = 0; i < 600; i++) b.step(1 / 30);
+      out[twa + '/' + gen] = { u: b.u, v: b.v, r: b.r, psi: b.psi, phi: b.phi,
+                               ms: Number(process.hrtime.bigint() - t) / 1e6 / 600 };
+    }
+    console.log(JSON.stringify({ kernelReady, out }));
+  `;
+  // Берётся ПОСЛЕДНЯЯ строка вывода, а не весь он: модуль кернела говорит о себе
+  // вслух при загрузке (и правильно делает — см. docs/stability.md §4), и это
+  // сообщение стоит в stdout перед ответом.
+  const run = (env) => {
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', probe],
+                             { env: { ...process.env, ...env }, encoding: 'utf8' });
+    const lines = out.trim().split('\n');
+    return JSON.parse(lines[lines.length - 1]);
+  };
+  const on = run({ SV20_NO_WASM: '0' }), off = run({ SV20_NO_WASM: '1' });
+  check('кернел включён в одном прогоне и выключен в другом',
+        on.kernelReady === true && off.kernelReady === false,
+        'on=' + on.kernelReady + ' off=' + off.kernelReady);
+  let bad = 0, first = '';
+  for (const k of Object.keys(on.out)) {
+    for (const f of ['u', 'v', 'r', 'psi', 'phi']) {
+      if (!Object.is(on.out[k][f], off.out[k][f])) {
+        bad++;
+        if (!first) first = k + '.' + f + ': ' + on.out[k][f] + ' против ' + off.out[k][f];
+      }
+    }
+  }
+  check('состояние лодки после 600 шагов совпадает ПОБИТОВО', bad === 0,
+        bad === 0 ? 'три режима, пять величин' : bad + ' расхождений — ' + first);
+  console.log('');
+  console.log('      режим        с кернелом    без      ускорение шага');
+  for (const k of Object.keys(on.out)) {
+    console.log('    %s %s мс %s мс   %s×', k.padEnd(12),
+      on.out[k].ms.toFixed(2).padStart(8), off.out[k].ms.toFixed(2).padStart(8),
+      (off.out[k].ms / on.out[k].ms).toFixed(2).padStart(6));
+  }
 }
 
 console.log('\n' + (failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');

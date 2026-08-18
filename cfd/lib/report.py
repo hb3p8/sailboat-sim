@@ -39,22 +39,46 @@ def status_point(cfd, sim, uncertainty):
 def status_family(points):
     """Поднять `investigate` до `model-change` там, где расхождение системное.
 
-    `points` — список словарей с ключами `status`, `delta`, `quantity`. Соседи
-    считаются внутри одной величины: расхождение по Cl и расхождение по Cd —
-    разные истории, и объединять их в «три подряд» нельзя.
+    Соседство — по КООРДИНАТАМ режима, а не по имени величины (§13.5). Прежняя
+    версия поднимала любые три расхождения одного знака с одинаковым именем;
+    три разрозненных случая — разная геометрия, разные скорости — выполняли
+    формальное условие, не образуя тренда. Теперь соседями считаются точки
+    одной величины и одного семейства, у которых условия различаются РОВНО
+    ОДНИМ числовым полем; вдоль этой оси они сортируются, и до `model-change`
+    поднимается только цепочка из NEIGHBOURS подряд идущих расхождений одного
+    знака. Точка `ok` между ними цепочку рвёт — так и задумано: это уже не
+    системный уход, а два отдельных вопроса.
     """
     by_q = {}
     for p in points:
-        by_q.setdefault(p["quantity"], []).append(p)
-    for _q, group in by_q.items():
-        bad = [p for p in group
-               if p["status"] == "investigate" and p["delta"] > 0]
-        worse = [p for p in group
-                 if p["status"] == "investigate" and p["delta"] < 0]
-        for same in (bad, worse):
-            if len(same) >= NEIGHBOURS:
-                for p in same:
-                    p["status"] = "model-change"
+        by_q.setdefault((p.get("family"), p["quantity"]), []).append(p)
+    for _key, group in by_q.items():
+        if len(group) < NEIGHBOURS:
+            continue
+        # Ось: единственное числовое поле условий, по которому точки различаются.
+        keys = set()
+        for p in group:
+            keys.update(k for k, v in p.get("condition", {}).items()
+                        if isinstance(v, (int, float)))
+        axes = [k for k in sorted(keys)
+                if len({p.get("condition", {}).get(k) for p in group}) > 1]
+        if len(axes) != 1:
+            continue
+        ax_key = axes[0]
+        chain = sorted((p for p in group
+                        if p.get("condition", {}).get(ax_key) is not None),
+                       key=lambda p: p["condition"][ax_key])
+        run = []
+        for p in chain + [None]:
+            same = (p is not None and p["status"] == "investigate" and
+                    (not run or (p["delta"] > 0) == (run[0]["delta"] > 0)))
+            if same:
+                run.append(p)
+                continue
+            if len(run) >= NEIGHBOURS:
+                for r in run:
+                    r["status"] = "model-change"
+            run = [p] if p is not None and p["status"] == "investigate" else []
     return points
 
 

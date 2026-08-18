@@ -664,30 +664,67 @@ st, d = report.status_point(1.30, 1.00, 0.10)
 check("расхождение больше неопределённости — investigate",
       st == "investigate")
 
-single = [{"quantity": "Cl", "status": "investigate", "delta": +0.3}]
+def _pt(q, delta, status="investigate", **cond):
+    return {"quantity": q, "status": status, "delta": delta,
+            "family": "sail-2d", "condition": cond}
+
+single = [_pt("Cl", +0.3, alpha_deg=35)]
 report.status_family(single)
 check("одиночная точка не становится поводом менять модель",
       single[0]["status"] == "investigate")
 
-many = [{"quantity": "Cl", "status": "investigate", "delta": +0.3}
-        for _ in range(report.NEIGHBOURS)]
+many = [_pt("Cl", +0.3, alpha_deg=25 + 10 * i)
+        for i in range(report.NEIGHBOURS)]
 report.status_family(many)
-check("несколько соседних одного знака — model-change",
+check("несколько соседних по одной оси одного знака — model-change",
       all(p["status"] == "model-change" for p in many))
 
-mixed = [{"quantity": "Cl", "status": "investigate", "delta": +0.3},
-         {"quantity": "Cl", "status": "investigate", "delta": -0.3},
-         {"quantity": "Cl", "status": "investigate", "delta": +0.3}]
+mixed = [_pt("Cl", +0.3, alpha_deg=25), _pt("Cl", -0.3, alpha_deg=35),
+         _pt("Cl", +0.3, alpha_deg=45)]
 report.status_family(mixed)
 check("разнознаковые расхождения не складываются в системное",
       all(p["status"] == "investigate" for p in mixed))
 
-split = [{"quantity": "Cl", "status": "investigate", "delta": +0.3},
-         {"quantity": "Cd", "status": "investigate", "delta": +0.3},
-         {"quantity": "Cmz", "status": "investigate", "delta": +0.3}]
+split = [_pt("Cl", +0.3, alpha_deg=25), _pt("Cd", +0.3, alpha_deg=35),
+         _pt("Cmz", +0.3, alpha_deg=45)]
 report.status_family(split)
 check("расхождения по разным величинам не считаются соседями",
       all(p["status"] == "investigate" for p in split))
+
+# §13.5: соседство существует только в координатах режима.
+loose = [{"quantity": "Cl", "status": "investigate", "delta": +0.3}
+         for _ in range(report.NEIGHBOURS)]
+report.status_family(loose)
+check("точки без координат режима не поднимаются до model-change",
+      all(p["status"] == "investigate" for p in loose))
+
+torn = [_pt("Cl", +0.3, alpha_deg=25), _pt("Cl", +0.3, alpha_deg=35),
+        _pt("Cl", +0.02, alpha_deg=45, status="ok"),
+        _pt("Cl", +0.3, alpha_deg=55)]
+report.status_family(torn)
+check("точка ok между расхождениями рвёт цепочку",
+      all(p["status"] != "model-change" for p in torn))
+
+# Порядок в списке не важен — соседство задаёт ось, а не порядок подачи.
+shuffled = [_pt("Cl", +0.3, alpha_deg=45), _pt("Cl", +0.3, alpha_deg=25),
+            _pt("Cl", +0.3, alpha_deg=35)]
+report.status_family(shuffled)
+check("цепочка собирается после сортировки по оси",
+      all(p["status"] == "model-change" for p in shuffled))
+
+twoaxes = [_pt("Cl", +0.3, alpha_deg=25, speed_ms=2.0),
+           _pt("Cl", +0.3, alpha_deg=35, speed_ms=4.0),
+           _pt("Cl", +0.3, alpha_deg=45, speed_ms=6.0)]
+report.status_family(twoaxes)
+check("режимы, различающиеся двумя осями сразу, — не соседи",
+      all(p["status"] == "investigate" for p in twoaxes))
+
+# §13.4: пригодность не превращается в вердикт.
+prov = [_pt("Cl", +0.3, alpha_deg=25 + 10 * i, status="provisional")
+        for i in range(report.NEIGHBOURS)]
+report.status_family(prov)
+check("provisional не поднимается до model-change",
+      all(p["status"] == "provisional" for p in prov))
 
 check("неопределённость складывается квадратично",
       near(report.combined_uncertainty(3.0, 4.0), 5.0))
@@ -883,6 +920,23 @@ try:
                 check("баланс неразрывности попал в сводку",
                       s["continuity"]["cumulative"] == 3e-11)
                 check("грязным запуск не считается", s["clean"])
+                # §13.7: у двумерного семейства центр давления — точка на
+                # хорде из Mz вокруг записанного основания. Синтетика задаёт
+                # Fy = 12 и Mz = 4, ответ обязан быть x0 + 1/3.
+                check("центр давления 2D восстановлен из Mz на хорде",
+                      near(s["derived"]["cop_x_m"],
+                           s["coefficient_basis"]["origin_m"][0] + 4.0 / 12.0,
+                           1e-6),
+                      "%.4f" % s["derived"]["cop_x_m"])
+                # §13.3/§13.6: статистика есть для каждой производной величины,
+                # в ЕЁ единицах: среднее ряда обязано сойтись с самим числом.
+                check("статистика Cd согласована с Cd",
+                      near(s["derived_stats"]["Cd"]["mean"],
+                           s["derived"]["Cd"], 1e-9))
+                check("разброс Cl — в единицах Cl, а не в ньютонах",
+                      s["derived_stats"]["Cl"]["std"] <
+                      abs(s["derived"]["Cl"]) * 0.05 + 1e-6,
+                      "std %.3e" % s["derived_stats"]["Cl"]["std"])
 
         res = cli.convergence_results("verification")
         rt_rows = [(n, r) for n, r, _w in res if r and n.endswith("Cd")]

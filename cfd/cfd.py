@@ -241,9 +241,39 @@ def cmd_collect(a):
     ctx = case["context"]
     along, cross = ax.flow_frame((ctx["U_x"], ctx["U_y"], ctx["U_z"]))
 
+    # §13.3, §13.6: статистика — В ЕДИНИЦАХ сравниваемых величин, а не в
+    # ньютонах ближайшей компоненты. На каждый момент времени строится ряд
+    # каждой производной величины (D, L, Cl, Cd, ...), и от него берутся те же
+    # среднее, разброс и дрейф, что и от компонент силы. Без этого разброс Fx
+    # шёл нижним порогом неопределённости для безразмерного Cl, и заведомо
+    # большое расхождение получало `ok` (§13.3); а ворота дрейфа смотрели на
+    # Fx там, где дрейфует Cl (§13.6).
+    import numpy as _np
+    tf = _np.asarray(series["force"]["t"], dtype=float)
+    Ft = _np.asarray(series["force"]["total"], dtype=float)
+    al = _np.asarray(along, dtype=float)
+    cr = _np.asarray(cross, dtype=float)
+    dseries = {
+        "Fx": Ft[:, 0], "Fy": Ft[:, 1], "Fz": Ft[:, 2],
+        "Rt_n": -Ft[:, 0], "Fy_n": Ft[:, 1],
+        # Скалярные произведения — поэлементно, а не `@`: BLAS из Accelerate
+        # печатает на matmul ложные предупреждения о делении на ноль.
+        "D_n": (Ft * al).sum(axis=1), "L_n": (Ft * cr).sum(axis=1),
+        "Cx": -Ft[:, 0] / (q * A), "Cy": Ft[:, 1] / (q * A),
+        "Cz": Ft[:, 2] / (q * A),
+        "Cd": (Ft * al).sum(axis=1) / (q * A),
+        "Cl": (Ft * cr).sum(axis=1) / (q * A),
+    }
+    if series["moment"]:
+        Mt = _np.asarray(series["moment"]["total"], dtype=float)
+        dseries.update({"Mx": Mt[:, 0], "My": Mt[:, 1], "Mz": Mt[:, 2],
+                        "Cmz": Mt[:, 2] / (q * A * L)})
+    derived_stats = {k: fx.stats(tf, v, start, a.window)
+                     for k, v in dseries.items()}
+
     logs = os.path.join(run_dir, "log")
     summary = {
-        "schema": 1,
+        "schema": 2,
         "run_dir": rel(os.path.abspath(run_dir)),
         "case_id": m["case_id"],
         "family": m["family"],
@@ -274,9 +304,21 @@ def cmd_collect(a):
             "Cl": ax.dot(F, cross) / (q * A),
             "D_n": ax.dot(F, along), "L_n": ax.dot(F, cross),
             "Cmz": M[2] / (q * A * L),
-            "cop_x_m": (-M[1] / F[2]) if abs(F[2]) > 1e-9 else None,
+            # Центр давления — по СЕМЕЙСТВУ, а не одной формулой (§13.7). У
+            # двумерного сечения Fz по построению около нуля, и прежняя
+            # −My/Fz улетала на несколько хорд; точка на линии хорды выходит
+            # из Mz вокруг записанного основания: x = x0 + Mz/Fy. Для трёхмерных
+            # семейств прежние отношения остаются, но где сила-знаменатель мала,
+            # ответ — None, а не большое число.
+            "cop_x_m": (
+                (case["coefficient_basis"]["origin_m"][0] + M[2] / F[1])
+                if m["family"] in ("sail-2d", "verification") and abs(F[1]) > 1e-9
+                else (-M[1] / F[2])
+                if m["family"] not in ("sail-2d", "verification") and abs(F[2]) > 1e-9
+                else None),
             "cop_z_m": (M[0] / F[1]) if abs(F[1]) > 1e-9 else None,
         },
+        "derived_stats": derived_stats,
         "mesh": _read_log(logs, "checkMesh.log", fx.read_mesh_stats),
         "layers": _read_log(logs, "snappyHexMesh.log", fx.read_layers),
         "yplus": _read_log(logs, m["solver"]["application"] + ".log", fx.read_yplus),
@@ -476,11 +518,15 @@ def _summaries(family=None, group=None):
 # Какая величина главная для семейства. Сходимость проверяется по ней и по
 # положению центра давления: §4.2 требует, чтобы сходился не только модуль
 # силы, но и точка её приложения.
-PRIMARY = {"hull-resistance": ("Rt_n", "cop_x_m"),
+# Центры давления из ворот сходимости убраны (§13.7): это частные отношения
+# момента к силе, у которых знаменатель бывает мал по построению, и до
+# семейно-зависимого определения с записанной опорной плоскостью включать их в
+# обязательные ворота нельзя. Моменты (Mz) остаются — они первичны.
+PRIMARY = {"hull-resistance": ("Rt_n",),
            "hull-lateral": ("Fy", "Mz"),
            "appendages": ("Fy", "Fx"),
            "sail-2d": ("Cl", "Cd"),
-           "rig-3d": ("Fy", "cop_z_m"),
+           "rig-3d": ("Fy",),
            "verification": ("Cd", "Cl"),
            "waves": ("Rt_n", "Fz")}
 
@@ -521,7 +567,11 @@ def convergence_results(family=None):
             # из-за микротренда в последних разрядах.
             drift = 0.0
             for lv in conv.MESH_ORDER:
-                f = by_level[lv]["force"]["Fx"]
+                sv = by_level[lv]
+                # Дрейф — той величины, которая в воротах; Fx остаётся только
+                # запасным для сводок старой схемы (§13.6).
+                f = (sv.get("derived_stats") or {}).get(quantity) \
+                    or sv["force"]["Fx"]
                 if f.get("trend_frac", 0.0) > 1e-3:
                     drift = max(drift, f["drift"])
             drift = None if not math.isfinite(drift) else drift
@@ -586,6 +636,19 @@ def compare_rows(family=None):
         # неопределённость выходит подозрительно маленькой, и группа видна в
         # `cfd-convergence` как неполная тройка.
         unc_rel = gci_by_group.get(s["convergence_group"])
+        # §13.4: пригодность результата — ДО вердикта. Плохой или незавершённый
+        # расчёт может показать свои числа в таблице, но не имеет права на
+        # `ok`/`investigate`/`model-change`: ровно так четыре генакерных случая
+        # с mesh_ok: false получали `ok` при расхождении в полтора раза.
+        mesh_ok = (s.get("mesh") or {}).get("mesh_ok")
+        if not s.get("clean") or mesh_ok is False:
+            valid = "invalid"
+        elif unc_rel is None or "derived_stats" not in s:
+            # нет сеточной тройки или сводка старой схемы без статистики
+            # в единицах величины — число есть, оценки его точности нет
+            valid = "provisional"
+        else:
+            valid = "verified"
         for label, sim_key, cfd_key in pairs:
             # Незнакомое имя — это опечатка в таблице соответствий, а не
             # отсутствие данных. Ровно так и было: `Rt` против `Rt_n`, и
@@ -602,15 +665,29 @@ def compare_rows(family=None):
                 # None бывает законно: центр давления не определён там, где
                 # сила, на которую он делится, близка к нулю.
                 continue
-            scatter = 0.0
-            for comp in ("Fx", "Fy", "Fz"):
-                if s["force"].get(comp):
-                    scatter = max(scatter, s["force"][comp]["std"])
+            # §13.3: нижний порог неопределённости — разброс ЭТОЙ величины в
+            # ЕЁ единицах. Разброс Fx в ньютонах для безразмерного Cl не
+            # значит ничего, и именно он делал ложные `ok`.
+            ds = (s.get("derived_stats") or {}).get(cfd_key)
+            scatter = ds["std"] if ds else 0.0
             unc = rep.combined_uncertainty(
                 abs(cfd_v) * (unc_rel or 0.0), 0.0, floor=scatter)
-            status, d = rep.status_point(cfd_v, sim_v, unc)
+            pvalid = valid
+            # Дрейф самой величины на окне — тоже вопрос пригодности: среднее
+            # ещё едет, и вердикт по нему преждевременен.
+            if pvalid == "verified" and ds and \
+               ds.get("trend_frac", 0.0) > 1e-3 and ds.get("drift", 0.0) > 1.0:
+                pvalid = "provisional"
+            if pvalid == "verified":
+                status, d = rep.status_point(cfd_v, sim_v, unc)
+            else:
+                status, d = pvalid, cfd_v - sim_v
             p = {"case": s["case_id"], "quantity": label, "cfd": cfd_v,
-                 "sim": sim_v, "delta": d, "uncertainty": unc, "status": status}
+                 "sim": sim_v, "delta": d, "uncertainty": unc, "status": status,
+                 # §13.5: соседство режимов существует только в координатах
+                 # режима; без них «три подряд» — совпадение имён.
+                 "family": s["family"],
+                 "condition": s["manifest"].get("condition") or {}}
             points.append(p)
     rep.status_family(points)
     for p in points:
@@ -632,10 +709,15 @@ def cmd_compare(a):
         return 0
     print(rep.table(["случай", "величина", "CFD", "симулятор", "Δ", "Δ %",
                      "неопр.", "статус"], rows))
+    # Счёт — по фактическим статусам. Прежняя строка записывала в ok всё, что
+    # не investigate и не model-change, то есть и invalid с provisional тоже.
+    tally = {}
+    for p in points:
+        tally[p["status"]] = tally.get(p["status"], 0) + 1
+    print("\n" + ", ".join("%s: %d" % (k, tally[k])
+          for k in ("ok", "investigate", "model-change", "provisional",
+                    "invalid") if k in tally))
     change = [p for p in points if p["status"] == "model-change"]
-    look = [p for p in points if p["status"] == "investigate"]
-    print("\nok: %d, investigate: %d, model-change: %d"
-          % (len(points) - len(look) - len(change), len(look), len(change)))
     if change:
         print("\nmodel-change значит только то, что §4.5.2 и §4.5.3 выполнены.")
         print("Остальные три условия — влияние на ход лодки и натурная")

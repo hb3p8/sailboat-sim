@@ -416,6 +416,15 @@ def main():
                          h["lwl_aft_x_mm"] / 1000.0, h["lwl_fwd_x_mm"] / 1000.0)
     rocker = _rocker(sec_x, sec_poly,
                      h["lwl_aft_x_mm"] / 1000.0, h["lwl_fwd_x_mm"] / 1000.0)
+    # Самая глубокая точка линии киля. Позади неё днище поднимается к транцу, и
+    # поток, идущий назад, обязан ЗАБИРАТЬСЯ вверх — там и срывается. Впереди неё
+    # днище уходит вниз по потоку, градиент попутный, срываться нечему. Граница
+    # вентиляции берётся отсюда, а не назначается.
+    keel_low_x = None
+    if sec_x:
+        keel_low_x = min(
+            ((x, min(p[1] for p in poly)) for x, poly in zip(sec_x, sec_poly)
+             if len(poly) >= 3), key=lambda t: t[1])[0]
     gz_sum = righting.summarise(gz, ref["gm_mm"])
 
     table = []
@@ -467,6 +476,7 @@ def main():
             "gm_m": ref["gm_mm"] / 1000.0,
             "deadrise_deg": deadrise,
             "rocker_deg": rocker,
+            "keel_low_x_m": keel_low_x,
             "table": table,
         },
         "righting": {

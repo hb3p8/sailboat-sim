@@ -97,6 +97,9 @@ function balanceOf(b, f) {
     planeFrac: b.planing ? b.planing.lift / W : 0,
     planeTauDeg: b.planing ? b.planing.tau : 0,
     planeK: b.planing ? b.planing.w : 0,
+    // Какая доля смоченных шпангоутов ушла под воздух. Без неё вентиляция была
+    // бы невидима, а она меняет посадку сильнее всего остального.
+    ventFrac: f.hyd ? (f.hyd.ventFrac || 0) : 0,
     gzM: f.gz, hikeNm: b.hike,
     heelNm: f.sail.mx, yawNm: f.sail.mz,
   };
@@ -106,9 +109,15 @@ export function telemetryOf(b, f) {
   return {
     speed: f.speed, speedKn: f.speed * 1.94384,
     leewayDeg: f.leeway / DEG, heelDeg: b.phi / DEG,
+    // Посадка и глиссирование — в основные приборы, а не только в отладочный
+    // баланс: по ним видно, идёт лодка вытеснением или уже несёт днищем.
     trimDeg: b.th / DEG, wettedM2: f.hyd ? f.hyd.wetted : 0,
-    planeFrac: b.planing && f.hyd ? b.planing.lift /
-      (b.mass ? b.mass * 9.81 : 1) : 0,
+    planeN: b.planing ? b.planing.lift : 0,
+    planeFrac: b.planing && b.mass ? b.planing.lift / (b.mass * 9.81) : 0,
+    planeTauDeg: b.planing ? b.planing.tau : 0,
+    planeK: b.planing ? b.planing.w : 0,
+    ventFrac: f.hyd ? (f.hyd.ventFrac || 0) : 0,
+    wetAftM: f.hyd ? (f.hyd.wetAft || 0) : 0,
     awaDeg: f.sail.awa / DEG, awsKn: f.aw.speed * 1.94384,
     awaEffDeg: f.sail.awaEff / DEG,   // что видит парус, а не флюгер
     ceHeightM: f.sail.ceZ,            // центр парусности по нагрузке полосок

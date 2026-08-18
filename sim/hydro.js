@@ -154,6 +154,17 @@ function smoothstep(x, a, b) {
   return t * t * (3 - 2 * t);
 }
 
+// Насколько открыто окно глиссирования. Нужно ДО гидростатики: тем же числом
+// гасится вентиляция кормового днища, а она меняет саму посадку.
+//
+// Ниже FN0 ноль, и это тот самый инвариант: вытесняющий режим не может
+// сдвинуться, потому что там ничего и не считается.
+export function planingWindow(P, v) {
+  const H = P.hydrostatics, env = P.environment;
+  if (H.deadrise_deg == null || H.rocker_deg == null) return 0;
+  return smoothstep(v / Math.sqrt(env.g * H.lwl_m), PLANE_FN0, PLANE_FN1);
+}
+
 // Подъёмная сила глиссирующего днища, её точка приложения и множители на
 // таблицу сопротивления.
 //
@@ -202,9 +213,12 @@ export function planing(P, v, thRad, hyd) {
               (0.0120 * Math.sqrt(lambda) + 0.0055 * Math.pow(lambda, 2.5) / (cv * cv));
   const clb = Math.max(0, cl0 - 0.0065 * H.deadrise_deg * Math.pow(cl0, 0.60));
   const lift = w * clb * 0.5 * env.rho_water * v * v * b * b;
-  // Центр давления — впереди транца на доле смоченной длины. Транец у SV20
-  // стоит на кормовом конце ватерлинии.
-  const xcp = H.lwl_aft_x_m + PLANE_CP * lambda * b;
+  // Центр давления — впереди кормового края СМОЧЕННОЙ части на доле её длины.
+  // Край берётся живой, а не стояночный: с вентиляцией он уезжает вперёд, и
+  // вместе с ним уезжает точка приложения силы. Взять стояночный значило бы
+  // прикладывать силу туда, где под днищем уже воздух.
+  const aft = hyd.wetAft != null && hyd.wetAft > 0 ? hyd.wetAft : H.lwl_aft_x_m;
+  const xcp = aft + PLANE_CP * lambda * b;
   return { lift, xcp, tau, w, mods, lambda };
 }
 

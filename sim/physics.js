@@ -26,7 +26,7 @@ import { seaState, addedResistance } from './waves.js';
 import { Buoyancy } from './buoyancy.js';
 import { wrapPi, clamp, DEG } from './util.js';
 import { lerpTable, foilCoeffs, hullResistance, hullLateral, hullHeelYaw,
-         foilForce, planing } from './hydro.js';
+         foilForce, planing, planingWindow } from './hydro.js';
 import { Rig, windage, sailCoeffs, STRIPS, NCHORD, LATTICE_EVERY,
          BOOM_INERTIA, BOOM_DAMP } from './aero.js';
 import { telemetryOf } from './telemetry.js';
@@ -611,8 +611,16 @@ export class Boat {
     const waveRoll = Math.atan(-this.waveSE * spsi0 + this.waveSN * cpsi0);
     let hyd = null;
     if (this.buoy.ready) {
+      // Вентиляция кормового днища считается ВМЕСТЕ с гидростатикой, а не после
+      // неё: она меняет сам вытесненный объём, а значит и посадку, и всё, что от
+      // посадки зависит. Окно по Фруду одно на неё и на глиссирование —
+      // разъедутся, и получится корпус, у которого корма уже под воздухом, а
+      // днище ещё не несёт.
+      const pw = planingWindow(P, Math.abs(this.u));
       hyd = this.buoy.at(this.zc - this.waveZ,
-                         this.phi - waveRoll, this.th - wavePitch);
+                         this.phi - waveRoll, this.th - wavePitch,
+                         pw > 0 ? { v: Math.abs(this.u), k: pw, g: env.g,
+                                    lowX: P.hydrostatics.keel_low_x_m } : null);
     }
     // Глиссирование. Ниже окна по Фруду возвращает пусто, и тогда всё ниже по
     // тексту идёт ровно так, как шло всегда.

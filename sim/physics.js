@@ -26,7 +26,7 @@ import { seaState, addedResistance } from './waves.js';
 import { Buoyancy } from './buoyancy.js';
 import { wrapPi, clamp, DEG } from './util.js';
 import { lerpTable, foilCoeffs, hullResistance, hullLateral, hullHeelYaw,
-         foilForce } from './hydro.js';
+         foilForce, planing } from './hydro.js';
 import { Rig, windage, sailCoeffs, STRIPS, NCHORD, LATTICE_EVERY,
          BOOM_INERTIA, BOOM_DAMP } from './aero.js';
 import { telemetryOf } from './telemetry.js';
@@ -601,8 +601,27 @@ export class Boat {
     const rudSide = rf.fy * cphi;
     const rudFx = rf.fx;
 
+    // Гидростатика и глиссирование считаются ЗДЕСЬ, до сопротивления, потому что
+    // сопротивление от них теперь зависит: всплывшая лодка меньше трёт и меньше
+    // разводит волну. Раньше `at()` звался ниже, вместе с восстанавливающим
+    // моментом; теперь он один на оба места — второй вызов стоил бы обхода всех
+    // шпангоутов, а посадка между ними не меняется.
+    const cpsi0 = Math.cos(this.psi), spsi0 = Math.sin(this.psi);
+    const wavePitch = Math.atan(this.waveSE * cpsi0 + this.waveSN * spsi0);
+    const waveRoll = Math.atan(-this.waveSE * spsi0 + this.waveSN * cpsi0);
+    let hyd = null;
+    if (this.buoy.ready) {
+      hyd = this.buoy.at(this.zc - this.waveZ,
+                         this.phi - waveRoll, this.th - wavePitch);
+    }
+    // Глиссирование. Ниже окна по Фруду возвращает пусто, и тогда всё ниже по
+    // тексту идёт ровно так, как шло всегда.
+    const pl = planing(P, Math.abs(this.u), this.th - wavePitch, hyd);
+    this.planing = pl;
+
     // сопротивление корпуса по таблице плюс добавочное на волнении
-    const rt = hullResistance(P, Math.abs(this.u), Math.abs(this.phi) / DEG) *
+    const rt = hullResistance(P, Math.abs(this.u), Math.abs(this.phi) / DEG,
+                              pl ? pl.mods : null) *
               (1 + SHOAL_DRAG * (this.shoalK || 0));
     // Волны бегут ПО ветру, то есть навстречу лодке в лавировку. Проекция
     // скорости на их направление и решает всё: встречная волна повышает
@@ -652,7 +671,14 @@ export class Boat {
       // осталось ничего.
       this.shoalK = Math.max(0, Math.min(1, (2 * draft - depth) / draft));
     }
-    const hullDrag = -Math.sign(this.u || 1) * (rt + raw);
+    // Сопротивление самой глиссирующей поверхности: подъёмная сила наклонена
+    // назад на угол днища, и её продольная доля — это и есть та цена, которой
+    // глиссирование покупает всплытие. У Савицкого это первое слагаемое полного
+    // сопротивления, R = D·tg(tau) + трение; трение здесь уже посчитано таблицей
+    // по живой смоченной поверхности, поэтому добавляется только наклон.
+    const planeDrag = pl && pl.lift > 0
+      ? pl.lift * Math.tan(pl.tau * DEG) : 0;
+    const hullDrag = -Math.sign(this.u || 1) * (rt + raw + planeDrag);
     const hull = hullLateral(P, this.phi, this.v, this.r);
 
     // --- уравнения движения
@@ -732,14 +758,8 @@ export class Boat {
     // это дифферент, поперёк — крен. Плюс дифферента — нос кверху, значит склон,
     // поднимающийся по курсу, и есть положительный дифферент воды; плюс крена —
     // правый борт вниз, то есть склон, поднимающийся на ЛЕВЫЙ борт.
-    const cpsi = Math.cos(this.psi), spsi = Math.sin(this.psi);
-    const wavePitch = Math.atan(this.waveSE * cpsi + this.waveSN * spsi);
-    const waveRoll = Math.atan(-this.waveSE * spsi + this.waveSN * cpsi);
-
-    let hyd = null, righting = 0, gz = 0;
-    if (this.buoy.ready) {
-      hyd = this.buoy.at(this.zc - this.waveZ,
-                         this.phi - waveRoll, this.th - wavePitch);
+    let righting = 0, gz = 0;
+    if (hyd) {
       const fb = env.rho_water * env.g * hyd.volume;
       const rx = hyd.cbx - cgx, ry = hyd.cby, rz = hyd.cbz - cgz;
       // Восстанавливающий момент — момент пары «вес в ЦТ, плавучесть в ЦВ»
@@ -802,6 +822,12 @@ export class Boat {
     // тем же числом, каким живёт боковая сила корпуса.
     if (hyd) {
       const fb = env.rho_water * env.g * hyd.volume;
+      // Подъёмная сила глиссирующего днища — в те же уравнения всплытия и
+      // дифферента, а не рядом с ними. Она и плавучесть делают одно дело и
+      // потому обязаны стоять в одной сумме: пока лодка не всплыла, вес держит
+      // вытеснение, дальше его постепенно перенимает днище. Переключения
+      // режимов нет вовсе — есть одна сумма, в которой меняются доли.
+      const planeLift = pl ? pl.lift : 0;
       const rx = hyd.cbx - cgx, rz = hyd.cbz - cgz;
       const dragZ = -0.5 * P.hydrostatics.draft_canoe_m;
       // Момент на нос кверху: продольное плечо на вертикальную силу минус
@@ -814,6 +840,13 @@ export class Boat {
       // Экипаж сидит в кокпите, то есть позади центра тяжести, и своим весом
       // дифферентует лодку на корму. Раньше этого не было вовсе.
       mth += -wCrew * (crewRx * nz - crewRz * nx);
+      // Момент от глиссирующего днища. Он и есть то, чем лодка выходит: сила
+      // приложена ПОЗАДИ центра тяжести (центр давления у Савицкого стоит на
+      // трёх четвертях смоченной длины от транца), поэтому сама поднимает нос, а
+      // поднявшийся нос увеличивает угол днища и, значит, подъёмную силу. Эта
+      // положительная связь и превращает выход на глиссирование в событие, а не
+      // в плавный набор.
+      if (planeLift > 0) mth += planeLift * (pl.xcp - cgx) * nz;
       // Вертикальная сила по мировой вертикали: плавучесть, вес и проекции
       // всего остального. На ровном киле последнее вырождается в подъёмную
       // силу паруса, а на крене туда входит и то, чем киль тянет лодку вниз.
@@ -823,7 +856,7 @@ export class Boat {
       // мачтой, и её вертикальная доля садит лодку глубже. На двадцати
       // градусах это уже сотни ньютонов, то есть десятки килограммов груза.
       this.vertN = fx * nx + fy * ny + sail.fz * nz;
-      const fv = fb - mAll * env.g + this.vertN;
+      const fv = fb - mAll * env.g + this.vertN + planeLift * nz;
       const mh = mAll * (1 + (m.added_heave != null ? m.added_heave : 1.2));
       const ip = m.iyy_kg_m2 * (1 + (m.added_pitch != null ? m.added_pitch : 0.9));
       // Демпфирование — доля критического, как и у качки. Жёсткость берётся из

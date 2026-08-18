@@ -87,6 +87,16 @@ function balanceOf(b, f) {
     buoyN: f.hyd ? env.rho_water * env.g * f.hyd.volume : W,
     vertN: b.vertN || 0,
     awpM2: f.hyd ? f.hyd.awp : 0, sinkM: b.zc, trimDeg: b.th / DEG,
+    // Смоченная поверхность — ЖИВАЯ, с этого шага, а не стояночная из пакета.
+    // По ней и видно главное, ради чего глиссирование заводится: корпус
+    // всплывает и перестаёт тереться.
+    wettedM2: f.hyd ? f.hyd.wetted : 0,
+    // Глиссирование: сколько веса уже держит днище, под каким углом оно стоит и
+    // насколько открыто окно по Фруду. Пусто — значит считает вытеснение.
+    planeN: b.planing ? b.planing.lift : 0,
+    planeFrac: b.planing ? b.planing.lift / W : 0,
+    planeTauDeg: b.planing ? b.planing.tau : 0,
+    planeK: b.planing ? b.planing.w : 0,
     gzM: f.gz, hikeNm: b.hike,
     heelNm: f.sail.mx, yawNm: f.sail.mz,
   };
@@ -96,6 +106,9 @@ export function telemetryOf(b, f) {
   return {
     speed: f.speed, speedKn: f.speed * 1.94384,
     leewayDeg: f.leeway / DEG, heelDeg: b.phi / DEG,
+    trimDeg: b.th / DEG, wettedM2: f.hyd ? f.hyd.wetted : 0,
+    planeFrac: b.planing && f.hyd ? b.planing.lift /
+      (b.mass ? b.mass * 9.81 : 1) : 0,
     awaDeg: f.sail.awa / DEG, awsKn: f.aw.speed * 1.94384,
     awaEffDeg: f.sail.awaEff / DEG,   // что видит парус, а не флюгер
     ceHeightM: f.sail.ceZ,            // центр парусности по нагрузке полосок

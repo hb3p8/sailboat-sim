@@ -48,6 +48,11 @@ export class Buoyancy {
     this.cy = new Float64Array(n);
     this.cz = new Float64Array(n);
     this.wid = new Float64Array(n);
+    // Смоченный периметр шпангоута: длина погружённой части обвода БЕЗ отрезка
+    // по ватерлинии. Нужен глиссированию — сокращение смоченной поверхности это
+    // половина того, зачем оно вообще заводится, — и считается тем же обходом
+    // отсечённого контура, что и площадь. Лишнего прохода нет.
+    this.gir = new Float64Array(n);
     // Буфер отсечённого контура: точек не больше, чем в исходном, плюс две
     // на пересечения.
     let most = 0;
@@ -82,7 +87,23 @@ export class Buoyancy {
       ay = by; az = bz; fa = fb;
     }
     this.wid[i] = cuts >= 2 ? cutB - cutA : 0;
-    if (m < 3) { this.area[i] = 0; this.cy[i] = 0; this.cz[i] = 0; return; }
+    if (m < 3) {
+      this.area[i] = 0; this.cy[i] = 0; this.cz[i] = 0; this.gir[i] = 0; return;
+    }
+    // Периметр по отсечённому контуру, минус отрезок по самой ватерлинии: он
+    // проходит по воде, а не по обшивке, и в смоченную поверхность не входит.
+    let per = 0;
+    {
+      let py0 = qy[m - 1], pz0 = qz[m - 1];
+      for (let k = 0; k < m; k++) {
+        const py1 = qy[k], pz1 = qz[k];
+        const onWl = Math.abs(ny * py0 + nz * pz0 - d) < 1e-9 &&
+                     Math.abs(ny * py1 + nz * pz1 - d) < 1e-9;
+        if (!onWl) per += Math.hypot(py1 - py0, pz1 - pz0);
+        py0 = py1; pz0 = pz1;
+      }
+    }
+    this.gir[i] = per;
     // Площадь и центр многоугольника по формуле шнурков.
     let a2 = 0, sy = 0, sz = 0;
     let y0 = qy[m - 1], z0 = qz[m - 1];
@@ -112,14 +133,15 @@ export class Buoyancy {
     // экономил бы тридцать выделений в секунду и стоил бы первой же ошибки
     // вида «сравнили два состояния, а это одно и то же»: на такой я уже
     // попался в собственном тесте, где `до` и `после` оказались одним объектом.
-    const o = { volume: 0, cbx: 0, cby: 0, cbz: 0, awp: 0, ilong: 0, lcf: 0 };
+    const o = { volume: 0, cbx: 0, cby: 0, cbz: 0, awp: 0, ilong: 0, lcf: 0,
+                wetted: 0 };
     if (!this.ready) return o;
     const cth = Math.cos(th), sth = Math.sin(th);
     const nx = sth, ny = Math.sin(phi) * cth, nz = Math.cos(phi) * cth;
     const xs = this.xs, n = xs.length;
     for (let i = 0; i < n; i++) this.station(i, ny, nz, -zc - nx * xs[i]);
     // Интегрирование вдоль корпуса трапециями.
-    let vol = 0, mx = 0, my = 0, mz = 0, awp = 0, sx = 0;
+    let vol = 0, mx = 0, my = 0, mz = 0, awp = 0, sx = 0, wet = 0;
     for (let i = 0; i < n - 1; i++) {
       const dx = xs[i + 1] - xs[i];
       const a0 = this.area[i], a1 = this.area[i + 1];
@@ -133,6 +155,7 @@ export class Buoyancy {
       mx += av * xm;
       my += 0.5 * (a0 * this.cy[i] + a1 * this.cy[i + 1]) * dx;
       mz += 0.5 * (a0 * this.cz[i] + a1 * this.cz[i + 1]) * dx;
+      wet += 0.5 * (this.gir[i] + this.gir[i + 1]) * dx;
       const wv = 0.5 * (this.wid[i] + this.wid[i + 1]) * dx;
       awp += wv;
       sx += wv * 0.5 * (xs[i] + xs[i + 1]);
@@ -142,6 +165,7 @@ export class Buoyancy {
     o.cby = vol > 1e-9 ? my / vol : 0;
     o.cbz = vol > 1e-9 ? mz / vol : 0;
     o.awp = awp;
+    o.wetted = wet;
     o.lcf = awp > 1e-9 ? sx / awp : 0;
     let il = 0;
     for (let i = 0; i < n - 1; i++) {

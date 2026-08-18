@@ -69,6 +69,43 @@ def _deadrise(sec_x, sec_poly, lwl_aft, lwl_fwd, rise_m=0.20):
     return round(sum(out) / len(out), 2) if out else None
 
 
+def _rocker(sec_x, sec_poly, lwl_aft, lwl_fwd):
+    """Наклон кормового участка днища к конструктивной ватерлинии, градусы.
+
+    Второй входной параметр глиссирования, и без него первый бесполезен.
+
+    У Савицкого дифферент меряется от ДНИЩА к свободной поверхности, а `th` в
+    модели — от конструктивной ватерлинии. Разница между ними — вот этот угол, и
+    у SV20 он не мелочь: киль глубже всего на миделе (−0.150 м) и поднимается к
+    транцу до +0.056 м, то есть корма задрана на три градуса с лишним. При
+    нулевом дифференте глиссировать нечем: вода пошла бы по поднимающемуся днищу
+    и дала разрежение, а не подъёмную силу. Лодка обязана сперва встать носом
+    кверху — и ровно поэтому выход на глиссирование выглядит как событие.
+
+    Считается наименьшими квадратами по линии киля (низ каждого шпангоута) на
+    кормовой половине ватерлинии. Знак: положительный угол значит, что днище
+    поднимается к корме, то есть работает ПРОТИВ глиссирования.
+    """
+    xs, zs = [], []
+    mid = 0.5 * (lwl_aft + lwl_fwd)
+    for x, poly in zip(sec_x, sec_poly):
+        if x < lwl_aft or x > mid or len(poly) < 3:
+            continue
+        xs.append(x)
+        zs.append(min(p[1] for p in poly))
+    n = len(xs)
+    if n < 3:
+        return None
+    sx = sum(xs); sz = sum(zs)
+    sxx = sum(x * x for x in xs); sxz = sum(x * z for x, z in zip(xs, zs))
+    den = n * sxx - sx * sx
+    if abs(den) < 1e-12:
+        return None
+    # dz/dx вдоль корпуса; вперёд x растёт, поэтому подъём к корме — это dz/dx < 0
+    k = (n * sxz - sx * sz) / den
+    return round(math.degrees(math.atan(-k)), 2)
+
+
 def _sections_volume(xs, polys, z_w):
     """Объём по выгруженным контурам — проверка огрубления, не расчёт."""
     areas = []
@@ -377,6 +414,8 @@ def main():
     sec_err = 100.0 * (sec_vol - h["volume_m3"]) / h["volume_m3"]
     deadrise = _deadrise(sec_x, sec_poly,
                          h["lwl_aft_x_mm"] / 1000.0, h["lwl_fwd_x_mm"] / 1000.0)
+    rocker = _rocker(sec_x, sec_poly,
+                     h["lwl_aft_x_mm"] / 1000.0, h["lwl_fwd_x_mm"] / 1000.0)
     gz_sum = righting.summarise(gz, ref["gm_mm"])
 
     table = []
@@ -427,6 +466,7 @@ def main():
             "wetted_m2": h["wetted_area_m2"], "volume_m3": h["volume_m3"],
             "gm_m": ref["gm_mm"] / 1000.0,
             "deadrise_deg": deadrise,
+            "rocker_deg": rocker,
             "table": table,
         },
         "righting": {

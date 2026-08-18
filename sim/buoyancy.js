@@ -26,13 +26,6 @@
 // лодки над спокойной водой. Для станции x = const это обычное отсечение
 // прямой в плоскости (y, z), со своим порогом на каждой станции.
 
-// Числа Фруда по глубине шпангоута, между которыми идёт вентиляция. Взяты по
-// замерам осушения транца: начало около единицы, полное к трём. Это область
-// применимости самого явления, а не подгонка — под желаемый ответ здесь ничего
-// не двигалось, и двигать нельзя без нового замера.
-const VENT_FN0 = 1.0;
-const VENT_FN1 = 3.0;
-
 export class Buoyancy {
   constructor(pack) {
     const s = pack && pack.sections;
@@ -60,9 +53,6 @@ export class Buoyancy {
     // половина того, зачем оно вообще заводится, — и считается тем же обходом
     // отсечённого контура, что и площадь. Лишнего прохода нет.
     this.gir = new Float64Array(n);
-    // Глубина самой нижней точки шпангоута под плоскостью воды. По ней решается
-    // вентиляция: мелко сидящий кормовой шпангоут срывается первым.
-    this.dep = new Float64Array(n);
     // Буфер отсечённого контура: точек не больше, чем в исходном, плюс две
     // на пересечения.
     let most = 0;
@@ -97,14 +87,6 @@ export class Buoyancy {
       ay = by; az = bz; fa = fb;
     }
     this.wid[i] = cuts >= 2 ? cutB - cutA : 0;
-    // Насколько глубоко сидит самая нижняя точка обвода. Меряется по НОРМАЛИ к
-    // плоскости воды, то есть с учётом крена и дифферента, а не по вертикали.
-    let deep = 0;
-    for (let k = 0; k < n; k++) {
-      const f = d - (ny * py[k] + nz * pz[k]);
-      if (f > deep) deep = f;
-    }
-    this.dep[i] = deep;
     if (m < 3) {
       this.area[i] = 0; this.cy[i] = 0; this.cz[i] = 0; this.gir[i] = 0; return;
     }
@@ -146,61 +128,23 @@ export class Buoyancy {
   // Возвращает объём, центр величины в осях лодки, площадь ватерлинии и её
   // продольный момент инерции — последние два нужны не объёму, а демпфированию:
   // по ним считается собственная частота вертикальной качки и килевой.
-  // `vent` — вентиляция кормовой части днища, или `null`, если её нет.
-  //
-  //   { v, k, lowX, g }  — ход через воду, доля открытия окна по Фруду, x самой
-  //                        глубокой точки киля и ускорение свободного падения.
-  //
-  // Что делает: шпангоут, ПОЗАДИ самой глубокой точки киля и достаточно мелко
-  // сидящий для своей скорости, перестаёт участвовать вовсе — ни объёмом, ни
-  // ватерлинией, ни смоченной поверхностью. Это и есть уход под воздух: за
-  // точкой срыва под днищем не вода, а полость, и держать она ничего не может.
-  //
-  // Мерка — число Фруда, построенное на ГЛУБИНЕ шпангоута, а не на длине лодки.
-  // Величина названная: ей же меряют осушение транца, и по замерам начало
-  // вентиляции лежит около единицы, полное — к трём. Ни одного подобранного
-  // числа здесь нет; выбор «позади глубокой точки» тоже геометрический, потому
-  // что впереди неё градиент попутный и срываться нечему.
-  at(zc, phi, th, vent) {
+  at(zc, phi, th) {
     // Результат — новый объект, а не переиспользуемый буфер. Буфер здесь
     // экономил бы тридцать выделений в секунду и стоил бы первой же ошибки
     // вида «сравнили два состояния, а это одно и то же»: на такой я уже
     // попался в собственном тесте, где `до` и `после` оказались одним объектом.
     const o = { volume: 0, cbx: 0, cby: 0, cbz: 0, awp: 0, ilong: 0, lcf: 0,
-                wetted: 0, wetAft: 0, ventFrac: 0 };
+                wetted: 0, wetAft: 0 };
     if (!this.ready) return o;
     const cth = Math.cos(th), sth = Math.sin(th);
     const nx = sth, ny = Math.sin(phi) * cth, nz = Math.cos(phi) * cth;
     const xs = this.xs, n = xs.length;
     for (let i = 0; i < n; i++) this.station(i, ny, nz, -zc - nx * xs[i]);
-    // Доля смачивания каждого шпангоута. Без вентиляции — единица у всех, и
-    // дальше всё считается ровно как считалось.
-    const wf = this.wetFrac && this.wetFrac.length === n
-      ? this.wetFrac : (this.wetFrac = new Float64Array(n));
-    if (!vent || !(vent.k > 0) || !(vent.v > 0.1) || vent.lowX == null) {
-      wf.fill(1);
-    } else {
-      let dry = 0, all = 0;
-      for (let i = 0; i < n; i++) {
-        wf[i] = 1;
-        if (this.area[i] <= 0) continue;
-        all++;
-        if (xs[i] >= vent.lowX) continue;          // впереди глубокой точки
-        const dep = this.dep[i];
-        if (!(dep > 1e-4)) { wf[i] = 0; dry++; continue; }
-        const fnh = vent.v / Math.sqrt(vent.g * dep);
-        const t = Math.max(0, Math.min(1, (fnh - VENT_FN0) / (VENT_FN1 - VENT_FN0)));
-        const s = t * t * (3 - 2 * t);
-        wf[i] = 1 - vent.k * s;
-        dry += vent.k * s;
-      }
-      o.ventFrac = all ? dry / all : 0;
-    }
     // Интегрирование вдоль корпуса трапециями.
     let vol = 0, mx = 0, my = 0, mz = 0, awp = 0, sx = 0, wet = 0;
     for (let i = 0; i < n - 1; i++) {
       const dx = xs[i + 1] - xs[i];
-      const a0 = this.area[i] * wf[i], a1 = this.area[i + 1] * wf[i + 1];
+      const a0 = this.area[i], a1 = this.area[i + 1];
       const av = 0.5 * (a0 + a1) * dx;
       vol += av;
       // Центр по длине — по площадям на концах отрезка, а не по среднему
@@ -211,8 +155,8 @@ export class Buoyancy {
       mx += av * xm;
       my += 0.5 * (a0 * this.cy[i] + a1 * this.cy[i + 1]) * dx;
       mz += 0.5 * (a0 * this.cz[i] + a1 * this.cz[i + 1]) * dx;
-      wet += 0.5 * (this.gir[i] * wf[i] + this.gir[i + 1] * wf[i + 1]) * dx;
-      const wv = 0.5 * (this.wid[i] * wf[i] + this.wid[i + 1] * wf[i + 1]) * dx;
+      wet += 0.5 * (this.gir[i] + this.gir[i + 1]) * dx;
+      const wv = 0.5 * (this.wid[i] + this.wid[i + 1]) * dx;
       if (a0 > 1e-9 && !o.wetAft) o.wetAft = xs[i];
       awp += wv;
       sx += wv * 0.5 * (xs[i] + xs[i + 1]);
@@ -228,7 +172,7 @@ export class Buoyancy {
     for (let i = 0; i < n - 1; i++) {
       const dx = xs[i + 1] - xs[i];
       const xm = 0.5 * (xs[i] + xs[i + 1]) - o.lcf;
-      il += 0.5 * (this.wid[i] * wf[i] + this.wid[i + 1] * wf[i + 1]) * dx * xm * xm;
+      il += 0.5 * (this.wid[i] + this.wid[i + 1]) * dx * xm * xm;
     }
     o.ilong = il;
     return o;

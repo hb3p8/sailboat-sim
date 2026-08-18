@@ -97,9 +97,6 @@ function balanceOf(b, f) {
     planeFrac: b.planing ? b.planing.lift / W : 0,
     planeTauDeg: b.planing ? b.planing.tau : 0,
     planeK: b.planing ? b.planing.w : 0,
-    // Какая доля смоченных шпангоутов ушла под воздух. Без неё вентиляция была
-    // бы невидима, а она меняет посадку сильнее всего остального.
-    ventFrac: f.hyd ? (f.hyd.ventFrac || 0) : 0,
     gzM: f.gz, hikeNm: b.hike,
     heelNm: f.sail.mx, yawNm: f.sail.mz,
   };
@@ -116,7 +113,6 @@ export function telemetryOf(b, f) {
     planeFrac: b.planing && b.mass ? b.planing.lift / (b.mass * 9.81) : 0,
     planeTauDeg: b.planing ? b.planing.tau : 0,
     planeK: b.planing ? b.planing.w : 0,
-    ventFrac: f.hyd ? (f.hyd.ventFrac || 0) : 0,
     wetAftM: f.hyd ? (f.hyd.wetAft || 0) : 0,
     awaDeg: f.sail.awa / DEG, awsKn: f.aw.speed * 1.94384,
     awaEffDeg: f.sail.awaEff / DEG,   // что видит парус, а не флюгер

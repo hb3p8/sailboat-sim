@@ -614,7 +614,13 @@ def compare_rows(family=None):
     # ничего и почти всегда занижен на порядок.
     gci_by_group = {}
     for name, r, _why in convergence_results(family):
-        if r and r["gci_fine"] is not None:
+        # GCI берётся только от тройки, ПРОШЕДШЕЙ ворота (§13.4: «закрытой
+        # тройки и прошедшего GCI»). Экстраполяция Ричардсона при фиктивном
+        # порядке — например, когда грубая сетка вне асимптотики и порядок
+        # выходит 13, — даёт GCI 0.01% там, где честная разность сеток 0.4%:
+        # это не оценка погрешности, а её отсутствие. Такая группа остаётся
+        # без сеточной оценки, и её строки — provisional.
+        if r and r["gci_fine"] is not None and r["gate"]["passed"]:
             group = name.split(" / ")[0]
             gci_by_group[group] = max(gci_by_group.get(group, 0.0),
                                       r["gci_fine"])

@@ -2,14 +2,22 @@
 # -*- coding: utf-8 -*-
 """Очередь расчётов: cfd/scripts/queue.py [--only ...] [--dry]
 
-Считает случаи ПО ОДНОМУ. Это не мелочь и не осторожность: OpenFOAM берёт
-столько ядер, сколько ему велено, и два случая по четыре процесса на десяти
-ядрах идут не вдвое быстрее, а втрое медленнее каждый. Один раз это уже стоило
-двух убитых расчётов и load average под шестьдесят.
+Трёхмерные случаи считаются ПО ОДНОМУ. Это не мелочь и не осторожность:
+OpenFOAM берёт столько ядер, сколько ему велено, и два случая по четыре
+процесса на десяти ядрах идут не вдвое быстрее, а втрое медленнее каждый. Один
+раз это уже стоило двух убитых расчётов и load average под шестьдесят.
+
+Двумерные — ПОЛОСОЙ по три случая на трёх процессах каждый. Правило то же
+самое, что и выше, — ограничена СУММА процессов, — только применено честно:
+сетка сечения в двадцать шесть тысяч ячеек не масштабируется дальше трёх-
+четырёх ядер, и держать под неё всю машину значит утроить стену очереди на
+ровном месте. Девять процессов полосы занимают ту же ёмкость, что один
+трёхмерный случай. Порядок приоритетов не ломается: параллелятся только
+ПОДРЯД идущие двумерные, первый же трёхмерный дожидается конца полосы.
 
 Каждый случай проходит цепочку целиком — развернуть, посчитать, собрать
-сводку, — и только потом начинается следующий. Упавший случай не останавливает
-очередь: он записывается в отчёт как упавший, а остальные считаются.
+сводку. Упавший случай не останавливает очередь: он записывается в отчёт как
+упавший, а остальные считаются.
 
 Порядок в списке — по возрастанию цены и по убыванию пользы: сначала то, что
 проверяет саму цепочку, потом гидродинамика, потом тройки сеток.
@@ -20,7 +28,11 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
+# ThreadPoolExecutor здесь не выжил: этот файл называется queue.py, и
+# concurrent.futures при импорте берёт ЕГО вместо стандартного модуля queue —
+# циркулярный импорт. Голому threading стандартный queue не нужен.
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, ROOT)
@@ -96,10 +108,47 @@ def save_state(st):
         json.dump(st, f, ensure_ascii=False, indent=1, sort_keys=True)
 
 
-def step(args, timeout=None):
+def step(args, timeout=None, env=None):
+    e = dict(os.environ)
+    if env:
+        e.update(env)
     p = subprocess.run(args, cwd=ROOT, capture_output=True, text=True,
-                       timeout=timeout)
+                       timeout=timeout, env=e)
     return p.returncode, (p.stdout + p.stderr)
+
+
+# Сколько двумерных случаев идёт в полосе и по сколько процессов каждому.
+LANE_2D = 3
+NPROC_2D = 3
+
+
+def is_2d(case):
+    """Двумерный ли случай — по шаблону манифеста, а не по имени."""
+    for fam in os.listdir(os.path.join(ROOT, "cfd", "cases")):
+        p = os.path.join(ROOT, "cfd", "cases", fam, case + ".json")
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)["template"].startswith("openfoam-2d")
+    return False
+
+
+def run_case(case, geom, nproc=None):
+    """Полная цепочка одного случая; возвращает запись для queue.json."""
+    run_dir = os.path.join("out", "cfd", "runs", case)
+    env = {"SV20_CFD_NPROC": str(nproc)} if nproc else None
+    t0 = time.time()
+    rc, out = step([PY, CLI, "case", "--case", case,
+                    "--geometry", geom, "--force"], env=env)
+    if rc:
+        return {"status": "case-failed", "log": out[-2000:]}, out
+    rc, out = step([PY, CLI, "run", "--case", case, "--geometry", geom],
+                   env=env)
+    if rc:
+        return {"status": "run-failed", "seconds": time.time() - t0,
+                "log": out[-2000:]}, out
+    rc, out = step([PY, CLI, "collect", "--run", run_dir], env=env)
+    return {"status": "ok" if rc == 0 else "collect-failed",
+            "seconds": time.time() - t0}, out
 
 
 def main():
@@ -120,31 +169,41 @@ def main():
         print("к счёту: %d из %d" % (len(todo), len(QUEUE)))
         return 0
 
-    for case, geom in todo:
-        run_dir = os.path.join("out", "cfd", "runs", case)
-        t0 = time.time()
-        print("\n=== %s ===" % case, flush=True)
-        rc, out = step([PY, CLI, "case", "--case", case,
-                        "--geometry", geom, "--force"])
-        if rc:
-            st[case] = {"status": "case-failed", "log": out[-2000:]}
+    lock = threading.Lock()
+
+    def finish(case, rec, out):
+        with lock:
+            st[case] = rec
             save_state(st)
-            print("  развернуть не удалось:\n%s" % out[-800:], flush=True)
-            continue
-        rc, out = step([PY, CLI, "run", "--case", case, "--geometry", geom])
-        took = time.time() - t0
-        if rc:
-            st[case] = {"status": "run-failed", "seconds": took,
-                        "log": out[-2000:]}
-            save_state(st)
-            print("  расчёт упал за %.0f с:\n%s" % (took, out[-800:]), flush=True)
-            continue
-        rc, out = step([PY, CLI, "collect", "--run", run_dir])
-        st[case] = {"status": "ok" if rc == 0 else "collect-failed",
-                    "seconds": time.time() - t0}
-        save_state(st)
-        print("  готово за %.0f с\n%s" % (time.time() - t0, out[-900:]),
-              flush=True)
+            tail = out[-900:] if rec["status"] == "ok" else out[-800:]
+            print("\n=== %s: %s за %.0f с ===\n%s"
+                  % (case, rec["status"], rec.get("seconds", 0), tail),
+                  flush=True)
+
+    i = 0
+    while i < len(todo):
+        case, geom = todo[i]
+        if is_2d(case):
+            lane = []
+            while i < len(todo) and is_2d(todo[i][0]) and len(lane) < LANE_2D:
+                lane.append(todo[i]); i += 1
+            print("\n--- полоса 2D: %s" % ", ".join(c for c, _g in lane),
+                  flush=True)
+            threads = []
+            for c, g in lane:
+                def work(c=c, g=g):
+                    rec, out = run_case(c, g, NPROC_2D)
+                    finish(c, rec, out)
+                t = threading.Thread(target=work)
+                t.start()
+                threads.append(t)
+            for t in threads:
+                t.join()
+        else:
+            print("\n=== %s ===" % case, flush=True)
+            rec, out = run_case(case, geom)
+            finish(case, rec, out)
+            i += 1
 
     done = sum(1 for v in st.values() if v.get("status") == "ok")
     print("\nсчитано успешно: %d" % done)

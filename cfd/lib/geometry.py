@@ -408,6 +408,35 @@ def sail_section(camber, draft=0.5, chord=1.0, thickness=0.015, n=200,
     th = np.arctan(dyc)
     xu, yu = x - yt * np.sin(th), mline + yt * np.cos(th)
     xl, yl = x + yt * np.sin(th), mline - yt * np.cos(th)
+    # Задняя кромка обрезается ВЕРТИКАЛЬНО — плоскостью x = 1, перпендикулярной
+    # хорде, — а не нормалью к средней линии. У пузатого сечения средняя линия
+    # подходит к кромке под тридцать с лишним градусов, и нормальный торец
+    # — косой клин. Лист в домене стоит вдоль оси (угол атаки задаётся
+    # вектором скорости), поэтому вертикальный торец ложится ровно по граням
+    # ячеек, а косой резал их наискось: у design-сеток именно на стыке этого
+    # клина с плоскостями симметрии сидели последние две рваные грани
+    # (skewness 4.95 при пороге 4), пережившие починку носа.
+    def _trim(xs_, ys_):
+        inside = xs_ <= 1.0
+        if inside.all():
+            return xs_, ys_
+        i = int(np.nonzero(~inside)[0][0])
+        t_ = (1.0 - xs_[i - 1]) / (xs_[i] - xs_[i - 1])
+        ycut = ys_[i - 1] + t_ * (ys_[i] - ys_[i - 1])
+        return (np.concatenate([xs_[:i], [1.0]]),
+                np.concatenate([ys_[:i], [ycut]]))
+
+    # После обрезки у поверхностей разное число точек, а крышки призмы
+    # сшиваются лентой по их ПАРАМ — обе пересемплируются по длине дуги на
+    # прежние n. Двести точек на четырёх метрах хорды сидят в полутора
+    # сантиметрах друг от друга, и полукруглый нос это переживает.
+    def _resample(xs_, ys_):
+        d = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(xs_),
+                                                      np.diff(ys_)))])
+        u = np.linspace(0.0, d[-1], n)
+        return np.interp(u, d, xs_), np.interp(u, d, ys_)
+    xu, yu = _resample(*_trim(xu, yu))
+    xl, yl = _resample(*_trim(xl, yl))
     return (_nose_to_flow(np.stack([xu, yu], axis=1) * chord, chord),
             _nose_to_flow(np.stack([xl, yl], axis=1) * chord, chord))
 

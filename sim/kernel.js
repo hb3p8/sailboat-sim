@@ -7,12 +7,12 @@
 // затевался ради того, чтобы этот рычаг убрать, а не ради круглого числа в
 // замере.
 //
-// ПОЧЕМУ ЗАГРУЗКА СИНХРОННАЯ, хотя обычно так нельзя. Браузеры запрещают
-// `new WebAssembly.Module` в главном потоке на буферах больше четырёх
-// килобайт. Наш модуль весит два — он помещается под ограничение, и это не
-// случайность, а следствие того, что портирован ровно один цикл. Будь портирован
-// весь vlm.js, пришлось бы городить асинхронную готовность и решать, что делать
-// на первых кадрах; здесь этого не нужно вовсе.
+// МОДУЛЕЙ ДВА, и грузятся они по-разному не от вкуса. Браузеры запрещают
+// синхронную компиляцию в главном потоке на буферах больше четырёх килобайт:
+// пелена (3115 байт) под лимитом, решётка (7470) — нет, и `-Oz` её до лимита не
+// доводит, даёт 4481 и уже ценой скорости. Поэтому оба инстанцируются
+// асинхронно, одинаково: развилка по размеру сэкономила бы микросекунды и
+// стоила бы второго пути загрузки.
 //
 // ОТКАТА НА JS ЗДЕСЬ НЕТ, и это осознанно.
 //
@@ -76,7 +76,6 @@ const X = biot, F64 = new Float64Array(X.memory.buffer);
 const L = lat, LF64 = new Float64Array(L.memory.buffer), LU8 = new Uint8Array(L.memory.buffer);
 let buf = null, lbuf = null;
 
-
 function lensure(n) {
   if (lbuf && lbuf.n >= n) return lbuf;
   const m = Math.max(n, lbuf ? lbuf.n * 2 : 64);
@@ -96,28 +95,35 @@ function lensure(n) {
 export function latticeBuild(g, n, ux, uy, uz, rc2, self, ground, k, kw) {
   if (n <= 0) return false;
   const b = lensure(n);
-  const o = (p) => p >> 3;
   for (const nm of ['a', 'b', 'ta', 'tb', 'ma', 'mb', 'mta', 'mtb', 'cpt', 'nrm', 'mid']) {
-    LF64.set(g[nm].subarray(0, n * 3), o(b[nm]));
+    LF64.set(g[nm].subarray(0, n * 3), off(b[nm]));
   }
-  LF64.set(g.tw.subarray(0, n), o(b.tw));
+  LF64.set(g.tw.subarray(0, n), off(b.tw));
   LU8.set(g.lead.subarray(0, n), b.lead);
   LU8.set(g.trail.subarray(0, n), b.trail);
   L.lattice_build(b.a, b.b, b.ta, b.tb, b.ma, b.mb, b.mta, b.mtb,
                   b.cpt, b.nrm, b.mid, b.lead, b.trail, b.tw, n,
                   ux, uy, uz, rc2, self ? 1 : 0, ground ? 1 : 0, b.k, b.kw);
-  k.set(LF64.subarray(o(b.k), o(b.k) + n * n));
-  kw.set(LF64.subarray(o(b.kw), o(b.kw) + n * n));
+  k.set(LF64.subarray(off(b.k), off(b.k) + n * n));
+  kw.set(LF64.subarray(off(b.kw), off(b.kw) + n * n));
   return true;
 }
 
 // Обмен идёт КОПИЕЙ, а не видами на линейную память, и это осознанный размен.
 //
-// Виды были бы бесплатны, но потребовали бы, чтобы `FreeWake` заводил свои
-// массивы внутри памяти модуля, — то есть чтобы откат на JS перестал быть
-// независимым путём. Цена копии считается: рёбер самое большее шестнадцать
-// тысяч чисел, это сто тридцать килобайт, около десяти микросекунд против двух
-// с лишним миллисекунд самого счёта. Меньше процента.
+// Виды были бы бесплатны, но потребовали бы, чтобы `FreeWake` и `Lattice`
+// заводили свои массивы внутри памяти модуля — то есть чтобы устройство
+// хранилища диктовалось кернелом. Цена копии считается: рёбер самое большее
+// шестнадцать тысяч чисел, это сто тридцать килобайт, около десяти микросекунд
+// против двух с лишним миллисекунд самого счёта. Меньше процента.
+
+// Смещение в вид на линейную память: байты в индексы двойных.
+//
+// Функция МОДУЛЬНАЯ, а не локальная. Стрелка внутри вызова выглядит опрятнее, но
+// заводится заново каждый раз, и профиль выделений показывал её четвёртой
+// строкой сверху — 124 КБ за прогон на ровном месте.
+const off = (p) => p >> 3;
+
 function ensure(neCap, npCap) {
   if (buf && buf.ne >= neCap && buf.np >= npCap) return buf;
   const ne = Math.max(neCap, buf ? buf.ne * 2 : 4096);
@@ -134,18 +140,17 @@ function ensure(neCap, npCap) {
   return buf;
 }
 
-// Возвращает false, если кернела нет: тогда считает вызывающий, по-старому.
 // Массивы приходят НЕ ОБЯЗАТЕЛЬНО типизированные, и это не теория: стенды
 // пелены зовут `field` с обычными Array (tests/wake.test.mjs). На них нет ни
 // `subarray`, ни `set`, и первая версия падала прямо там — поймала батарея,
 // а не браузер, и только потому, что стенды не поленились завести свои точки
 // массивом.
-function inTo(src, n, off) {
-  if (src.length === n && src.BYTES_PER_ELEMENT) { F64.set(src, off); return; }
-  for (let i = 0; i < n; i++) F64[off + i] = src[i];
+function inTo(src, n, at) {
+  if (src.length === n && src.BYTES_PER_ELEMENT) { F64.set(src, at); return; }
+  for (let i = 0; i < n; i++) F64[at + i] = src[i];
 }
-function outFrom(dst, n, off) {
-  for (let i = 0; i < n; i++) dst[i] = F64[off + i];
+function outFrom(dst, n, at) {
+  for (let i = 0; i < n; i++) dst[i] = F64[at + i];
 }
 
 // Полубесконечные нити. Отдельным вызовом, а не флагом к `fieldEdges`: в JS они
@@ -154,22 +159,20 @@ function outFrom(dst, n, off) {
 export function tailsAt(t, nt, qx, qy, qz, np, ox, oy, oz) {
   if (nt <= 0) return false;
   const b = ensure(nt, np);
-  const o = (p) => p >> 3;
-  inTo(t, nt * 8, o(b.t));
-  inTo(qx, np, o(b.qx)); inTo(qy, np, o(b.qy)); inTo(qz, np, o(b.qz));
-  inTo(ox, np, o(b.ox)); inTo(oy, np, o(b.oy)); inTo(oz, np, o(b.oz));
+  inTo(t, nt * 8, off(b.t));
+  inTo(qx, np, off(b.qx)); inTo(qy, np, off(b.qy)); inTo(qz, np, off(b.qz));
+  inTo(ox, np, off(b.ox)); inTo(oy, np, off(b.oy)); inTo(oz, np, off(b.oz));
   X.tails_at(b.t, nt, b.qx, b.qy, b.qz, np, b.ox, b.oy, b.oz);
-  outFrom(ox, np, o(b.ox)); outFrom(oy, np, o(b.oy)); outFrom(oz, np, o(b.oz));
+  outFrom(ox, np, off(b.ox)); outFrom(oy, np, off(b.oy)); outFrom(oz, np, off(b.oz));
   return true;
 }
 
 export function fieldEdges(e, ne, qx, qy, qz, np, ox, oy, oz) {
   if (ne <= 0) return false;
   const b = ensure(ne, np);
-  const o = (p) => p >> 3;
-  inTo(e, ne * 8, o(b.e));
-  inTo(qx, np, o(b.qx)); inTo(qy, np, o(b.qy)); inTo(qz, np, o(b.qz));
+  inTo(e, ne * 8, off(b.e));
+  inTo(qx, np, off(b.qx)); inTo(qy, np, off(b.qy)); inTo(qz, np, off(b.qz));
   X.field_edges(b.e, ne, b.qx, b.qy, b.qz, np, b.ox, b.oy, b.oz);
-  outFrom(ox, np, o(b.ox)); outFrom(oy, np, o(b.oy)); outFrom(oz, np, o(b.oz));
+  outFrom(ox, np, off(b.ox)); outFrom(oy, np, off(b.oy)); outFrom(oz, np, off(b.oz));
   return true;
 }

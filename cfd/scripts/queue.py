@@ -88,8 +88,12 @@ QUEUE = [
     ("hull-db-u150-b00-medium", GEOM_MAIN),
     ("hull-db-u350-b00-medium", GEOM_MAIN),
     ("hull-db-u250-b08-medium", GEOM_MAIN),
+    ("naca0012-a10-coarse", GEOM_MAIN),
     ("naca0012-a10-medium", GEOM_MAIN),
     ("naca0012-a10-fine", GEOM_MAIN),
+    # Живой VOF-покой — последняя незакрытая часть этапа 0: паразитные скорости,
+    # уровень воды и гидростатика на теле известны заранее.
+    ("still-water", GEOM_MAIN),
 ]
 
 

@@ -98,23 +98,36 @@ export function polarCeiling(camber) {
 // Раньше он был назначен — тринадцать градусов при любом пузе. Измерено: 9.5° у
 // плоской пластины, 13° при восьми процентах, 12.5° при десяти. То есть плоский
 // парус сдаёт заметно раньше пузатого, чего назначенное число не знало вовсе.
+//
+// Ряды с МЯГКИМ срывом (Милгрэм, пузо 12…18%) в угол срыва не входят: у этих
+// сечений его нет — «a sharp stall is not observed», пик Cl лежит на 18…24° и
+// срывом не является. Прочитать его как срыв значило бы отодвинуть порог
+// отрыва задней шкаторины за половину этого пика — и колдунчик у перебранного
+// грота перестал бы предупреждать. Пузо выше последнего ряда с острым срывом
+// держит угол этого последнего ряда.
 let STALL = null;
 
 export function polarStallDeg(camber) {
   if (!STALL) {
-    STALL = TABLE.camber.map((c, k) => {
-      let m = 0, at = 0;
-      for (let i = 0; i < TABLE.alpha_deg.length; i++) {
-        const a = TABLE.alpha_deg[i];
-        if (a < 0) continue;                 // см. оговорку у потолка
-        if (a > 20) break;
-        if (TABLE.cl[k][i] > m) { m = TABLE.cl[k][i]; at = a; }
-      }
-      return at;
-    });
+    const soft = new Set(TABLE['мягкий_срыв'] || []);
+    const hard = TABLE.camber.filter(c => !soft.has(c));
+    STALL = {
+      camber: hard,
+      deg: hard.map(c => {
+        const k = TABLE.camber.indexOf(c);
+        let m = 0, at = 0;
+        for (let i = 0; i < TABLE.alpha_deg.length; i++) {
+          const a = TABLE.alpha_deg[i];
+          if (a < 0) continue;               // см. оговорку у потолка
+          if (a > 20) break;
+          if (TABLE.cl[k][i] > m) { m = TABLE.cl[k][i]; at = a; }
+        }
+        return at;
+      }),
+    };
   }
-  const [ic, tc] = slot(TABLE.camber, Math.abs(camber));
-  return STALL[ic] + (STALL[ic + 1] - STALL[ic]) * tc;
+  const [ic, tc] = slot(STALL.camber, Math.abs(camber));
+  return STALL.deg[ic] + (STALL.deg[ic + 1] - STALL.deg[ic]) * tc;
 }
 
 // Сброс памяти о потолке — нужен только тем, кто подменяет таблицу на ходу

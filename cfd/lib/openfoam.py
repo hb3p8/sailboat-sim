@@ -339,8 +339,28 @@ def _mesh_context(m):
         "refine_min": lo, "refine_max": hi,
         "n_layers": mesh.get("boundary_layers", LEVEL_LAYERS[mesh["level"]]),
         "yplus_target": mesh.get("yplus_target", 30.0),
-        "cells_target": mesh.get("cells_target", nx * ny * nz),
+        "cells_target": _cells_target(mesh, nx * ny * nz),
     }
+
+
+def _cells_target(mesh, background):
+    """Бюджет ячеек для snappy — с проверкой, что измельчению есть куда расти.
+
+    `maxGlobalCells`, равный фоновой сетке, не запрещён самим snappy: он
+    молча пишет «reached limit» и отдаёт домен без единой поделённой ячейки.
+    С клином размером с одну фоновую ячейку это дало сетку без тела вовсе —
+    единственный патч farfield, нулевые силы по всем осям и ни одной жалобы
+    ни от сеточника, ни от решателя. Поэтому бюджет без запаса — это ошибка
+    постановки, и падать надо здесь, а не молчать до сводки.
+    """
+    target = mesh.get("cells_target", 8 * background)
+    if target < 2 * background:
+        raise ValueError(
+            "cells_target=%d при фоновой сетке %d ячеек: измельчению не "
+            "осталось бюджета, snappy молча отдаст сетку без тела. Либо "
+            "поднимите cells_target минимум до %d, либо укрупните фон."
+            % (target, background, 2 * background))
+    return target
 
 
 def render_text(text, ctx, where=""):

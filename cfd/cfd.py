@@ -581,12 +581,68 @@ def convergence_results(family=None):
     return out
 
 
+# Пары зеркальных случаев: (прямой, зеркальный). Зеркальным считается случай,
+# у которого отражены И тело, И знак дрейфа: отражать один поток при
+# несимметричном теле — не проверка, а совпадение двух разных задач.
+MIRROR_PAIRS = (("axes-probe", "axes-probe-mirror"),)
+
+# Допуск зеркальной невязки. Точного нуля здесь не бывает и быть не должно:
+# сеточник не симметричен сам по себе, и отражённое тело он режет своей
+# последовательностью решений. Пять процентов — это заведомо ниже любой
+# перепутанной оси (перестановка компонент даёт невязку порядка единицы) и
+# заведомо выше сеточного шума.
+MIRROR_TOL = 0.05
+
+
+def symmetry_results():
+    """Невязка зеркальных пар — проверка знаков §3.3.
+
+    До 2026-08-21 её не считал никто: `symmetry_residual` вызывалась только
+    батареей на выдуманных числах, а посчитанную пару не сравнивал никто и
+    никогда. Пара считалась, писалась в сводки и оставалась непрочитанной,
+    то есть этап 0.6 не проверял ровно ничего.
+    """
+    out = []
+    for direct, mirror in MIRROR_PAIRS:
+        pair = []
+        for n in (direct, mirror):
+            p = os.path.join(OUT_SUM, n + ".json")
+            if not os.path.exists(p):
+                pair = None
+                out.append((direct, None, "нет сводки %s" % n))
+                break
+            with open(p, encoding="utf-8") as f:
+                d = json.load(f)["derived"]
+            pair.append(((d["Fx"], d["Fy"], d["Fz"]),
+                         (d["Mx"], d["My"], d["Mz"])))
+        if pair is None:
+            continue
+        out.append((direct, ax.symmetry_residual(pair[0], pair[1]), None))
+    return out
+
+
 def cmd_convergence(a):
     results = convergence_results(a.family)
+    sym = symmetry_results() if a.family in (None, "verification") else []
+    for name, res, why in sym:
+        if res is None:
+            print("  —      зеркало %s: %s" % (name, why))
+            continue
+        worst = max(res.values())
+        print("  %s  зеркало %s: худшая невязка %.3f по %s"
+              % ("ok    " if worst < MIRROR_TOL else "ПЛОХО ", name, worst,
+                 max(res, key=res.get)))
+        for k in ("Fx", "Fy", "Fz", "Mx", "My", "Mz"):
+            if res[k] >= MIRROR_TOL:
+                print("           %s разошлось на %.3f" % (k, res[k]))
     if not results:
+        if sym:
+            return 1 if any(r and max(r.values()) >= MIRROR_TOL
+                            for _n, r, _w in sym) else 0
         print("нечего проверять: нет сводок")
         return 0
-    bad = 0
+    bad = sum(1 for _n, r, _w in sym
+              if r and max(r.values()) >= MIRROR_TOL)
     for name, r, why in results:
         if r is None:
             print("  —      %s: %s" % (name, why))

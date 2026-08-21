@@ -524,7 +524,28 @@ def sign_probe(size=1.0):
                       dtype=np.float64)
 
 
-CANONICAL = ("naca0012", "sign_probe")
+def sign_probe_mirror(size=1.0):
+    """Тот же клин, отражённый в диаметральной плоскости (y → −y).
+
+    Нужен, потому что зеркальная проверка §3.3 требует ЗЕРКАЛЬНОЙ ЗАДАЧИ, а не
+    зеркального потока. Первая версия пары меняла знак дрейфа, оставляя тело
+    прежним, — и это не проверяло ничего: клин нарочно несимметричен по всем
+    трём осям, так что обтекание при −6° не связано с обтеканием при +6° никаким
+    тождеством. Замер это и показал: Fz обязан был совпасть, а сменил знак
+    (−0.55 против +0.55); Fy обязан был сменить знак при равной величине, а вышел
+    −8.97 против +0.33.
+
+    Отражается и обход вершин: у зеркального отображения определитель
+    отрицательный, и без перестановки двух вершин все нормали смотрели бы
+    внутрь тела. Тогда сеточник вырезал бы не клин, а всё остальное.
+    """
+    tris = sign_probe(size).copy()
+    tris[:, :, 1] *= -1.0
+    tris[:, [1, 2], :] = tris[:, [2, 1], :]
+    return tris
+
+
+CANONICAL = ("naca0012", "sign_probe", "sign_probe_mirror")
 
 
 def canonical(dst_dir, span=0.1, chord=1.0):
@@ -537,7 +558,8 @@ def canonical(dst_dir, span=0.1, chord=1.0):
     os.makedirs(dst_dir, exist_ok=True)
     made = {}
     for name, tris in (("naca0012", extrude(naca_symmetric(0.12, chord), span)),
-                       ("sign_probe", sign_probe(chord))):
+                       ("sign_probe", sign_probe(chord)),
+                       ("sign_probe_mirror", sign_probe_mirror(chord))):
         write_stl_ascii(os.path.join(dst_dir, name + ".stl"), [(name, tris)])
         made[name] = {"watertight": watertight(tris),
                       "area_m2": area_m2(tris), "volume_m3": volume_m3(tris),

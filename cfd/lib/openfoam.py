@@ -441,7 +441,7 @@ def generate(m, template_root, dst, geometry_dir=None, force=False):
                 os.chmod(target, 0o755)
         written[out_rel] = hashing.sha256_file(target)
 
-    grid = m["mesh"].get("grid")
+    grid, grid_source = m["mesh"].get("grid"), None
     if grid:
         # Чужая сетка входит в постановку так же, как своя геометрия: копия
         # ложится в каталог случая и хэшируется вместе со всем остальным.
@@ -461,9 +461,13 @@ def generate(m, template_root, dst, geometry_dir=None, force=False):
         else:
             shutil.copyfile(src, target)
         written["constant/" + out_name] = hashing.sha256_file(target)
-        # Отпечаток берётся и с ИСХОДНОГО файла: распакованный зависит от
-        # версии gzip, а сжатый — это ровно то, что скачано у источника.
-        written["cfd/grids/" + grid] = hashing.sha256_file(src)
+        # Отпечаток ИСХОДНОГО файла — отдельным полем, а не в `written`.
+        # `written` — это опись каталога случая, и всё, что там перечислено,
+        # проверяется существованием и хэшем ОТНОСИТЕЛЬНО этого каталога;
+        # чужой путь делает запуск вечно грязным («удалён cfd/grids/…»).
+        # А знать исходный отпечаток нужно: распакованный файл зависит от
+        # версии gzip, сжатый — это ровно то, что скачано у источника.
+        grid_source = {"file": grid, "sha256": hashing.sha256_file(src)}
 
     if geometry_dir and not grid:
         # Копируются ТОЛЬКО тела этого случая. Соблазн скопировать весь каталог
@@ -481,6 +485,7 @@ def generate(m, template_root, dst, geometry_dir=None, force=False):
                 hashing.sha256_file(os.path.join(tri, name + ".stl"))
 
     record = {"schema": 1, "manifest": m, "context": ctx,
+              **({"grid_source": grid_source} if grid else {}),
               "coefficient_basis": coefficient_basis(m),
               "template_files": {k: os.path.relpath(v, template_root)
                                  for k, v in sorted(files.items())},

@@ -622,7 +622,12 @@ try:
             if len(vals) > 1:
                 check("в тройке %s совпадает режим" % group, False,
                       "различается %s" % where)
-        sizes = {round(m["mesh"].get("base_size_m", 0), 9) for m in ms}
+        # Чем ступени тройки ОТЛИЧАЮТСЯ. У своей сетки это размер фоновой
+        # ячейки, у готовой — файл сетки: у неё базового размера нет вовсе, и
+        # сравнение нулей объявляло бы честную тройку эталонных сеток
+        # вырожденной.
+        sizes = {m["mesh"]["grid"] if "grid" in m["mesh"]
+                 else round(m["mesh"].get("base_size_m", 0), 9) for m in ms}
         if len(ms) > 1 and len(sizes) != len(ms):
             check("в тройке %s размеры ячейки различны" % group, False,
                   str(sorted(sizes)))

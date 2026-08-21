@@ -1,0 +1,118 @@
+{
+ "case_id": "naca-dom-020",
+ "condition": {
+  "alpha_deg": 10.0,
+  "reynolds": 6000000.0,
+  "speed_ms": 89.4
+ },
+ "convergence_group": "naca-domain",
+ "family": "verification",
+ "fluid": {
+  "nu": 1.5e-05,
+  "rho": 1.225
+ },
+ "geometry": {
+  "bodies": [
+   "naca0012"
+  ],
+  "files": {
+   "naca0012": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "revision": "подставляется при разворачивании"
+ },
+ "mesh": {
+  "base_size_m": 0.5,
+  "boundary_layers": 4,
+  "cells_target": 3000000,
+  "domain": {
+   "aft_l": 20.0,
+   "down_l": 1.0,
+   "fwd_l": 20.0,
+   "seed": [
+    10.0,
+    10.0,
+    0.0
+   ],
+   "side_l": 20.0,
+   "span_m": 0.1,
+   "up_l": 1.0
+  },
+  "family": "naca-dom-v1",
+  "feature_level": 5,
+  "level": "coarse",
+  "n_proc": 8,
+  "refine": [
+   4,
+   5
+  ],
+  "regions": [
+   {
+    "box": [
+     [
+      -3.0,
+      -1.0,
+      -0.06
+     ],
+     [
+      1.6,
+      1.0,
+      0.06
+     ]
+    ],
+    "level": 1
+   },
+   {
+    "box": [
+     [
+      -1.0,
+      -0.45,
+      -0.06
+     ],
+     [
+      1.3,
+      0.45,
+      0.06
+     ]
+    ],
+    "level": 3
+   }
+  ],
+  "surface_distance": [
+   [
+    0.08,
+    4
+   ]
+  ],
+  "yplus_target": 30.0
+ },
+ "notes": "Опыт с ДАЛЬНЕЙ ГРАНИЦЕЙ (§13.17). Меняется ровно одно — размер домена; околотельная ячейка у всех трёх одна и та же (base/2^refine = 0.0156 м), поэтому разность ответов — это чувствительность к границе, а не к сетке. Ожидание, которое проверяется: у несущего тела в плоской задаче наведённое поле спадает как 1/r, условия freestream вихревой поправки не несут, и на 20 хордах это должно стоить процентов подъёмной силы. Сетка нарочно грубее рабочей тройки: сравниваются случаи между собой, а не с эталоном TMR. Домен 20 хорд.",
+ "numerics": {
+  "average_from": 2600,
+  "dt_s": 1.0,
+  "end_time": 3000,
+  "iterations": 3000,
+  "residual_tol": 1e-05,
+  "write_interval": 250
+ },
+ "reference": {
+  "area_m2": 0.1,
+  "chord_m": 1.0,
+  "length_m": 1.0,
+  "origin_m": [
+   0.25,
+   0.0,
+   0.0
+  ],
+  "rho": 1.225,
+  "speed_ms": 89.4
+ },
+ "schema": 1,
+ "solver": {
+  "application": "simpleFoam",
+  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
+  "name": "OpenFOAM",
+  "turbulence": "kOmegaSST",
+  "wall_treatment": "wall-function"
+ },
+ "template": "openfoam-2d"
+}

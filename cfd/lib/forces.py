@@ -312,6 +312,16 @@ def read_mesh_stats(log_path):
                 out["mesh_ok"] = True
             if "Failed" in line and "mesh checks" in line:
                 out["mesh_ok"] = False
+            # ЧТО именно не прошло, а не только «не прошло». Булев ответ
+            # склеивает две разные вещи: сетка сломана (отрицательные объёмы,
+            # незамкнутость, вывернутые грани) и у checkMesh есть мнение о
+            # вытянутости ячеек. У сетки, разрешающей пограничный слой,
+            # вытянутость в тысячи — это НЕ дефект, а способ не тратить ячейки
+            # вдоль потока; чужие эталонные сетки (NASA TMR) идут с
+            # соотношением 2e7 и считаются на них же.
+            if line.lstrip().startswith("***"):
+                out.setdefault("failed_checks", []).append(
+                    line.strip().lstrip("*").strip())
     return out
 
 

@@ -340,6 +340,14 @@ def _mesh_context(m):
         "n_layers": mesh.get("boundary_layers", LEVEL_LAYERS[mesh["level"]]),
         "yplus_target": mesh.get("yplus_target", 30.0),
         "cells_target": _cells_target(mesh, nx * ny * nz),
+        # Готовая сетка: имя файла в каталоге случая (уже распакованное) и
+        # коробка, которой из общей внешней поверхности вырезается тело.
+        # Коробка берётся с запасом по хорде и в обрез по толщине: у профиля
+        # она в проценты хорды, и широкая коробка захватила бы куски торцов.
+        "grid_file": (mesh["grid"][:-3] if mesh.get("grid", "").endswith(".gz")
+                      else mesh.get("grid", "")),
+        "body_box_min": "-0.1 -0.2 -1e6",
+        "body_box_max": "1.1 0.2 1e6",
     }
 
 
@@ -412,7 +420,31 @@ def generate(m, template_root, dst, geometry_dir=None, force=False):
                 os.chmod(target, 0o755)
         written[out_rel] = hashing.sha256_file(target)
 
-    if geometry_dir:
+    grid = m["mesh"].get("grid")
+    if grid:
+        # Чужая сетка входит в постановку так же, как своя геометрия: копия
+        # ложится в каталог случая и хэшируется вместе со всем остальным.
+        # Распаковывается здесь, а не в Allrun: `plot3dToFoam` читает только
+        # обычный файл, а держать в дереве распакованные мегабайты незачем.
+        src = os.path.join(os.path.dirname(template_root), "grids", grid)
+        if not os.path.exists(src):
+            raise TemplateError("нет %s: сетка случая не положена в cfd/grids/"
+                                % src)
+        os.makedirs(os.path.join(dst, "constant"), exist_ok=True)
+        out_name = grid[:-3] if grid.endswith(".gz") else grid
+        target = os.path.join(dst, "constant", out_name)
+        if grid.endswith(".gz"):
+            import gzip
+            with gzip.open(src, "rb") as fi, open(target, "wb") as fo:
+                shutil.copyfileobj(fi, fo)
+        else:
+            shutil.copyfile(src, target)
+        written["constant/" + out_name] = hashing.sha256_file(target)
+        # Отпечаток берётся и с ИСХОДНОГО файла: распакованный зависит от
+        # версии gzip, а сжатый — это ровно то, что скачано у источника.
+        written["cfd/grids/" + grid] = hashing.sha256_file(src)
+
+    if geometry_dir and not grid:
         # Копируются ТОЛЬКО тела этого случая. Соблазн скопировать весь каталог
         # велик — но тогда в каталоге плоского профиля лежит корпус лодки, и
         # `snappyHexMesh` при первой же опечатке в имени патча возьмёт не то

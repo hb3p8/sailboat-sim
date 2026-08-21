@@ -1,0 +1,33 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      topoSetDict;
+}
+
+// Нарезка патчей у ГОТОВОЙ сетки. plot3dToFoam не знает имён границ и
+// сваливает все внешние грани в defaultFaces; их надо разделить обратно на
+// тело, дальнюю границу и торцы — иначе ни условий поставить, ни сил снять.
+//
+// Порядок действий существенный. Торцы берутся первыми и вычитаются из всего
+// остального: они самые большие (у плоской задачи это почти вся внешняя
+// поверхность), и коробка вокруг профиля без этого вычитания захватывает
+// куски торцов, попавшие в неё центрами граней. Проверено: было 2540 граней
+// «тела» вместо 64.
+actions
+(
+    { name sides; type faceSet; action new;    source patchToFace; patch defaultFaces; }
+    { name sides; type faceSet; action subset; source normalToFace; normal (0 0 1); cos 0.01; }
+    { name back;  type faceSet; action new;    source patchToFace; patch defaultFaces; }
+    { name back;  type faceSet; action subset; source normalToFace; normal (0 0 -1); cos 0.01; }
+    { name sides; type faceSet; action add;    source faceToFace; set back; }
+
+    { name body;  type faceSet; action new;      source patchToFace; patch defaultFaces; }
+    { name body;  type faceSet; action subtract; source faceToFace; set sides; }
+    { name body;  type faceSet; action subset;   source boxToFace; min ({{body_box_min}}); max ({{body_box_max}}); }
+
+    { name far;   type faceSet; action new;      source patchToFace; patch defaultFaces; }
+    { name far;   type faceSet; action subtract; source faceToFace; set sides; }
+    { name far;   type faceSet; action subtract; source faceToFace; set body; }
+);

@@ -27,7 +27,7 @@ FAMILIES = ("verification", "sail-2d", "rig-3d", "appendages",
 # нужно потому, что одно семейство может считаться двумя шаблонами (киль без
 # воды и он же под поверхностью).
 TEMPLATES = ("openfoam-aero", "openfoam-2d", "openfoam-2d-urans",
-             "openfoam-halfspace",
+             "openfoam-2d-p3d", "openfoam-halfspace",
              "openfoam-vof", "openfoam-manoeuvre")
 
 TURBULENCE = ("kOmegaSST", "SpalartAllmaras", "laminar")
@@ -135,7 +135,16 @@ def validate(m):
     _extra(mesh, {"level", "family", "cells_target", "base_size_m",
                   "boundary_layers", "yplus_target", "domain", "n_proc",
                   "refine", "regions", "surface_distance", "feature_level",
-                  "feature_angle"}, "mesh")
+                  "feature_angle", "grid"}, "mesh")
+    # Готовая сетка вместо построенной. Имя файла в cfd/grids/, а отпечаток —
+    # там же в grids.json: чужая сетка входит в постановку ровно так же, как
+    # своя геометрия, и обязана хэшироваться, иначе воспроизвести случай
+    # нечем.
+    if "grid" in mesh:
+        g = mesh["grid"]
+        if not isinstance(g, str) or "/" in g or not g:
+            raise ManifestError("mesh.grid: имя файла в cfd/grids/ без "
+                                "путей, а не %r" % (g,))
     for box in mesh.get("regions") or []:
         if set(box) != {"box", "level"} or len(box["box"]) != 2:
             raise ManifestError("mesh.regions: нужен {\"box\": [[x0,y0,z0], "

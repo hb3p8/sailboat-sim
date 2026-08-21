@@ -681,6 +681,35 @@ def cmd_convergence(a):
 
 # --- compare ------------------------------------------------------------------
 
+# Замечания checkMesh, которые НЕ делают сетку непригодной.
+#
+# Вытянутость ячеек у сетки, разрешающей пограничный слой, — это не дефект, а
+# способ не тратить ячейки вдоль потока: первая ячейка у стенки в микрон при
+# длине в сантиметр даёт соотношение в десятки тысяч по построению. Эталонные
+# сетки NASA TMR идут с соотношением 2e7, и оба кода, которыми считался
+# эталон, считаются именно на них. Остальные замечания checkMesh —
+# отрицательные объёмы, незамкнутость, вывернутые грани, неортогональность —
+# остаются приговором.
+#
+# Проверяется НЕ вердикт checkMesh целиком, а список того, что не прошло:
+# булев `mesh_ok` склеивал «сетка сломана» и «у checkMesh есть мнение о
+# вытянутости».
+_MESH_WARN_OK = ("aspect ratio",)
+
+
+def _mesh_usable(mesh):
+    ok = mesh.get("mesh_ok")
+    if ok is not False:
+        return ok
+    failed = mesh.get("failed_checks")
+    if not failed:
+        return False
+    for line in failed:
+        if not any(w in line.lower() for w in _MESH_WARN_OK):
+            return False
+    return True
+
+
 def compare_rows(family=None):
     """Строки таблицы §6 и их статусы."""
     summaries = _summaries(family)
@@ -722,7 +751,7 @@ def compare_rows(family=None):
         # расчёт может показать свои числа в таблице, но не имеет права на
         # `ok`/`investigate`/`model-change`: ровно так четыре генакерных случая
         # с mesh_ok: false получали `ok` при расхождении в полтора раза.
-        mesh_ok = (s.get("mesh") or {}).get("mesh_ok")
+        mesh_ok = _mesh_usable(s.get("mesh") or {})
         if not s.get("clean") or mesh_ok is False:
             valid = "invalid"
         elif unc_rel is None or "derived_stats" not in s:

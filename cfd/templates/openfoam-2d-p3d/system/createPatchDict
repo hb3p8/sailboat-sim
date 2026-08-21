@@ -1,0 +1,22 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      createPatchDict;
+}
+
+pointSync false;
+
+// Торцы — `empty`, а не `symmetry`, как у наших собственных плоских случаев.
+// Разница не косметическая: у сетки, разрешающей пограничный слой, ячейка у
+// стенки тоньше микрона, и при `symmetry` решатель дискретизирует поперечное
+// направление с соотношением сторон в миллионы. При `empty` поперечного
+// направления в дискретизации нет вовсе, и решается ровно плоская задача —
+// та самая, для которой эта сетка и построена.
+patches
+(
+    { name {{body_patch}}; patchInfo { type wall; }  constructFrom set; set body;  }
+    { name farfield;       patchInfo { type patch; } constructFrom set; set far;   }
+    { name sides;          patchInfo { type empty; } constructFrom set; set sides; }
+);

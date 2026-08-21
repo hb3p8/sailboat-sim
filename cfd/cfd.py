@@ -536,6 +536,26 @@ REGIME = {"hull-resistance": "two-phase", "waves": "two-phase",
           "verification": "attached"}
 
 
+def _mesh_dim(summary):
+    """В скольких направлениях сгущается сетка — 2 или 3.
+
+    Отношение сеток для Ричардсона берётся как корень степени `dim` из
+    отношения ЧИСЛА ЯЧЕЕК, поэтому ошибка здесь напрямую портит наблюдаемый
+    порядок. Раньше размерность выводилась из семейства («всё, что не
+    sail-2d, — трёхмерно»), и плоская тройка NACA в семействе `verification`
+    считалась объёмной: при истинном шаге sqrt(2) отношение выходило 1.25
+    вместо 1.40, а порядок по Cl — 5.30 вместо 3.49, то есть годная тройка
+    объявлялась негодной.
+
+    Судья — шаблон, как и в очереди (`cfd/scripts/queue.py`, `is_2d`): именно
+    он решает, есть ли у случая толщина в одну ячейку. Проверить вывод можно
+    по самим числам: у плоского сгущения с шагом sqrt(2) ячеек становится
+    вдвое больше, у объёмного — в 2.83 раза; у этой тройки 1.954 и 1.958.
+    """
+    tpl = (summary.get("manifest") or {}).get("template") or ""
+    return 2 if tpl.startswith("openfoam-2d") else 3
+
+
 def convergence_results(family=None):
     groups = {}
     for s in _summaries(family):
@@ -576,7 +596,7 @@ def convergence_results(family=None):
                     drift = max(drift, f["drift"])
             drift = None if not math.isfinite(drift) else drift
             r = conv.triple(vals, cells, REGIME.get(fam, "attached"),
-                            dim=2 if fam == "sail-2d" else 3, drift=drift)
+                            dim=_mesh_dim(by_level["fine"]), drift=drift)
             out.append((g + " / " + quantity, r, None))
     return out
 

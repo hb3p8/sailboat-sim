@@ -836,7 +836,15 @@ try:
               if m["convergence_group"] == "naca0012-a10"]
     check("тройка naca0012-a10 найдена целиком", len(triple) == 3)
 
-    CELLS = {"coarse": 8000, "medium": 27000, "fine": 91125}
+    # Число ячеек растёт ПЛОСКО, потому что тройка naca0012-a10 плоская
+    # (шаблон openfoam-2d, толщина в одну ячейку). Раньше здесь стояла
+    # объёмная прогрессия 20³/30³/45³, а оценщик до 2026-08-21 считал
+    # размерность по семейству и тоже брал объём — две ошибки сходились, и
+    # изготовленный второй порядок выходил ровно вторым. Как только оценщик
+    # стал брать размерность у шаблона, стало видно: у 2D-случая с объёмной
+    # прогрессией порядок выходит 1.33 = 2·(1/3)/(1/2). Прогрессия приведена
+    # к плоской, 90²/135²/202.5², шаг 1.5 по линейному размеру.
+    CELLS = {"coarse": 8100, "medium": 18225, "fine": 41006}
     RT_EXACT, C = 137.0, 90.0
 
     saved_sum, saved_reports = cli.OUT_SUM, cli.REPORTS
@@ -848,7 +856,7 @@ try:
             run = os.path.join(tmp, "runs", m["case_id"])
             openfoam.generate(m, TEMPLATES, run, geometry_dir=geom, force=True)
             q = manifest.dynamic_pressure(m)
-            h = conv.representative_size(CELLS[lvl])
+            h = conv.representative_size(CELLS[lvl], dim=2)
             rt = RT_EXACT - C * h ** 2
 
             d = os.path.join(run, "postProcessing", "forces", "0")

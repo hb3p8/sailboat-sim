@@ -113,7 +113,8 @@ def validate(m):
                             "registry/name@sha256:...")
 
     f = m["fluid"]
-    _extra(f, {"rho", "nu", "rho_air", "nu_air", "g", "sigma"}, "fluid")
+    _extra(f, {"rho", "nu", "rho_air", "nu_air", "g", "sigma",
+               "k_farfield", "omega_farfield"}, "fluid")
     _need(f, {"rho", "nu"}, "fluid")
     _positive(f, "rho", "fluid")
     _positive(f, "nu", "fluid")
@@ -130,6 +131,11 @@ def validate(m):
                             "или reynolds")
     for k in speed_keys:
         _positive(c, k, "condition")
+
+    f = m["fluid"]
+    if ("k_farfield" in f) != ("omega_farfield" in f):
+        raise ManifestError("fluid: k_farfield и omega_farfield задаются "
+                            "только вместе")
 
     mesh = m["mesh"]
     _extra(mesh, {"level", "family", "cells_target", "base_size_m",

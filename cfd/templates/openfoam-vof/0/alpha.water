@@ -15,7 +15,27 @@ internalField   uniform 0;
 
 boundaryField
 {
+    // Умолчание: вода никуда не девается через грань.
     farfield
+    {
+        type            zeroGradient;
+    }
+
+    // На проточных гранях граница поверхности должна ПРОХОДИТЬ сквозь неё,
+    // сохраняя уровень. Именно для этого заведён variableHeightFlowRate:
+    // обычный inletOutlet с inletValue 0 приносит внутрь ВОЗДУХ при любом
+    // втекании, и домен опустошается (§13.16).
+    "(inlet|outlet)"
+    {
+        type            variableHeightFlowRate;
+        lowerBound      0.0;
+        upperBound      1.0;
+        value           uniform 0;
+    }
+
+    // Сверху втекать может только воздух — и это здесь верно, в отличие от
+    // проточных граней.
+    atmosphere
     {
         type            inletOutlet;
         inletValue      uniform 0;

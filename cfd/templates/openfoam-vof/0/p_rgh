@@ -12,7 +12,16 @@ internalField   uniform 0;
 
 boundaryField
 {
+    // Умолчание: поток через грань определяет давление, а не наоборот.
     farfield
+    {
+        type            fixedFluxPressure;
+        value           uniform 0;
+    }
+
+    // Только НАВЕРХУ давление задаётся: там атмосфера, и p_rgh = 0 — это
+    // ровно гидростатика покоя (p = rho*g*h, значит p_rgh = p - rho*g*h = 0).
+    atmosphere
     {
         type            totalPressure;
         p0              uniform 0;

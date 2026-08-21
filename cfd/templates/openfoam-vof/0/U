@@ -1,0 +1,53 @@
+/*--------------------------------*- C++ -*----------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volVectorField;
+    object      U;
+}
+
+dimensions      [0 1 -1 0 0 0 0];
+
+internalField   uniform ({{U_x}} {{U_y}} {{U_z}});
+
+boundaryField
+{
+    // Умолчание для всей внешней границы. Точные имена ниже его перебивают.
+    farfield
+    {
+        type            slip;
+    }
+
+    inlet
+    {
+        type            fixedValue;
+        value           uniform ({{U_x}} {{U_y}} {{U_z}});
+    }
+
+    // Средняя скорость ВОДЫ на выходе держится равной входной. Обычный
+    // zeroGradient здесь не годится: он не мешает воде утекать быстрее, чем
+    // приходит, и уровень медленно садится — ровно то, что уже случилось
+    // (§13.16), только тише.
+    outlet
+    {
+        type            outletPhaseMeanVelocity;
+        alpha           alpha.water;
+        Umean           {{U_mag}};
+        value           uniform ({{U_x}} {{U_y}} {{U_z}});
+    }
+
+    // Сверху воздух: скорость определяется давлением, а не назначается.
+    atmosphere
+    {
+        type            pressureInletOutletVelocity;
+        value           uniform (0 0 0);
+    }
+
+    {{wall_patches}}
+    {
+        type            noSlip;
+    }
+
+    #includeEtc "caseDicts/setConstraintTypes"
+}

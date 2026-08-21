@@ -641,6 +641,42 @@ def symmetry_results():
     return out
 
 
+# Случаи с известной заранее гидростатикой: (случай, тело, уровень воды).
+# Архимедова сила погружённого тела известна с точностью до объёма геометрии, и
+# это единственная величина во всём контуре со свободной поверхностью, которую
+# можно проверить, ничего не считая.
+HYDROSTATIC_CASES = (("still-water", "sign_probe", 0.0),)
+
+# Допуск. Ватерлиния разрешается ячейками конечного размера, поэтому подводный
+# объём у сетки всегда чуть иной, чем у точной геометрии; на грубой сетке
+# несколько процентов — это дискретизация, а не ошибка. Пять процентов заведомо
+# ниже любой настоящей беды: у вытекающего домена (§13.16) было в СТО раз.
+HYDROSTATIC_TOL = 0.05
+
+
+def hydrostatic_results():
+    """Сила плавучести против rho*g*V подводной части — проверка §3.4—3.5."""
+    out = []
+    for case, body, level in HYDROSTATIC_CASES:
+        p = os.path.join(OUT_SUM, case + ".json")
+        if not os.path.exists(p):
+            out.append((case, None, None, "нет сводки"))
+            continue
+        with open(p, encoding="utf-8") as f:
+            s = json.load(f)
+        stl = os.path.join(OUT_GEOM, body + ".stl")
+        if not os.path.exists(stl):
+            out.append((case, None, None, "нет геометрии %s" % rel(stl)))
+            continue
+        vol = geo.volume_below(geo.read_stl(stl), level)
+        rho = s["manifest"]["fluid"]["rho"]
+        g = abs(s["manifest"]["fluid"].get("g", 9.80665))
+        want = rho * g * vol
+        got = s["derived"]["Fz"]
+        out.append((case, got, want, None))
+    return out
+
+
 def cmd_convergence(a):
     results = convergence_results(a.family)
     sym = symmetry_results() if a.family in (None, "verification") else []
@@ -655,14 +691,27 @@ def cmd_convergence(a):
         for k in ("Fx", "Fy", "Fz", "Mx", "My", "Mz"):
             if res[k] >= MIRROR_TOL:
                 print("           %s разошлось на %.3f" % (k, res[k]))
+    hyd = hydrostatic_results() if a.family in (None, "verification") else []
+    for name, got, want, why in hyd:
+        if why:
+            print("  —      гидростатика %s: %s" % (name, why)); continue
+        d = abs(got / want - 1.0) if want else float("inf")
+        print("  %s  гидростатика %s: Fz %.1f Н против rho*g*V = %.1f Н (%+.1f%%)"
+              % ("ok    " if d < HYDROSTATIC_TOL else "ПЛОХО ", name, got, want,
+                 100.0 * (got / want - 1.0) if want else float("nan")))
     if not results:
-        if sym:
-            return 1 if any(r and max(r.values()) >= MIRROR_TOL
-                            for _n, r, _w in sym) else 0
+        if sym or hyd:
+            bad = any(r and max(r.values()) >= MIRROR_TOL
+                      for _n, r, _w in sym)
+            bad = bad or any(w and abs(g / w - 1.0) >= HYDROSTATIC_TOL
+                             for _n, g, w, why in hyd if not why)
+            return 1 if bad else 0
         print("нечего проверять: нет сводок")
         return 0
     bad = sum(1 for _n, r, _w in sym
               if r and max(r.values()) >= MIRROR_TOL)
+    bad += sum(1 for _n, g, w, why in hyd
+               if not why and w and abs(g / w - 1.0) >= HYDROSTATIC_TOL)
     for name, r, why in results:
         if r is None:
             print("  —      %s: %s" % (name, why))

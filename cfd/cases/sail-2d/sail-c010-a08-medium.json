@@ -39,8 +39,7 @@
   },
   "family": "sail-2d-v1",
   "level": "medium",
-  "n_proc": 8,
-  "yplus_target": 30.0
+  "n_proc": 8
  },
  "notes": "§5, этап 1: расчётное пузо, угол атаки 8°, Re = 5e5. Сравнивается с polarCoeffs. Геометрия сечения выгружается из sim/membrane.js — экспортёр ещё не написан (cfd/README.md, «что осталось»); до него случай проходит validate, но не разворачивается.",
  "numerics": {

@@ -603,7 +603,7 @@ try:
     # геометрия, граничные условия, модель турбулентности и критерии
     # усреднения. Здесь это доведено до проверки.
     SAME = ("refine", "feature_level", "surface_distance", "boundary_layers",
-            "regions", "domain", "family", "n_proc", "yplus_target")
+            "regions", "domain", "family", "n_proc")
     by_group = {}
     for _p, m in found:
         by_group.setdefault(m["convergence_group"], []).append(m)

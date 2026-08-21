@@ -359,7 +359,6 @@ def _mesh_context(m):
         "base_size_m": base,
         "refine_min": lo, "refine_max": hi,
         "n_layers": mesh.get("boundary_layers", LEVEL_LAYERS[mesh["level"]]),
-        "yplus_target": mesh.get("yplus_target", 30.0),
         "cells_target": _cells_target(mesh, nx * ny * nz),
         # Готовая сетка: имя файла в каталоге случая (уже распакованное) и
         # коробка, которой из общей внешней поверхности вырезается тело.

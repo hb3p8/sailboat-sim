@@ -139,7 +139,7 @@ def validate(m):
 
     mesh = m["mesh"]
     _extra(mesh, {"level", "family", "cells_target", "base_size_m",
-                  "boundary_layers", "yplus_target", "domain", "n_proc",
+                  "boundary_layers", "domain", "n_proc",
                   "refine", "regions", "surface_distance", "feature_level",
                   "feature_angle", "grid"}, "mesh")
     # Готовая сетка вместо построенной. Имя файла в cfd/grids/, а отпечаток —

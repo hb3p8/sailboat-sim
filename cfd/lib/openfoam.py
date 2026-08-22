@@ -370,6 +370,9 @@ def _mesh_context(m):
             "body_box", [[-0.1, -0.2, -1e6], [1.1, 0.2, 1e6]])[0]),
         "body_box_max": " ".join("%g" % v for v in mesh.get(
             "body_box", [[-0.1, -0.2, -1e6], [1.1, 0.2, 1e6]])[1]),
+        # Разбор сетки: своя строится, готовая читается и приводится к нашим
+        # осям. Ступени именно здесь, а не в шаблоне, — см. пояснение в Allrun.
+        "mesh_block": _mesh_block(mesh),
         # Преобразования готовой сетки — ИЗ МАНИФЕСТА, а не зашиты в шаблон.
         # У сеток NASA свои оси (профиль в X-Z, носок в нуле, поток в плюс X),
         # у наших собственных — сразу наши, и им поворачивать нечего. Зашитый
@@ -382,6 +385,24 @@ def _mesh_context(m):
     }
 
 
+def _mesh_block(mesh):
+    """Команды получения сетки: свои или разбор готовой."""
+    grid = mesh.get("grid", "")
+    if not grid:
+        return ("runApplication blockMesh\n"
+                "runApplication surfaceFeatureExtract\n"
+                "runApplication snappyHexMesh -overwrite")
+    name = grid[:-3] if grid.endswith(".gz") else grid
+    lines = ["runApplication plot3dToFoam -noBlank constant/%s" % name]
+    lines += ["runApplication transformPoints %s" % t
+              for t in mesh.get("grid_transform", [])]
+    # У готовой сетки патчей нет вовсе: `plot3dToFoam` кладёт все внешние
+    # грани в defaultFaces. Тело, дальнюю границу и торцы разбирает topoSet по
+    # нормали и по коробке тела.
+    lines += ["runApplication topoSet", "runApplication createPatch -overwrite"]
+    return "\n".join(lines)
+
+
 def _cells_target(mesh, background):
     """Бюджет ячеек для snappy — с проверкой, что измельчению есть куда расти.
 
@@ -392,6 +413,11 @@ def _cells_target(mesh, background):
     ни от сеточника, ни от решателя. Поэтому бюджет без запаса — это ошибка
     постановки, и падать надо здесь, а не молчать до сводки.
     """
+    # У готовой сетки фона нет вовсе: blockMesh и snappy не запускаются, а
+    # размеры домена в манифесте описывают саму сетку, а не коробку под неё.
+    # Спрашивать с них бюджет измельчения бессмысленно.
+    if mesh.get("grid"):
+        return mesh.get("cells_target", 8 * background)
     target = mesh.get("cells_target", 8 * background)
     if target < 2 * background:
         raise ValueError(

@@ -1,0 +1,84 @@
+{
+ "case_id": "gen-og-a35",
+ "condition": {
+  "alpha_deg": 35.0,
+  "camber": 0.185,
+  "speed_ms": 4.5
+ },
+ "convergence_group": "gen-og-a35",
+ "family": "sail-2d",
+ "fluid": {
+  "nu": 1.48e-05,
+  "rho": 1.225
+ },
+ "geometry": {
+  "bodies": [
+   "gen-design"
+  ],
+  "files": {
+   "gen-design": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "revision": "подставляется при разворачивании"
+ },
+ "mesh": {
+  "body_box": [
+   [
+    -0.2,
+    -1.2,
+    -1000000.0
+   ],
+   [
+    4.1,
+    1.2,
+    1000000.0
+   ]
+  ],
+  "domain": {
+   "aft_l": 1950.0,
+   "down_l": 1.0,
+   "fwd_l": 1950.0,
+   "seed": [
+    900.0,
+    900.0,
+    0.0
+   ],
+   "side_l": 1950.0,
+   "span_m": 0.2,
+   "up_l": 1.0
+  },
+  "family": "gen-ogrid-v1",
+  "grid": "gen-og-c185.p3dfmt",
+  "grid_transform": [],
+  "level": "medium",
+  "n_proc": 3
+ },
+ "notes": "Сечение генакера на СОБСТВЕННОЙ O-сетке по телу (cfd/lib/ogrid.py) вместо декартовой с вырезом. Ячейки обходят обшивку кольцами и сгущаются к ней; ровно ОДНА ячейка по размаху, тогда как у snappy их 2.9 (а у нашей NACA было 25). Дальняя граница на 500 хордах против 5.1 у рабочего случая — тот дефект и был главным поводом. Точки по обшивке сгущены по кривизне: равномерно нельзя, носок радиусом 0.029 м получал три точки, нормали выходили случайными и марш заворачивался на четвёртом слое (258 вывернутых ячеек).",
+ "numerics": {
+  "average_from": 10.0,
+  "dt_s": 0.01,
+  "end_time": 40.0,
+  "maxCo": 1.0,
+  "write_interval": 4.0
+ },
+ "reference": {
+  "area_m2": 0.78,
+  "chord_m": 3.9,
+  "length_m": 3.9,
+  "origin_m": [
+   0.975,
+   0.0,
+   0.0
+  ],
+  "rho": 1.225,
+  "speed_ms": 4.5
+ },
+ "schema": 1,
+ "solver": {
+  "application": "pimpleFoam",
+  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
+  "name": "OpenFOAM",
+  "turbulence": "kOmegaSST",
+  "wall_treatment": "wall-function"
+ },
+ "template": "openfoam-2d-p3d"
+}

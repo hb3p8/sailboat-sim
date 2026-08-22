@@ -141,7 +141,8 @@ def validate(m):
     _extra(mesh, {"level", "family", "cells_target", "base_size_m",
                   "boundary_layers", "domain", "n_proc",
                   "refine", "regions", "surface_distance", "feature_level",
-                  "feature_angle", "grid"}, "mesh")
+                  "feature_angle", "grid", "grid_transform",
+                  "body_box"}, "mesh")
     # Готовая сетка вместо построенной. Имя файла в cfd/grids/, а отпечаток —
     # там же в grids.json: чужая сетка входит в постановку ровно так же, как
     # своя геометрия, и обязана хэшироваться, иначе воспроизвести случай

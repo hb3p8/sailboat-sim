@@ -25,6 +25,11 @@
  "mesh": {
   "family": "naca0012-tmr",
   "grid": "n0012_449-129.p3dfmt.gz",
+  "grid_transform": [
+   "-rotate-x 90",
+   "-rotate-z 180",
+   "-translate \"(1 0 0)\""
+  ],
   "level": "medium",
   "n_proc": 8
  },

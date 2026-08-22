@@ -1,0 +1,35 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| То же, что и с k: подслой разрешён, значит вихревая вязкость на стенке      |
+| равна нулю, а не считается по закону стенки. nutLowReWallFunction именно    |
+| это и делает — возвращает ноль, — тогда как nutUSpaldingWallFunction общего |
+| шаблона восстанавливает её по профилю Сполдинга, что на разрешённой сетке   |
+| лишнее.                                                                    |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      nut;
+}
+
+dimensions      [0 2 -1 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{
+    farfield
+    {
+        type            calculated;
+        value           uniform 0;
+    }
+
+    {{wall_patches}}
+    {
+        type            nutLowReWallFunction;
+        value           uniform 0;
+    }
+
+    #includeEtc "caseDicts/setConstraintTypes"
+}

@@ -359,7 +359,15 @@ def _mesh_context(m):
         "base_size_m": base,
         "refine_min": lo, "refine_max": hi,
         "n_layers": mesh.get("boundary_layers", LEVEL_LAYERS[mesh["level"]]),
-        "cells_target": _cells_target(mesh, nx * ny * nz),
+        # Фон для проверки бюджета — тот, что и правда строит blockMesh. У
+        # плоских шаблонов по размаху ОДНА ячейка (`n_span`), а не `n_z`:
+        # тот описывает высоту домена и в двумерном случае не используется.
+        # Считая по нему, проверка завышала фон вшестеро и отвергала честные
+        # случаи как «без бюджета на измельчение».
+        "cells_target": _cells_target(
+            mesh, nx * ny * (max(1, int(round(span / base)))
+                             if str(m.get("template", "")).startswith("openfoam-2d")
+                             else nz)),
         # Готовая сетка: имя файла в каталоге случая (уже распакованное) и
         # коробка, которой из общей внешней поверхности вырезается тело.
         # Коробка берётся с запасом по хорде и в обрез по толщине: у профиля

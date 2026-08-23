@@ -1,0 +1,131 @@
+{
+ "case_id": "gen-dom-60",
+ "condition": {
+  "alpha_deg": 35.0,
+  "camber": 0.185,
+  "speed_ms": 4.5
+ },
+ "convergence_group": "gen-dom-60",
+ "family": "sail-2d",
+ "fluid": {
+  "nu": 1.48e-05,
+  "rho": 1.225
+ },
+ "geometry": {
+  "bodies": [
+   "gen-design"
+  ],
+  "files": {
+   "gen-design": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "revision": "подставляется при разворачивании"
+ },
+ "mesh": {
+  "base_size_m": 1.414214,
+  "boundary_layers": 0,
+  "cells_target": 3000000,
+  "domain": {
+   "aft_l": 60.0,
+   "down_l": 1.0,
+   "fwd_l": 60.0,
+   "seed": [
+    30.0,
+    30.0,
+    0.0
+   ],
+   "side_l": 60.0,
+   "span_m": 0.2,
+   "up_l": 1.0
+  },
+  "family": "sail2d-v1",
+  "feature_level": 7,
+  "level": "medium",
+  "n_proc": 8,
+  "refine": [
+   3,
+   5
+  ],
+  "regions": [
+   {
+    "box": [
+     [
+      -12.0,
+      -12.0,
+      -0.3
+     ],
+     [
+      24.0,
+      12.0,
+      0.3
+     ]
+    ],
+    "level": 1
+   },
+   {
+    "box": [
+     [
+      -4.0,
+      -5.0,
+      -0.3
+     ],
+     [
+      16.0,
+      5.0,
+      0.3
+     ]
+    ],
+    "level": 2
+   },
+   {
+    "box": [
+     [
+      -1.5,
+      -2.5,
+      -0.3
+     ],
+     [
+      7.0,
+      2.5,
+      0.3
+     ]
+    ],
+    "level": 3
+   }
+  ],
+  "surface_distance": [
+   [
+    0.6,
+    4
+   ]
+  ]
+ },
+ "notes": "Развёртка по ДАЛЬНЕЙ ГРАНИЦЕ: 60 хорд против 20 у рабочего случая. Все прочие параметры сетки — база, уровни, области, сгущение у поверхности — те же, поэтому околотельная ячейка не меняется, и разность ответов есть чувствительность к границе, а не к сетке. Вопрос осмыслен и после поправки §13.30 (домен рабочего случая — 20 хорд, а не 5.1, как я считал): источник эталона держит границу на пятистах хордах, потому что у несущего тела в плоской задаче наведённое поле спадает как 1/r.",
+ "numerics": {
+  "average_from": 10.0,
+  "dt_s": 0.01,
+  "end_time": 40.0,
+  "maxCo": 1.0,
+  "write_interval": 4.0
+ },
+ "reference": {
+  "area_m2": 0.78,
+  "chord_m": 3.9,
+  "length_m": 3.9,
+  "origin_m": [
+   0.975,
+   0.0,
+   0.0
+  ],
+  "rho": 1.225,
+  "speed_ms": 4.5
+ },
+ "schema": 1,
+ "solver": {
+  "application": "pimpleFoam",
+  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
+  "name": "OpenFOAM",
+  "turbulence": "kOmegaSST",
+  "wall_treatment": "wall-function"
+ },
+ "template": "openfoam-2d-urans"
+}

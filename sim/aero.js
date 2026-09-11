@@ -14,7 +14,7 @@
 import { wrapPi, DEG } from './util.js';
 import { Lattice, FreeWake } from './vlm.js';
 import { membraneCamber, slackOf, luffFraction, luffFactor, sectionLift,
-         capLift, liftCeiling } from './membrane.js';
+         capLift, liftCeiling, camberSign } from './membrane.js';
 import { setSailPolar, hasSailPolar, polarCoeffs, polarCeiling,
          polarStallDeg, resetSailPolar } from './polar.js';
 
@@ -951,7 +951,9 @@ export class Rig {
       // уходят по потоку прямо от присоединённого — обычная вихревая решётка.
       const cs = Math.cos(set), sn = Math.sin(set) * rigSide;
       const nc = -Math.sin(chordDir), ns = Math.cos(chordDir);
-      const camSign = Math.sign(alpha || 1);
+      // Знак пуза непрерывен через ноль угла атаки (`camberSign`): скачок
+      // отсюда рождал выброс Γ на верхней полоске генакера.
+      const camSign = camberSign(alpha);
       // Решётка строится по ПРОЕКТНОМУ пузу: летящее ещё не посчитано — его
       // даст сама решётка, — а на матрицу влияния пузо действует слабо, через
       // наклон средней линии в контрольных точках. Силы дальше считаются уже
@@ -1350,7 +1352,7 @@ export class Rig {
         // применяется дважды: сперва к циркуляции, потом ещё раз в сечении, —
         // и парус теряет вдвое больше, чем должен.
         const aEff = G / (Math.PI * g.chord * g.ve) -
-                     Math.sign(g.alpha || 1) * CAMBER_FACTOR * g.camPanel * camS[i] -
+                     camberSign(g.alpha) * CAMBER_FACTOR * g.camPanel * camS[i] -
                      dA[i];
         const raw = g.alpha - aEff;
         const a = Math.abs(g.alpha);

@@ -115,7 +115,8 @@ serve: viewer/terrain.html $(TERRAIN_PACK)
 # Полный прогон (`--full`) и вся батарея — когда есть основания думать, что
 # сломалось. Подробнее и почему именно так — в CLAUDE.md.
 # Отдельную батарею можно позвать по имени: `make t-wind`, `make t-upwind`.
-FAST := axes buoyancy membrane vlm waves ocean wind terrain replay physics sailcoeffs kernel
+FAST := axes buoyancy membrane vlm waves ocean wind terrain replay physics sailcoeffs kernel \
+        gennaker
 # Пелена в медленных: две сорокапятисекундные прогонки подряд, восемнадцать
 # секунд. Проверка там при этом самая важная — что пелена не трогает силы.
 SLOW := upwind wake wing

@@ -49,6 +49,52 @@ function tele(b) {
 }
 
 export const RUNS = {
+  // Силы генакера с гротом на одном курсе и одной длине шкота.
+  //
+  // Нужен стенду `sailforce.test.mjs`: тот перебирает шкот до максимума тяги на
+  // каждом курсе, а это сотня установившихся прогонов — поодиночке они идут
+  // минутами, а друг от друга не зависят вовсе.
+  //
+  // Отдаются СИЛЫ И НАПОР, а не коэффициенты: обезразмеривает пусть батарея,
+  // рядом с тем, с чем сравнивает. Усреднение по последним пяти секундам —
+  // на полных курсах тяга дышит вместе с пеленой, и мгновенный отсчёт врёт.
+  sailForce(pack, spec) {
+    const b = new Boat(pack);
+    b.o.freeWake = true; b.o.wakeForces = true;
+    b.o.crewHike = -1; b.o.crewMass = 219.9;
+    b.wind.o.gust = 0; b.wind.o.shift = 0;
+    b.setGennaker(true);
+    b.o.sheet = (spec.mainSheet ?? 70) * D;
+    b.o.twist = (spec.twist ?? 8) * D;
+    b.o.genSheetLen = spec.len;
+    b.reset();
+    b.o.windSpeed = spec.wind ?? 6;
+    b.o.windDir = (spec.twa ?? 140) * D;      // курс ноль, значит истинный = TWA
+    b.u = 3;
+    const secs = spec.secs ?? 25, hz = 30, win = 5 * hz;
+    let drive = 0, side = 0, q = 0, awa = 0, n = 0;
+    for (let i = 0; i < secs * hz; i++) {
+      hold(b);
+      b.step(1 / hz);
+      if (i < secs * hz - win) continue;
+      const t = b.telemetry;
+      drive += t.driveN; side += t.sideN;
+      // Напор — по кажущемуся ветру у рига, тому же, каким считается парус.
+      const a = b.apparentWind();
+      const v = Math.hypot(a.x, a.y);
+      q += 0.5 * 1.225 * v * v;
+      // Кажущийся угол: откуда дует, от носа. Та же свёртка, что у полосок.
+      awa += Math.PI - Math.abs(Math.atan2(a.y, a.x));
+      n++;
+    }
+    return {
+      twa: spec.twa, len: spec.len,
+      drive: drive / n, side: side / n, q: q / n, awaDeg: awa / n / D,
+      speedKn: b.telemetry.speedKn, heelDeg: Math.abs(b.phi) / D,
+      fuse: b.rig.fuseTrips || 0,
+    };
+  },
+
   // Фордевинд, шкот от добранного до отданного. Пять независимых прогонов.
   downwindSheet(pack, spec) {
     const b = new Boat(pack);

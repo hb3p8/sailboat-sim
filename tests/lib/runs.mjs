@@ -106,6 +106,9 @@ export const RUNS = {
     b.o.crewHike = -1; b.o.crewMass = 219.9;
     b.wind.o.gust = 0; b.wind.o.shift = 0;
     b.o.sheet = spec.sheet * D;
+    // Стаксель травится вместе с гротом, но не дальше СВОЕГО предела: за 35° он
+    // сваливается по потоку (`maxSheet` в aero.js), и дальше травить его нечем.
+    b.o.jibSheet = Math.min(spec.sheet, 35) * D;
     b.o.twist = (spec.twist ?? 0) * D;
     b.reset();
     b.o.windSpeed = spec.wind ?? 6;

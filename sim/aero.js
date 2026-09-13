@@ -53,11 +53,19 @@ export function jibSheetOf(o) {
 //
 // а левая часть это R·cos(θ − φ) при R = hypot(A, y), φ = atan2(y, A). Отсюда θ
 // одним арккосинусом, без поиска и без итераций.
+// Длина шкота: настройка, если задана, иначе середина досягаемого. Отдельной
+// функцией потому, что её спрашивают двое — угол выноса здесь и ткань, которая
+// вешает на этот шкот шкотовый угол (`sim/cloth.js`), — а две записи одного и
+// того же расходятся.
+export function gennakerSheetLen(o, gen) {
+  return o.genSheetLen != null ? o.genSheetLen
+       : (gen.sheet_min_m + gen.sheet_max_m) / 2;
+}
+
 export function gennakerSetOf(o, gen) {
   if (!gen || !gen.sheet_lead_m) return o.genSheet != null ? o.genSheet : 40 * Math.PI / 180;
   const lead = gen.sheet_lead_m, f = gen.foot_m;
-  const L = o.genSheetLen != null ? o.genSheetLen
-          : (gen.sheet_min_m + gen.sheet_max_m) / 2;
+  const L = gennakerSheetLen(o, gen);
   const A = gen.tack[0] - lead[0], y = lead[1], dz = gen.tack[1] - lead[2];
   const R = Math.hypot(A, y), phi = Math.atan2(y, A);
   const c = (A * A + f * f + y * y + dz * dz - L * L) / (2 * f * R);
@@ -838,6 +846,11 @@ export class Rig {
       chord: 0, area: 0, live: false,
       slack: 0, camber: 0, draft: 0.5, fill: 0, aWake: 0, camPanel: 0, gamma: 0,
       luffFrac: 0, margin: 0,
+      // Нагрузка по хорде — наружу, для ткани (`sim/cloth.js`). Копия, а не
+      // ссылка на рабочий буфер: буфер один на весь риг и к концу прохода
+      // держит последнюю полоску. В расчёт отсюда не читает никто.
+      q: new Float64Array(NCHORD),
+      set: 0,
     }));
     this.latQ = new Float64Array(NCHORD);
     this.latSlope = new Float64Array(n * NCHORD);   // наклон средней линии панели
@@ -1378,6 +1391,7 @@ export class Rig {
           G += q[k];
           wsum += q[k] * wake[i * NCHORD + k];
         }
+        for (let k = 0; k < NCHORD; k++) g.q[k] = q[k];
         // Циркуляция полоски наружу: по ней проверяется, что решётка и сечение
         // считают одну и ту же подъёмную силу (tests/wind.test.mjs).
         g.gamma = G;

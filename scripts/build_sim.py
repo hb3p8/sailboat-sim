@@ -35,7 +35,7 @@ MODULES = ["util.js", "terrain.js", "axes.js", "wind.js",
            # область, и обратный дал бы временную мёртвую зону.
            "biotwasm.js", "latticewasm.js", "kernel.js", "vlm.js",
            "membrane.js", "polar.js", "waves.js", "buoyancy.js", "ocean.js", "wake.js",
-           "aero.js", "hydro.js", "telemetry.js", "trace.js", "physics.js",
+           "aero.js", "cloth.js", "hydro.js", "telemetry.js", "trace.js", "physics.js",
            "main.js", "debug.js", "mobile.js", "controls.js", "bench.js",
            # perflog после main.js: он читает `perf` и `renderer`, объявленные
            # там. Порядок здесь — это порядок вклейки в общую область, и

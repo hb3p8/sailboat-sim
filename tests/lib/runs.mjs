@@ -95,6 +95,44 @@ export const RUNS = {
     };
   },
 
+  // Силы грота со стакселем на бейдевинде при заданном триме.
+  //
+  // Близнец `sailForce`, но для лавировки: стенд `upwindforce.test.mjs` ищет
+  // трим с наибольшей ПОДЪЁМНОЙ силой, потому что таблицы ORC — это CLmax, то
+  // есть наибольшее, что парус на этом угле даёт.
+  upwindForce(pack, spec) {
+    const b = new Boat(pack);
+    b.o.freeWake = true; b.o.wakeForces = true;
+    b.o.crewHike = -1; b.o.crewMass = 219.9;
+    b.wind.o.gust = 0; b.wind.o.shift = 0;
+    b.o.sheet = spec.sheet * D;
+    b.o.twist = (spec.twist ?? 0) * D;
+    b.reset();
+    b.o.windSpeed = spec.wind ?? 6;
+    b.o.windDir = (spec.twa ?? 45) * D;        // курс ноль, значит истинный = TWA
+    b.u = 3;
+    const secs = spec.secs ?? 40, hz = 30, win = 5 * hz;
+    let drive = 0, side = 0, q = 0, awa = 0, heel = 0, n = 0;
+    for (let i = 0; i < secs * hz; i++) {
+      hold(b);
+      b.step(1 / hz);
+      if (i < secs * hz - win) continue;
+      const t = b.telemetry;
+      drive += t.driveN; side += t.sideN;
+      const a = b.apparentWind();
+      const v = Math.hypot(a.x, a.y);
+      q += 0.5 * 1.225 * v * v;
+      awa += Math.PI - Math.abs(Math.atan2(a.y, a.x));
+      heel += Math.abs(b.phi);
+      n++;
+    }
+    return {
+      twa: spec.twa, sheet: spec.sheet, twist: spec.twist ?? 0,
+      drive: drive / n, side: side / n, q: q / n, awaDeg: awa / n / D,
+      heelDeg: heel / n / D, speedKn: b.telemetry.speedKn,
+    };
+  },
+
   // Фордевинд, шкот от добранного до отданного. Пять независимых прогонов.
   downwindSheet(pack, spec) {
     const b = new Boat(pack);

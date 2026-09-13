@@ -118,7 +118,18 @@ serve: viewer/terrain.html $(TERRAIN_PACK)
 FAST := axes buoyancy membrane vlm waves ocean wind terrain replay physics sailcoeffs kernel
 # Пелена в медленных: две сорокапятисекундные прогонки подряд, восемнадцать
 # секунд. Проверка там при этом самая важная — что пелена не трогает силы.
-SLOW := upwind wake wing sailforce
+SLOW := upwind wake wing
+# Эталонные стенды — ОТДЕЛЬНОЙ батареей, и это не оформление.
+#
+# Они сравнивают модель с чужими трубными данными (`data/sail/`), и по замыслу
+# их первый прогон записывается как есть, красный или зелёный: полоса допуска
+# назначается до прогона и под ответ не двигается. Держать их в `slow` значило
+# бы красить весь набор постоянно, а тогда он перестаёт что-либо значить — тот
+# же довод, по которому стенд генакера долго не входил в `test`.
+#
+# Гоняются нарочно: `make ref`. Красный здесь означает «разошлись с эталоном»,
+# а не «сломалось».
+REF := sailforce upwindforce
 # Медленное на питоне: совместный вязко-невязкий расчёт, десятки секунд.
 PYSLOW := coupled
 
@@ -127,9 +138,9 @@ PYSLOW := coupled
 # .venv — им нужен numpy, которого системному питону никто не обещал.
 PYTESTS := section bl panel milgram polar cfd
 
-.PHONY: $(addprefix t-,$(FAST) $(SLOW) $(PYTESTS) $(PYSLOW)) slow all-tests
+.PHONY: $(addprefix t-,$(FAST) $(SLOW) $(REF) $(PYTESTS) $(PYSLOW)) slow ref all-tests
 
-$(addprefix t-,$(FAST) $(SLOW)): t-%:
+$(addprefix t-,$(FAST) $(SLOW) $(REF)): t-%:
 	@node tests/$*.test.mjs
 
 $(addprefix t-,$(PYTESTS) $(PYSLOW)): t-%:
@@ -138,6 +149,9 @@ $(addprefix t-,$(PYTESTS) $(PYSLOW)): t-%:
 test: physics $(addprefix t-,$(PYTESTS)) $(addprefix t-,$(FAST))
 
 slow: physics $(addprefix t-,$(PYSLOW)) $(addprefix t-,$(SLOW))
+
+# Сверка с эталонами по силам. Не входит ни в `test`, ни в `slow`.
+ref: physics $(addprefix t-,$(REF))
 
 all-tests: test slow
 

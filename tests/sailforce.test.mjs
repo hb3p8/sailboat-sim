@@ -80,8 +80,20 @@ function refAt(betaDeg, spi) {
 
 // --- модель ---------------------------------------------------------------------
 //
-// Шкот перебирается до максимума тяги — так трим подбирают и в трубе. Сетка по
-// шкоту в регрессионном режиме грубее: положение максимума от этого гуляет на
+// Перебираются ОБА шкота до максимума тяги — так трим подбирают и в трубе.
+//
+// Грот тоже, и это не запас, а исправление свидетеля. Сперва он стоял на
+// неподвижных 70°, и на острых курсах это его убивало: вынос ограничен
+// кажущимся углом (`held = min(sheet, awa)`), при AWA 63° парус со шкотом 60° и
+// больше встаёт ровно по потоку, угол атаки обращается в ноль тождественно, и
+// C_N падает с 1.40 до 0.10. Выглядело это как провал модели — грот отдавал семь
+// процентов эталона, — а было перетравленным шкотом в самом стенде.
+//
+// Одного положения на весь диапазон и не может быть: на TWA 110° лучший шкот
+// грота 45°, на 180° — 85°. Эталон ORC снят при ЛУЧШЕМ триме, и сравнивать с
+// ним надо лучший.
+//
+// Сетка в регрессионном режиме грубее: положение максимума от этого гуляет на
 // полшага, и именно поэтому допуск по углу назначен в десять градусов.
 const TWAS = [110, 120, 130, 140, 150, 160, 170, 180];
 const LENS = [];
@@ -90,35 +102,38 @@ const LENS = [];
   for (let i = 0; i < n; i++)
     LENS.push(G.sheet_min_m + (G.sheet_max_m - G.sheet_min_m) * (i + 0.5) / n);
 }
+const MAINS = pick([20, 30, 45, 60, 70, 85], [30, 45, 60, 85]);
 const SECS = pick(40, 25);
 
 const specs = [];
-for (const twa of TWAS) for (const len of LENS)
-  specs.push({ run: 'sailForce', twa, len, secs: SECS, wind: 6 });
+for (const twa of TWAS) for (const len of LENS) for (const mainSheet of MAINS)
+  specs.push({ run: 'sailForce', twa, len, mainSheet, secs: SECS, wind: 6 });
 
 const out = await pool.map(specs);
 pool.close();
 
-// На каждом курсе — лучший по тяге трим.
+// На каждом курсе — лучший по тяге трим по обоим шкотам.
 const best = [];
+const PER = LENS.length * MAINS.length;
 for (let i = 0; i < TWAS.length; i++) {
-  const row = out.slice(i * LENS.length, (i + 1) * LENS.length);
+  const row = out.slice(i * PER, (i + 1) * PER);
   let b = row[0];
   for (const r of row) if (r.drive > b.drive) b = r;
   best.push(b);
 }
 
-console.log('  курс   шкот    AWA     ход    крен    C_x     C_y    C_y/C_x  | эталон C_x  C_y');
+console.log('  курс  генакер  грот   AWA     ход    крен    C_x     C_y   C_y/C_x | эталон C_x  C_y');
 const model = [];
 for (const r of best) {
   const cx = r.drive / (r.q * AREF), cy = r.side / (r.q * AREF);
   const e = refAt(r.awaDeg, 'асимметричный_на_ДП');
   model.push({ twa: r.twa, awa: r.awaDeg, cx, cy, ref: e, r });
-  console.log('  %s°  %s м  %s°  %s  %s°  %s  %s  %s  |  %s  %s',
-    String(r.twa).padStart(4), r.len.toFixed(1), r.awaDeg.toFixed(0).padStart(5),
+  console.log('  %s°  %s м   %s°  %s°  %s  %s°  %s  %s  %s  | %s  %s',
+    String(r.twa).padStart(4), r.len.toFixed(1), String(r.mainSheet).padStart(3),
+    r.awaDeg.toFixed(0).padStart(4),
     r.speedKn.toFixed(2).padStart(6), r.heelDeg.toFixed(0).padStart(4),
     cx.toFixed(3).padStart(7), cy.toFixed(3).padStart(7),
-    (cy / cx).toFixed(2).padStart(7),
+    (cy / cx).toFixed(2).padStart(6),
     e.cx.toFixed(3).padStart(7), e.cy.toFixed(3).padStart(7));
 }
 console.log('');

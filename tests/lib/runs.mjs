@@ -88,7 +88,7 @@ export const RUNS = {
       n++;
     }
     return {
-      twa: spec.twa, len: spec.len,
+      twa: spec.twa, len: spec.len, mainSheet: spec.mainSheet ?? 70,
       drive: drive / n, side: side / n, q: q / n, awaDeg: awa / n / D,
       speedKn: b.telemetry.speedKn, heelDeg: Math.abs(b.phi) / D,
       fuse: b.rig.fuseTrips || 0,

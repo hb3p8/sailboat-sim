@@ -244,6 +244,10 @@ const DESIGN_CAMBER = {
   gennaker: [0.20, 0.16],
 };
 
+// Рабочие буферы под выборку с полотна: `forces` зовётся каждый шаг, и новые
+// массивы на каждую панель здесь были бы мусором ровно в горячем пути.
+const CL_A = [0, 0, 0], CL_B = [0, 0, 0];
+
 // Итераций нелинейной поправки и её недорелаксация. Шаг ньютоновский, и без
 // недорелаксации связанные полоски раскачиваются: у грота со стакселем поправка
 // одного меняет нагрузку другого. Трёх шагов хватает — четвёртый двигает
@@ -891,7 +895,7 @@ export class Rig {
       // ссылка на рабочий буфер: буфер один на весь риг и к концу прохода
       // держит последнюю полоску. В расчёт отсюда не читает никто.
       q: new Float64Array(NCHORD),
-      set: 0,
+      set: 0, slackCut: 0,
       // Рабочий знак сечения: в какую сторону оно поставлено, непрерывно у нуля
       // угла атаки. Считается один раз в проходе геометрии и служит и пузу
       // панели, и пузырю заполаскивания, и вычету пуза из циркуляции — раньше
@@ -913,6 +917,9 @@ export class Rig {
     // считает силы паруса (`o.wakeForces`). Нитей — по границе на полоску плюс
     // одна: у каждого паруса свой набор, поперёк паруса вихрь не сходит.
     this.wake = null;
+    // Ткань генакера. Заводится снаружи (`Boat.hoistCloth`), чтобы модуль ткани и
+    // модуль решётки не ссылались друг на друга по кругу.
+    this.cloth = null;
     this.latDelta = new Float64Array(n);            // поправка угла, полоске
     this.latCam = new Float64Array(n);              // во сколько сплющено пузо
     this.alphaInd = new Float64Array(n);
@@ -959,6 +966,11 @@ export class Rig {
     out.fyMain = 0; out.setMain = 0;
 
     const rigSide = b.rigSide;
+    // ТКАНЬ ГЕНАКЕРА — ДО прохода по полоскам, по нагрузке ПРОШЛОГО шага. Связь
+    // слабая, без итераций внутри шага: ткань берёт вчерашнее давление, решётка —
+    // сегодняшнюю форму. Так и делают в задачах взаимодействия полотна с потоком
+    // для мягких парусов (JMST 2018), и так же устроено всё запаздывающее здесь.
+    if (this.cloth) this.cloth.step(b, dt);
     // Затенение считается ДО прохода по полоскам: оно нужно каждой из них при
     // расчёте напора, а строится по состоянию ПРОШЛОГО шага.
     const shade = this.wakeShade(b);
@@ -1002,14 +1014,37 @@ export class Rig {
       // шкотовый угол сквозь каретку.
       const sheet = Math.max(st.minSet, sheetOf[st.sail]) +
                     twistOf[st.sail] * st.twistF;
-      const chord = st.chord;
-      // Положение полоски в горизонтной системе. Точка приложения — центр
-      // давления её хорды, а не мачта: поэтому при потраве шкота парусность
-      // уходит назад и в сторону, и приводящий момент меняется сам собой.
-      const zi = st.h * cphi;
-      const yi = -st.h * sphi +
-                 (st.sag * rigSide + CP_CHORD * chord * Math.sin(sheet) * rigSide) * cphi;
-      const xi = st.xLuff - CP_CHORD * chord * Math.cos(sheet);
+      // ГЕОМЕТРИЯ ПОЛОСКИ: у грота со стакселем построчная, у генакера — по ткани.
+      //
+      // Построчная раскладывает хорду ГОРИЗОНТАЛЬНО от передней шкаторины, на
+      // один азимут со скруткой. Гроту со стакселем этого довольно: их передняя
+      // шкаторина прибита по всей длине, а шкотовый угол ходит по погону. Генакеру
+      // нет, и это померено: у такого веера ЗАДНЯЯ ШКАТОРИНА выходит 10.73 м при
+      // скроенных 9.14. И это не скрутка: при нулевой веер даёт 10.12…11.34 м на
+      // всём ходу шкота, то есть невозможен сам по себе.
+      const cloth = st.gennaker ? this.cloth : null;
+      let chord = st.chord, zi, yi, xi, chordDir = 0;
+      let rfLo = 0, rfHi = 0, rfMid = 0;
+      if (cloth) {
+        const rows = (cloth.nRows - 1) / STRIPS, j = i - st.sail * STRIPS;
+        rfLo = j * rows; rfHi = (j + 1) * rows; rfMid = (rfLo + rfHi) / 2;
+        const L = cloth.sample(rfMid, 0, CL_A), T = cloth.sample(rfMid, 1, CL_B);
+        const cvx = T[0] - L[0], cvl = T[1] - L[1];
+        chord = Math.hypot(cvx, cvl);
+        chordDir = chord > 1e-6 ? Math.atan2(cvl, cvx) : Math.PI;
+        const C = cloth.sample(rfMid, CP_CHORD, CL_A);
+        xi = C[0];
+        yi = -C[2] * sphi + C[1] * cphi;
+        zi = C[2] * cphi + C[1] * sphi;
+      } else {
+        // Положение полоски в горизонтной системе. Точка приложения — центр
+        // давления её хорды, а не мачта: поэтому при потраве шкота парусность
+        // уходит назад и в сторону, и приводящий момент меняется сам собой.
+        zi = st.h * cphi;
+        yi = -st.h * sphi +
+             (st.sag * rigSide + CP_CHORD * chord * Math.sin(sheet) * rigSide) * cphi;
+        xi = st.xLuff - CP_CHORD * chord * Math.cos(sheet);
+      }
       // Своя местная скорость: снос, рыскание и качка на своих плечах. Из
       // последнего слагаемого и получается аэродинамическое демпфирование
       // качки — мачта на размахе машет по воздуху и тормозит крен.
@@ -1044,13 +1079,21 @@ export class Rig {
       // Шкот парус не держит, а только ограничивает: гик вытравливается по
       // потоку, пока шкот его не остановит. За своим пределом парус не стоит
       // на упоре, а сваливается по потоку и полощет.
-      const held = Math.min(sheet, awa);
-      const over = Math.min(1, Math.max(0, (sheet - st.maxSheet) / SHEET_GIVE));
-      const set = held + (awa - held) * over;
-      // Хорда смотрит в корму (π) и отклонена от неё на угол выноса. Знак
-      // отклонения даёт сторона паруса, а она непрерывная: посреди переброса
-      // rigSide равен нулю и хорда лежит точно в ДП, как настоящий гик.
-      const chordDir = Math.PI - rigSide * set;
+      // У генакера вынос не назначается шкотом, а получается: хорду ткань уже
+      // положила, а шкот участвовал в этом раньше — через положение шкотового
+      // угла. Здесь только обратный перевод, для приборов и отрисовки.
+      let set;
+      if (cloth) {
+        set = rigSide * wrapPi(Math.PI - chordDir);
+      } else {
+        const held = Math.min(sheet, awa);
+        const over = Math.min(1, Math.max(0, (sheet - st.maxSheet) / SHEET_GIVE));
+        set = held + (awa - held) * over;
+        // Хорда смотрит в корму (π) и отклонена от неё на угол выноса. Знак
+        // отклонения даёт сторона паруса, а она непрерывная: посреди переброса
+        // rigSide равен нулю и хорда лежит точно в ДП, как настоящий гик.
+        chordDir = Math.PI - rigSide * set;
+      }
       const alpha = wrapPi(theta - chordDir);
       g.alpha = alpha; g.awa = awa; g.d1 = w1 / ve; g.d2 = w2 / ve;
       g.set = set;             // вынос: им гик и перекидывается
@@ -1068,6 +1111,11 @@ export class Rig {
       // наклон средней линии в контрольных точках. Силы дальше считаются уже
       // по летящему.
       const cam = st.design * (st.jib && b.o.jibDraft != null ? b.o.jibDraft : b.o.draft);
+      // ЗАПАС ТКАНИ ПО КРОЮ — отдельно от летящего пуза. Ткань берёт из кроя длину
+      // строки и уже из неё получает дугу; подать ей запас, посчитанный по ЕЁ ЖЕ
+      // дуге, значит замкнуть петлю с единственной неподвижной точкой — плоским
+      // парусом (пузо нижней полоски садилось на 0.034 при проектных 0.20).
+      g.slackCut = slackOf(cam);
       g.slack = slackOf(cam);
       g.camPanel = cam;                 // пузо, с которым построены панели
       // Точка на средней линии паруса на доле t хорды: вдоль хорды плюс пузо
@@ -1077,6 +1125,25 @@ export class Rig {
       // сечение целиком стоит там же, где она.
       const sgLo = st.sagLo * rigSide, sgHi = st.sagHi * rigSide,
             sg = st.sag * rigSide;
+      // То же для генакера, только хорда берётся С ПОЛОТНА: её начало, конец и
+      // высота — там, где их нашла ткань. СЕЧЕНИЕ при этом строится по-прежнему
+      // параболой проектного пуза, и это граница применимости, а не полумера:
+      // ткань даёт у топа сечения с пузом 0.40…0.60, а поляра измерена до 0.18.
+      const putC = (arr, rf, t) => {
+        const L = cloth.sample(rf, 0, CL_A);
+        const lx = L[0], ll = L[1], lh = L[2];
+        const T = cloth.sample(rf, 1, CL_B);
+        const vx = T[0] - lx, vl = T[1] - ll, vh = T[2] - lh;
+        const cc = Math.hypot(vx, vl);
+        const bx = cc > 1e-6 ? -vl / cc : 0, bl = cc > 1e-6 ? vx / cc : 1;
+        const bow = camSign * cam * 4 * t * (1 - t) * cc;
+        const ax = lx + t * vx + bow * bx;
+        const as = ll + t * vl + bow * bl;
+        const h = lh + t * vh;
+        arr[0] = ax;
+        arr[1] = -h * sphi + as * e2y;
+        arr[2] = h * cphi + as * e2z;
+      };
       const put = (arr, h, ch, xl, t, sag) => {
         const bow = camSign * cam * 4 * t * (1 - t) * ch;
         const ax = xl - t * ch * cs + bow * nc;
@@ -1088,13 +1155,19 @@ export class Rig {
       // Точки схода пелены — на самой задней кромке (t = 1), а не на последней
       // панели: панель кончается на трёх четвертях своей доли хорды, и пелена,
       // посаженная туда, висела бы в воздухе перед кромкой.
-      put(this.shedLo[i], st.hLo, st.chordLo, st.xLuffLo, 1, sgLo);
-      put(this.shedHi[i], st.hHi, st.chordHi, st.xLuffHi, 1, sgHi);
+      if (cloth) { putC(this.shedLo[i], rfLo, 1); putC(this.shedHi[i], rfHi, 1); }
+      else {
+        put(this.shedLo[i], st.hLo, st.chordLo, st.xLuffLo, 1, sgLo);
+        put(this.shedHi[i], st.hHi, st.chordHi, st.xLuffHi, 1, sgHi);
+      }
       for (let k = 0; k < NCHORD; k++) {
         const p = lat.panels[i * NCHORD + k];
         const tb = (k + 0.25) / NCHORD, tc = (k + 0.75) / NCHORD;
-        put(p.a, st.hHi, st.chordHi, st.xLuffHi, tb, sgHi);
-        put(p.b, st.hLo, st.chordLo, st.xLuffLo, tb, sgLo);
+        if (cloth) { putC(p.a, rfHi, tb); putC(p.b, rfLo, tb); }
+        else {
+          put(p.a, st.hHi, st.chordHi, st.xLuffHi, tb, sgHi);
+          put(p.b, st.hLo, st.chordLo, st.xLuffLo, tb, sgLo);
+        }
         if (b.o.wakeForces) {
           // Со свободной пеленой контур закрывается ЗАДНЕЙ КРОМКОЙ.
           //
@@ -1115,7 +1188,8 @@ export class Rig {
           p.ta[0] = p.a[0]; p.ta[1] = p.a[1]; p.ta[2] = p.a[2];
           p.tb[0] = p.b[0]; p.tb[1] = p.b[1]; p.tb[2] = p.b[2];
         }
-        put(p.c, st.h, chord, st.xLuff, tc, sg);
+        if (cloth) putC(p.c, rfMid, tc);
+        else put(p.c, st.h, chord, st.xLuff, tc, sg);
         // Нормаль повёрнута на местный наклон средней линии — отсюда и берётся
         // подъёмная сила пуза, без отдельного слагаемого.
         const sl = camSign * cam * 4 * (1 - 2 * tc);
@@ -1134,11 +1208,13 @@ export class Rig {
         const o = i * 2 * (NCHORD + 1) * 3, tmp = [0, 0, 0];
         for (let j = 0; j <= NCHORD; j++) {
           const t = j / NCHORD;
-          put(tmp, st.hLo, st.chordLo, st.xLuffLo, t, sgLo);
+          if (cloth) putC(tmp, rfLo, t);
+          else put(tmp, st.hLo, st.chordLo, st.xLuffLo, t, sgLo);
           this.surf[o + j * 6] = tmp[0];
           this.surf[o + j * 6 + 1] = tmp[1];
           this.surf[o + j * 6 + 2] = tmp[2];
-          put(tmp, st.hHi, st.chordHi, st.xLuffHi, t, sgHi);
+          if (cloth) putC(tmp, rfHi, t);
+          else put(tmp, st.hHi, st.chordHi, st.xLuffHi, t, sgHi);
           this.surf[o + j * 6 + 3] = tmp[0];
           this.surf[o + j * 6 + 4] = tmp[1];
           this.surf[o + j * 6 + 5] = tmp[2];

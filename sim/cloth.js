@@ -17,19 +17,18 @@
 // ребро к его длине. Она устойчива при любом шаге и не требует ни матрицы, ни
 // жёсткости — а жёсткости у ткани и нет.
 //
-// ЧТО ЭТО НЕ ДЕЛАЕТ. В силы ткань не идёт: решётка по-прежнему живёт на
-// полосках с одномерной мембраной, и отпечаток от этого модуля не меняется ни
-// на байт. Это шаг Б2 плана, и он нарочно остановлен на картинке — связь ткани
-// с решёткой в обе стороны это шаг Б3, у него своя мерка на автоколебание.
+// ТКАНЬ ИДЁТ И В СИЛЫ (шаг Б3): по этому полотну решётка строит панели генакера,
+// его точками схода сходит пелена, и его хорда задаёт угол атаки. Связь слабая,
+// без итераций внутри шага — ткань берёт вчерашнее давление, решётка сегодняшнюю
+// форму.
 //
-// Цена этого выбора названа прямо: нарисованное полотно и посчитанные панели
-// РАСХОДЯТСЯ. Ткань находит поверхность между тремя углами сама, а решётка
-// по-прежнему раскладывает хорды горизонтальным веером из шкота со скруткой, и
-// у этого веера задняя шкаторина выходит 10.7 м при скроенных 9.1 — на 17 %
-// длиннее, чем на парусе есть ткани. До сих пор картинка и решётка совпадали по
-// построению, и это было достоинством ровно до тех пор, пока обе половины
-// считали одно и то же неверно. Сводит их обратно шаг Б3, где ткань идёт уже и
-// в силы.
+// Ради чего это всё. У прежнего горизонтального веера полосок задняя шкаторина
+// выходила 10.7 м при скроенных 9.1 — на 17 % длиннее, чем на парусе есть ткани,
+// то есть поверхность, на которой считались силы, сшить было нельзя. По ткани она
+// выходит 8.7 м, и скрутка получается сама, обратного знака: верхние сечения
+// приходят к диаметральной, потому что фал сидит на мачте, а шкотовый угол
+// вынесен вбок. Промах модели по тяге против продувок падает при этом с 69 % до
+// 39 % (docs/gennaker-sota-plan.md, «Б3 сделан»).
 
 import { edgeFn, sailSagAt, STRIPS, NCHORD, gennakerClew } from './aero.js';
 
@@ -100,6 +99,7 @@ export class Cloth {
     this.si = si;
     this.bend = opts && opts.bend != null ? opts.bend : BEND;
     this.rigRef = null;
+    this.nRows = CLOTH_ROWS;
     const N = CLOTH_ROWS * CLOTH_COLS;
     this.n = N;
     this.pos = new Float64Array(N * 3);
@@ -178,6 +178,7 @@ export class Cloth {
     const L = Math.hypot(dx, dz) || 1;
     this.rnx = dz / L; this.rny = -dx / L;
     this.ready = false;
+    this.tmpA = [0, 0, 0]; this.tmpB = [0, 0, 0]; this.tmpC = [0, 0, 0];
     this.clew = idx(0, CLOTH_COLS - 1);
     this.tack = idx(0, 0);
     this.head = idx(CLOTH_ROWS - 1, 0);
@@ -349,8 +350,14 @@ export class Cloth {
     const env = b.p.environment;
     const side = b.rigSide == null ? 1 : b.rigSide;
     // Запас ткани по полоскам — тот же, из которого мембрана считает пузо.
+    // Запас ткани по полоскам — ПО КРОЮ, а не по летящей дуге. Летящую даёт сама
+    // ткань, и кормить её собственным ответом значит замкнуть петлю, единственная
+    // неподвижная точка которой — плоский парус.
     const slack = new Array(STRIPS);
-    for (let i = 0; i < STRIPS; i++) slack[i] = (calc[base + i] || {}).slack || 0;
+    for (let i = 0; i < STRIPS; i++) {
+      const g = calc[base + i] || {};
+      slack[i] = g.slackCut || g.slack || 0;
+    }
     // Выкройка пересчитывается только когда меняется запас ткани, то есть на
     // ползунке пуза. Она стоит около четверти всей цены шага, а между кадрами
     // не меняется вовсе.
@@ -507,28 +514,38 @@ export class Cloth {
     return [this.nrm[k], this.nrm[k + 1], this.nrm[k + 2]];
   }
 
-  // Точка поверхности на строке `r` и доле `t` вдоль полотна.
-  sample(r, t, out) {
+  // Точка поверхности на строке `rf` и доле `t` вдоль полотна. Строка ДРОБНАЯ:
+  // полосок решётки шесть, строк одиннадцать, и границы полосок между строк не
+  // ложатся. Между строками и столбцами — билинейная выборка: полотно гладкое, и
+  // разрешать его мельче сетки узлов всё равно нечем.
+  sample(rf, t, out) {
+    const y = Math.min(CLOTH_ROWS - 1, Math.max(0, rf));
+    const r = Math.min(CLOTH_ROWS - 2, Math.floor(y)), u = y - r;
     const x = Math.min(CLOTH_COLS - 1, Math.max(0, t * (CLOTH_COLS - 1)));
-    const c = Math.min(CLOTH_COLS - 2, Math.floor(x)), s = x - c;
+    const c = Math.min(CLOTH_COLS - 2, Math.floor(x)), v = x - c;
+    const p = this.pos;
     const a = idx(r, c) * 3, b = idx(r, c + 1) * 3;
-    out[0] = this.pos[a] + (this.pos[b] - this.pos[a]) * s;
-    out[1] = this.pos[a + 1] + (this.pos[b + 1] - this.pos[a + 1]) * s;
-    out[2] = this.pos[a + 2] + (this.pos[b + 2] - this.pos[a + 2]) * s;
+    const e = idx(r + 1, c) * 3, f = idx(r + 1, c + 1) * 3;
+    for (let k = 0; k < 3; k++) {
+      const lo = p[a + k] + (p[b + k] - p[a + k]) * v;
+      const hi = p[e + k] + (p[f + k] - p[e + k]) * v;
+      out[k] = lo + (hi - lo) * u;
+    }
     return out;
   }
 
   // Пузо строки: наибольшее отклонение от хорды, в долях хорды. Меряется тем
   // же, чем меряет себя мембрана, — иначе сравнивать их было бы не с чем.
-  rowCamber(r) {
-    const p = this.pos, a = idx(r, 0) * 3, b = idx(r, CLOTH_COLS - 1) * 3;
-    const ex = p[b] - p[a], ey = p[b + 1] - p[a + 1], ez = p[b + 2] - p[a + 2];
+  rowCamber(rf) {
+    const A = this.tmpA, B = this.tmpB, C = this.tmpC;
+    this.sample(rf, 0, A); this.sample(rf, 1, B);
+    const ex = B[0] - A[0], ey = B[1] - A[1], ez = B[2] - A[2];
     const c = Math.hypot(ex, ey, ez);
     if (c < 1e-6) return { camber: 0, draft: 0.5, chord: c };
     let best = 0, at = 0.5;
     for (let k = 1; k + 1 < CLOTH_COLS; k++) {
-      const i = idx(r, k) * 3;
-      const vx = p[i] - p[a], vy = p[i + 1] - p[a + 1], vz = p[i + 2] - p[a + 2];
+      this.sample(rf, k / (CLOTH_COLS - 1), C);
+      const vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
       const t = (vx * ex + vy * ey + vz * ez) / (c * c);
       const dx = vx - t * ex, dy = vy - t * ey, dz = vz - t * ez;
       const d = Math.hypot(dx, dy, dz);

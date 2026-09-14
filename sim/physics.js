@@ -23,6 +23,7 @@ import { WindField } from './wind.js';
 import { Lattice } from './vlm.js';
 import { membraneCamber, slackOf, luffFraction, luffFactor, sectionLift, capLift, liftCeiling } from './membrane.js';
 import { seaState, addedResistance } from './waves.js';
+import { Cloth } from './cloth.js';
 import { Buoyancy } from './buoyancy.js';
 import { wrapPi, clamp, DEG } from './util.js';
 import { lerpTable, foilCoeffs, hullResistance, hullLateral, hullHeelYaw,
@@ -256,6 +257,7 @@ export class Boat {
     // тот же принцип, что у акватории: нет данных — веди себя как раньше.
     this.buoy = new Buoyancy(pack);
     this.rig = new Rig(pack, this.o.gennakerUp);
+    this.hoistCloth();
     this.reset();
   }
 
@@ -291,7 +293,17 @@ export class Boat {
     this.o.jibUp = !up;
     const keep = this.rig.wakeLen;
     this.rig = new Rig(this.p, up);
+    this.hoistCloth();
     if (keep) this.rig.wakeLen = keep;
+  }
+
+  // Ткань генакера заводится здесь, а не в риге: у решётки нет причин знать про
+  // модуль ткани, а у ткани есть — она берёт у решётки давление. Одна ссылка в
+  // одну сторону вместо круга.
+  hoistCloth() {
+    const sails = this.rig.sails;
+    this.rig.cloth = sails.length > 2 && sails[2].gennaker
+      ? new Cloth(sails[2], 2) : null;
   }
 
 

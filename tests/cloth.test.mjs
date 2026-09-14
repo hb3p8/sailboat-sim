@@ -51,7 +51,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
 import { Cloth, CLOTH_ROWS, CLOTH_COLS } from '../sim/cloth.js';
-import { STRIPS } from '../sim/aero.js';
+import { STRIPS, gennakerClew } from '../sim/aero.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PACK = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
@@ -159,43 +159,15 @@ function quiver(b, cl, secs = 5) {
   return sw;
 }
 
-// Дуга, по которой шкотовый угол ходит НА САМОМ ДЕЛЕ: окружность вокруг оси
-// галс—фал. Только на ней обе шкаторины остаются той длины, какой скроены, —
-// расстояния до галса и до фала вдоль неё не меняются вовсе. Нужна здесь как
-// ГРАНИЧНОЕ УСЛОВИЕ опыта: прибить угол на неё и посмотреть, что скажет то же
-// самое полотно, когда геометрия ему не мешает. В модель она пока не идёт.
-function clewArc(gen) {
-  const tk = gen.tack, hd = gen.head, f = gen.foot_m;
-  const ax = hd[0] - tk[0], az = hd[1] - tk[1], L = Math.hypot(ax, az);
-  const u = [ax / L, az / L];
-  const t = -f * u[0];
-  const per = [-f - t * u[0], -t * u[1]], R = Math.hypot(per[0], per[1]);
-  return { c: [tk[0] + t * u[0], tk[1] + t * u[1]], e: [per[0] / R, per[1] / R], r: R };
-}
-function clewAt(arc, th) {
-  return [arc.c[0] + arc.r * arc.e[0] * Math.cos(th),
-          arc.r * Math.sin(th),
-          arc.c[1] + arc.r * arc.e[1] * Math.cos(th)];
-}
-// Длина шкота вдоль этой дуги: |угол − обух|² = A + B·cos θ + E·sin θ, то есть
-// один арккосинус, как и у нынешней дуги. Ветвь берётся ЗА минимумом длины —
-// там, где потрава шкота выносит угол наружу, а не заводит обратно.
-function thetaFor(arc, lead, L) {
-  const d = [arc.c[0] - lead[0], -lead[1], arc.c[1] - lead[2]];
-  const A = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + arc.r * arc.r;
-  const B = 2 * arc.r * (d[0] * arc.e[0] + d[2] * arc.e[1]);
-  const E = 2 * arc.r * d[1];
-  const H = Math.hypot(B, E), psi = Math.atan2(E, B);
-  const c = Math.max(-1, Math.min(1, (L * L - A) / H));
-  let th = psi + 2 * Math.PI - Math.acos(c);
-  while (th > Math.PI) th -= 2 * Math.PI;
-  return th;
-}
-// Прибить шкотовый угол на эту дугу вместо шкота. Оборачивает проход по связям,
-// а не подменяет его: всё остальное полотно живёт по своим правилам.
+// Прибить шкотовый угол туда, где его держит модель.
+//
+// `gennakerClew` ставит его на окружность вокруг оси галс—фал — единственную,
+// на которой обе шкаторины остаются скроенной длины (шаг Б0′). Опыт здесь в том,
+// чтобы дать ткани ЭТУ точку вместо шкота и посмотреть, что скажет полотно,
+// когда угол стоит там, где ему положено. Оборачивает проход по связям, а не
+// подменяет его: всё остальное полотно живёт по своим правилам.
 function pinClew(cloth, gen, len) {
-  const arc = clewArc(gen), th = thetaFor(arc, gen.sheet_lead_m, len);
-  const p = clewAt(arc, th);
+  const p = gennakerClew({ genSheetLen: len }, gen);
   const base = cloth.project.bind(cloth);
   cloth.project = function (b, side) {
     const k = this.clew * 3;
@@ -205,7 +177,7 @@ function pinClew(cloth, gen, len) {
     this.pos[k + 2] = p[2];
     base(b, side);
   };
-  return { th, p };
+  return p;
 }
 
 console.log('=== ткань на бакштаге и на полном ===\n');
@@ -255,8 +227,8 @@ for (const c of CASES) {
 }
 
 console.log('=== то же полотно при замкнутой геометрии угла ===\n');
-console.log('Опыт, а не модель: шкотовый угол прибит на дугу вокруг оси галс—фал,');
-console.log('где обе шкаторины остаются скроенной длины. Всё прочее без изменений.\n');
+console.log('Шкотовый угол прибит туда, где его держит модель (шаг Б0′): на дугу');
+console.log('вокруг оси галс—фал. Всё прочее без изменений.\n');
 
 let pinTaut = 0, pinMem = 0, pinQuiver = 0;
 for (const c of CASES) {
@@ -266,7 +238,7 @@ for (const c of CASES) {
   for (let i = 0; i < 25 * 30; i++) { hold(b); b.step(1 / 30); cloth.step(b, 1 / 30); }
   const qv = quiver(b, cloth);
   pinQuiver = Math.max(pinQuiver, qv);
-  const set = Math.atan2(Math.abs(pin.p[1]), PACK.rig.gennaker.tack[0] - pin.p[0]);
+  const set = Math.atan2(Math.abs(pin[1]), PACK.rig.gennaker.tack[0] - pin[0]);
   console.log(`TWA ${c.twa}°, шкот ${c.len} м: вынос ${(set / D).toFixed(1)}°, ` +
               `угол выше галса на ${cloth.clewRise().toFixed(2)} м, ` +
               `растяжение ${(stretch(cloth) * 100).toFixed(2)} %, дрожь ${(qv * 1000).toFixed(1)} мм`);
@@ -296,30 +268,21 @@ check(Math.max(worstMem, pinMem) < 0.20,
 
 check(worstMs < 0.6, 'цена шага ткани (предел 0.6 мс)', worstMs.toFixed(3) + ' мс');
 
-// --- геометрия обвода: ОТКРЫТО, числа записываются ---------------------------
+// --- что осталось открытым: числа записываются, проверкой не являются --------
 {
   const g = PACK.rig.gennaker;
-  const tk = g.tack, hd = g.head, f = g.foot_m;
-  const hd3 = [hd[0], 0, hd[1]];
   const dd = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-  let mx = 0;
-  for (let th = 0; th <= 110; th += 5) {
-    const t = th * D;
-    mx = Math.max(mx, dd(hd3, [tk[0] - f * Math.cos(t), f * Math.sin(t), tk[1]]));
-  }
+  const built = dd([g.head[0], 0, g.head[1]], gennakerClew({ genSheetLen: 5.5 }, g));
   console.log('\n--- открыто: числа записываются, проверкой не являются ---');
-  console.log(`задняя шкаторина: заявлено ${g.leech_m.toFixed(3)} м, ` +
-              `на дуге шкотового угла требуется до ${mx.toFixed(3)} м ` +
-              `(+${((mx / g.leech_m - 1) * 100).toFixed(0)} %)`);
+  console.log(`задняя шкаторина построена ${built.toFixed(3)} м против заявленных ` +
+              `${g.leech_m.toFixed(3)} (+${((built / g.leech_m - 1) * 100).toFixed(1)} %) — это Б1`);
   console.log(`колебание на замороженном входе: размах узла до ` +
               `${(worstQuiver * 1000).toFixed(0)} мм за 5 с на шкоте и до ` +
-              `${(pinQuiver * 1000).toFixed(0)} мм при замкнутой геометрии угла ` +
-              `(цель §Б2 — 20 мм)`);
+              `${(pinQuiver * 1000).toFixed(0)} мм при прибитом угле (цель §Б2 — 20 мм)`);
   console.log('Проверкой это не ставится нарочно: у слабо натянутой мембраны под');
   console.log('следящей нагрузкой равновесие и не обязано быть устойчивым — настоящий');
   console.log('спинакер по слабине именно так и заворачивается. Требовать покоя можно');
-  console.log('с ПОСТАВЛЕННОГО паруса, а поставленного эта геометрия не даёт.');
-  console.log('и то и другое лечится обводом, а не решателем: см. заголовок.');
+  console.log('с ПОСТАВЛЕННОГО паруса, а поставленного этот обвод не даёт.');
 }
 
 console.log(bad ? `\nПЛОХО: ${bad}` : '\nвсё ок');

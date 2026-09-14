@@ -34,7 +34,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
-import { gennakerSetOf } from '../sim/aero.js';
+import { gennakerSetOf, gennakerClew } from '../sim/aero.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PACK = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
@@ -74,6 +74,40 @@ const G = PACK.rig.gennaker;
     prev = a;
   }
   check('вынос растёт с длиной шкота монотонно', mono);
+  // ЗАМКНУТОСТЬ ТРЁХ ШКАТОРИН. Шкотовый угол держат две снасти-не-снасти —
+  // нижняя и задняя шкаторины, — и обе концами закреплены. Значит при любой
+  // длине шкота расстояния до галса и до фала обязаны быть ОДНИ И ТЕ ЖЕ. Пока
+  // угол водился по горизонтальной окружности вокруг галса, |фал—шкот| рос с
+  // 8.66 до 10.68 м: задняя шкаторина растягивалась на четверть, и летящей
+  // формы у паруса не было вовсе (поймано тканью, docs/gennaker-sota-plan.md,
+  // §Б2). Это §4.8 плана, и здесь он закрывается.
+  let foot0 = null, leech0 = null, footMax = 0, leechMax = 0;
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const tack3 = [G.tack[0], 0, G.tack[1]], head3 = [G.head[0], 0, G.head[1]];
+  for (let L = G.sheet_min_m; L <= G.sheet_max_m; L += 0.05) {
+    const c = gennakerClew({ genSheetLen: L }, G);
+    const f = dist(tack3, c), e = dist(head3, c);
+    if (foot0 == null) { foot0 = f; leech0 = e; }
+    footMax = Math.max(footMax, Math.abs(f - foot0));
+    leechMax = Math.max(leechMax, Math.abs(e - leech0));
+  }
+  check('нижняя шкаторина не тянется ни при каком шкоте', footMax < 1e-3,
+        (footMax * 1000).toFixed(3) + ' мм');
+  check('задняя шкаторина не тянется ни при каком шкоте', leechMax < 1e-3,
+        (leechMax * 1000).toFixed(3) + ' мм');
+  check('нижняя шкаторина построена той длины, что заявлена',
+        Math.abs(foot0 - G.foot_m) < 1e-3, foot0.toFixed(4) + ' против ' + G.foot_m);
+  // Задняя ПО ДУГЕ длиннее прямой фал—шкот ровно на свой серп: дуга, по которой
+  // ходит шкотовый угол, держит ПРЯМУЮ. Разница — то, чем шкаторина выгнута, и
+  // она обязана быть небольшой.
+  check('серп задней шкаторины не больше половины нижней',
+        G.leech_m - leech0 < 0.5 * G.foot_m,
+        (G.leech_m - leech0).toFixed(3) + ' м = ' +
+        ((G.leech_m - leech0) / G.foot_m).toFixed(2) + ' нижней');
+  // Шкотовый угол ПОДНИМАЕТСЯ над галсом, а не ползает по палубе (§Б0.4).
+  const rise = gennakerClew({ genSheetLen: G.sheet_max_m }, G)[2] - G.tack[1];
+  check('на отданном шкоте шкотовый угол поднят над галсом больше чем на метр',
+        rise > 1.0, rise.toFixed(2) + ' м');
 }
 
 // --- топология рига -----------------------------------------------------------

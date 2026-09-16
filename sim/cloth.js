@@ -30,7 +30,8 @@
 // вынесен вбок. Промах модели по тяге против продувок падает при этом с 69 % до
 // 39 % (docs/gennaker-sota-plan.md, «Б3 сделан»).
 
-import { edgeFn, sailSagAt, STRIPS, NCHORD, gennakerClew } from './aero.js';
+import { edgeFn, sailSagAt, STRIPS, NCHORD, gennakerClew,
+         gennakerSheetLen } from './aero.js';
 
 // Сетка ткани. Строк — как у отрисовки (SAIL_ROWS), чтобы полотно и обвод резались
 // по одним и тем же высотам; столбцов девять при трёх панелях решётки, то есть
@@ -75,6 +76,35 @@ export const CLOTH_COLS = 9;
 // раскачку. Оба числа — ворота стенда (`tests/cloth.test.mjs`), оба сейчас
 // красные, и оба держат шаг В1 открытым.
 export const CLOTH_ITER = 10;
+// СВОБОДНЫЙ ШКОТОВЫЙ УГОЛ — вариант шага В2, и пока он ВЫКЛЮЧЕН.
+//
+// Сам шкот сделан как ему и положено: односторонняя связь до обуха (`sheet`
+// ниже), длина выдерживается в точности при натяжении, слабина разрешена. Это
+// половина ворот В2, и она взята.
+//
+// Со свободным углом полотно, однако, разваливается ровно так же, как в первом
+// заходе: шкотовый угол уходит к оси галс—фал (1.22 м при шкоте 7.5 против
+// 3.61 у дуги), на замороженной лодке ткань не приходит в покой (размах пуза
+// 0.122 при пороге 0.01, отношение конца к началу 0.90), карта даёт 24 красных
+// клетки из 36 при худшей 275 % и качке до 75.7°, эталон ORC разваливается по
+// спаду к фордевинду (0.30 против 0.57).
+//
+// Причина на этот раз НАЙДЕНА И ПОМЕРЕНА, и она не в шкоте. У полотна
+// шкаторины не той длины, что объявлены в крое:
+//
+//     шкаторина   у выкройки   в крое   расхождение
+//     нижняя        4.292      3.890     +10.3 %
+//     задняя        8.668      9.141      −5.2 %
+//     передняя      9.783      9.787      −0.0 %
+//
+// Пока угол был прибит к дуге, это ничего не решало — его ставила дуга. Свободный
+// угол держат ровно шкот и две шкаторины, и с нижней на десятую часть длиннее
+// настоящей ему и вправду некуда деваться, кроме как уехать к галсу.
+//
+// Поэтому В2 упирается в В1: «шкаторины — гибкие границы С ДЛИНОЙ ПО ТКАНИ».
+// Пока длины не сойдутся, свободный угол включать нельзя. Ворота на это заведены
+// (`tests/cloth.test.mjs`), и они красные.
+const FREE_CLEW = false;
 const TOP_SWEEPS = 4;
 const ITER = CLOTH_ITER;
 const OMEGA = 1;
@@ -136,6 +166,7 @@ export class Cloth {
     this.rows = opts && opts.rows ? opts.rows : CLOTH_ROWS;
     this.cols = opts && opts.cols ? opts.cols : CLOTH_COLS;
     this.iter = opts && opts.iter ? opts.iter : ITER;
+    this.freeClew = opts && opts.freeClew != null ? opts.freeClew : FREE_CLEW;
     this.rigRef = null;
     this.nRows = this.rows;
     const N = this.rows * this.cols;
@@ -342,7 +373,7 @@ export class Cloth {
     }
     this.w[this.tack] = 0;
     this.w[this.head] = 0;
-    this.w[this.clew] = 0;
+    if (!this.freeClew) this.w[this.clew] = 0;
   }
 
   // Начальное положение: полотно ставится туда, где его до сих пор рисовали, —
@@ -463,7 +494,8 @@ export class Cloth {
     //
     // Побочно и важно: картинка и решётка сходятся в углах. Полотно между
     // углами ткань по-прежнему находит сама — это и есть то, чего у полосок нет.
-    if (this.si === 2 && b.p.rig.gennaker && b.p.rig.gennaker.clew_arc_r > 0) {
+    if (!this.freeClew &&
+        this.si === 2 && b.p.rig.gennaker && b.p.rig.gennaker.clew_arc_r > 0) {
       const c = gennakerClew(b.o, b.p.rig.gennaker), k = this.clew * 3;
       this.pos[k] = c[0];
       this.pos[k + 1] = Math.abs(c[1]) * Math.sign(side || -1);
@@ -713,12 +745,37 @@ export class Cloth {
     this.board();
   }
 
+  // ШКОТ — ОДНОСТОРОННЯЯ СВЯЗЬ ДО ОБУХА, а не посадка угла на дугу.
+  //
+  // Шкот говорит «дальше нельзя» и ничего не говорит о том, где угол стоит:
+  // верёвка тянет и не толкает. Где угол стоит, решают вместе шкот, обе
+  // шкаторины и давление, и решать это должна ткань.
+  //
+  // Прежде угол сажался на `gennakerClew` — окружность вокруг оси галс—фал, на
+  // ней точка по длине шкота. Это МНОЖЕСТВО, где обе шкаторины натянуты РОВНО
+  // в струну, то есть край допустимой области, а не вся она: у гибкой шкаторины
+  // длиной L условие цело́сти — |A − B| ≤ L. Дуга запрещала всю слабину, то есть
+  // ровно те состояния, ради которых заводится заворот и сложение.
+  sheet(b, side) {
+    const gen = b.p && b.p.rig && b.p.rig.gennaker;
+    if (!gen || !gen.sheet_lead_m) return;
+    const L = gennakerSheetLen(b.o, gen), lead = gen.sheet_lead_m;
+    const lx = lead[0], ly = Math.abs(lead[1]) * Math.sign(side || -1), lz = lead[2];
+    const k = this.clew * 3, p = this.pos;
+    const dx = p[k] - lx, dy = p[k + 1] - ly, dz = p[k + 2] - lz;
+    const d = Math.hypot(dx, dy, dz);
+    if (!(d > L) || d < 1e-9) return;      // слабина — шкот не работает
+    const g = (d - L) / d;
+    p[k] -= g * dx; p[k + 1] -= g * dy; p[k + 2] -= g * dz;
+  }
+
   project(b, side) {
     for (let it = 0; it < this.iter; it++) {
       this.sweep(null, this.ci.length);
       // Добавочные проходы по верху: вырожденные ячейки у дощечки сходятся
       // много медленнее прочих, а список их вчетверо короче общего.
       for (let j = 0; j < TOP_SWEEPS; j++) this.sweep(this.topIdx, this.topIdx.length);
+      if (this.freeClew) this.sheet(b, side);
     }
   }
 

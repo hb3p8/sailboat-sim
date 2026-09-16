@@ -19,10 +19,13 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { sailCoeffs } from '../sim/aero.js';
+import { setSailPolar, resetSailPolar, polarCoeffs, polarCeiling,
+         polarStallDeg } from '../sim/polar.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const W = JSON.parse(readFileSync(join(ROOT, 'data/section/wallis_arl74.json'), 'utf8'));
 const M = JSON.parse(readFileSync(join(ROOT, 'data/section/milgram_cr1767.json'), 'utf8'));
+const PACK = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
 const D = Math.PI / 180;
 
 let failures = 0;
@@ -184,6 +187,77 @@ for (let i = 0; i < ma.length; i++) {
 console.log('');
 check('на большом пузе расходимся сильнее, но в пределах трети',
   worst12 < 0.35, 'худшее отклонение ' + (worst12 * 100).toFixed(0) + '%');
+
+// --- РАБОЧИЙ ПУТЬ: измеренная таблица ------------------------------------------
+//
+// Всё, что выше, меряет ЗАПАСНОЙ путь. `sailCoeffs` читает таблицу только когда
+// её кто-то поставил, а ставит её сборка рига; здесь рига нет, и до этого места
+// батарея сверяла с опытом ту самую формулу, которую таблица заменила. Проверка
+// не врала — она просто была не про то, чем модель считает.
+//
+// Ниже таблица ставится явно, и спрашивается то, чего у формулы не было:
+// согласие ДВУХ ПОЛОВИН одного модуля. `polarCoeffs` отдаёт кривую, а
+// `polarCeiling` — потолок, которым в `aero.js` ограничивается циркуляция
+// решётки. Если сечение отдаёт больше, чем его же потолок разрешает решётке,
+// две половины считают разные паруса.
+setSailPolar(PACK.sail_polar);
+resetSailPolar();
+const TB = PACK.sail_polar;
+const SOFT = new Set(TB['мягкий_срыв'] || []);
+
+console.log('\nПотолок против самого сечения (рабочий путь, измеренная таблица):\n');
+console.log('     пузо   потолок   наибольшее cl   на α°   до какого угла смотрим');
+let worstCeil = 0;
+for (const cam of TB.camber) {
+  // Докуда сечение ещё держит поток. У рядов с острым срывом — до срыва, он у
+  // них и есть край; у рядов Милгрэма срыва нет, и край — последний угол, на
+  // котором их МЕРИЛИ.
+  const to = SOFT.has(cam) ? 24 : polarStallDeg(cam);
+  let m = 0, at = 0;
+  for (let a = 0; a <= to; a += 0.25) {
+    const v = Math.abs(polarCoeffs(a * D, cam).cl);
+    if (v > m) { m = v; at = a; }
+  }
+  const ceil = polarCeiling(cam);
+  worstCeil = Math.max(worstCeil, m / ceil);
+  console.log('   %s%% %s %s %s %s', (cam * 100).toFixed(0).padStart(6),
+    ceil.toFixed(3).padStart(9), m.toFixed(3).padStart(15),
+    at.toFixed(1).padStart(7), to.toFixed(1).padStart(10) + '°');
+}
+console.log('');
+check('сечение нигде не отдаёт больше, чем его же потолок разрешает решётке',
+  worstCeil <= 1.001, 'худший перебор ' + worstCeil.toFixed(3) + '×');
+
+// Потолок ряда — это его наибольшее ИЗМЕРЕННОЕ cl, и для рядов Милгрэма это
+// числа с фигур 6a и 8a, а не то, что попало в чужое окно поиска.
+for (const [cam, want] of [[0.12, 2.05], [0.18, 2.48]]) {
+  check('потолок ряда ' + (cam * 100).toFixed(0) + '% равен его измеренной вершине',
+    Math.abs(polarCeiling(cam) - want) < 0.01,
+    polarCeiling(cam).toFixed(3) + ' против ' + want.toFixed(2));
+}
+
+// --- куда модель заходит за измеренное -----------------------------------------
+//
+// Таблица измерена до пуза 18%, а `slot` за последним рядом молча его держит.
+// Держать — не выдумка: правила продолжения проверены на единственной паре
+// глубоких рядов одного опыта (Милгрэм 12 и 18%) и оказались вдвое хуже (см.
+// docs/wake.md). Но знать, НАСКОЛЬКО модель выходит за измеренное, обязательно,
+// иначе однажды выйдет далеко и никто не заметит.
+const LAST = TB.camber[TB.camber.length - 1];
+console.log('\nДокуда модель спрашивает таблицу (крой × ручка «Пузо» 40…130%):\n');
+console.log('     парус   крой у пятки   самое полное   за измеренным');
+let worstOver = 0;
+for (const [who, design] of [['грот', 0.125], ['стаксель', 0.105], ['генакер', 0.20]]) {
+  const deep = design * 1.3;
+  worstOver = Math.max(worstOver, deep / LAST);
+  console.log('   %s %s %s %s', who.padStart(9), design.toFixed(3).padStart(13),
+    deep.toFixed(3).padStart(14),
+    (deep > LAST ? 'на ' + ((deep / LAST - 1) * 100).toFixed(0) + '% глубже' : 'нет').padStart(16));
+}
+console.log('');
+check('модель не уходит за измеренное пузо больше чем на половину',
+  worstOver < 1.5, 'самое глубокое ' + (worstOver * LAST).toFixed(3) +
+  ' при измеренных до ' + LAST.toFixed(2));
 
 console.log(failures ? failures + ' проверок провалено' : 'все проверки прошли');
 console.log('');

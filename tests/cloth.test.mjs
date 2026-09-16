@@ -112,7 +112,7 @@ function stretchWhole(cl) {
       arc += Math.hypot(cl.pos[b] - cl.pos[a], cl.pos[b + 1] - cl.pos[a + 1],
                         cl.pos[b + 2] - cl.pos[a + 2]);
       const i = r * CLOTH_COLS + c, j = i + CLOTH_COLS;
-      mat += Math.hypot(cl.px[i] - cl.px[j], cl.py[i] - cl.py[j]);
+      mat += cl.matDist(i, j);
     }
     if (mat > 0.05) worst = Math.max(worst, arc / mat);
   }
@@ -127,7 +127,7 @@ function rowLen(cl, r) {
     arc += Math.hypot(cl.pos[b] - cl.pos[a], cl.pos[b + 1] - cl.pos[a + 1],
                       cl.pos[b + 2] - cl.pos[a + 2]);
     const i = r * CLOTH_COLS + c, j = i + 1;
-    mat += Math.hypot(cl.px[i] - cl.px[j], cl.py[i] - cl.py[j]);
+    mat += cl.matDist(i, j);
   }
   return { arc, mat };
 }
@@ -329,10 +329,7 @@ console.log('');
   const cl = b.rig.cloth, g = PACK.rig.gennaker;
   const mat = (get, n) => {
     let d = 0;
-    for (let i = 0; i + 1 < n; i++) {
-      const a = get(i), q = get(i + 1);
-      d += Math.hypot(cl.px[a] - cl.px[q], cl.py[a] - cl.py[q]);
-    }
+    for (let i = 0; i + 1 < n; i++) d += cl.matDist(get(i), get(i + 1));
     return d;
   };
   const rows = [

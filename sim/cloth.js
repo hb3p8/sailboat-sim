@@ -105,6 +105,30 @@ export const CLOTH_ITER = 10;
 // Пока длины не сойдутся, свободный угол включать нельзя. Ворота на это заведены
 // (`tests/cloth.test.mjs`), и они красные.
 const FREE_CLEW = false;
+// ТРЁХМЕРНЫЙ КРОЙ (шаг В1). Построен и померен, по умолчанию ВЫКЛЮЧЕН.
+//
+// Что он даёт: длины шкаторин сходятся с объявленными в крое — нижняя −0.0 %,
+// задняя −0.6 %, передняя −0.0 % против +10.3 / −5.2 / −0.0 у плоской выкройки.
+// Ворота В2 на этом берутся, и берутся по построению, а не подгонкой.
+//
+// Чего он стоит на нынешней модели:
+//
+//   сходимость летящей хорды   10.3 % -> 60.3 % (при пороге 3 %)
+//   растяжение целой строки     0.27 % -> 1.14 % (при пороге 1 %)
+//   сверка с точной дугой       3 натянутых строки -> ни одной
+//   карта                       зелёная -> 2 клетки, худшая 144 %
+//   эталон ORC                  тяга 39 -> 35 %, боковая 0.46 -> 0.66
+//
+// Причина у всего одна. Ширина паруса по обводу на полувысоте 3.28 м приходится
+// на хорду между шкаторинами 1.95 — то есть проектное пузо около 0.6. Спинакеры
+// такими и бывают, но у поляры сечения замеры есть до 0.18, а решателю такую
+// полноту не удержать: он и на плоском крое недоходит, а тут вдесятеро хуже.
+//
+// Остаётся и своя недоделка: площадь поверхности 23.96 м² против обмерных 27.0.
+// Строки поставлены по РАВНОЙ ДОЛЕ длины шкаторин, и высоты их не совпадают со
+// станциями обвода; ширины сняты не там, где надо. Ставить строки по ВЫСОТЕ —
+// первое, что тут надо доделать.
+const CUT3D = false;
 const TOP_SWEEPS = 4;
 const ITER = CLOTH_ITER;
 const OMEGA = 1;
@@ -154,6 +178,39 @@ const SUB_MAX = 4;
 const VMAX = 12;
 
 
+// Полуугол дуги, у которой отношение длины к хорде равно `k`: sin θ / θ = 1/k.
+// Делением пополам, без малоугольного приближения: при запасе в десятую долю оно
+// врёт на проценты, а здесь от этого зависят длины шкаторин.
+function arcHalfAngle(k) {
+  if (!(k > 1 + 1e-9)) return 0;
+  let lo = 1e-6, hi = Math.PI - 1e-6;
+  for (let i = 0; i < 60; i++) {
+    const m = 0.5 * (lo + hi);
+    if (Math.sin(m) / m > 1 / k) lo = m; else hi = m;
+  }
+  return 0.5 * (lo + hi);
+}
+
+// Точка на дуге длиной `L` между A и B, выгнутой в сторону `n` (единичный,
+// перпендикулярный хорде). `t` — доля ДЛИНЫ ДУГИ, а не хорды: узлы садятся
+// поровну по материалу.
+function arcAt(A, B, L, n, t, out) {
+  const ex = B[0] - A[0], ey = B[1] - A[1], ez = B[2] - A[2];
+  const c = Math.hypot(ex, ey, ez);
+  if (c < 1e-9) { out[0] = A[0]; out[1] = A[1]; out[2] = A[2]; return out; }
+  const th = arcHalfAngle(L / c);
+  if (th < 1e-6) {
+    out[0] = A[0] + ex * t; out[1] = A[1] + ey * t; out[2] = A[2] + ez * t;
+    return out;
+  }
+  const R = c / (2 * Math.sin(th)), a = (2 * t - 1) * th;
+  const along = R * (Math.sin(a) + Math.sin(th)) / c, bow = R * (Math.cos(a) - Math.cos(th));
+  out[0] = A[0] + ex * along + n[0] * bow;
+  out[1] = A[1] + ey * along + n[1] * bow;
+  out[2] = A[2] + ez * along + n[2] * bow;
+  return out;
+}
+
 export class Cloth {
   // `opts.bend` — жёсткость на излом. Наружу вынесена ради стенда: при нуле
   // натянутая строка обязана быть в точности равномерно нагруженной нитью, и
@@ -167,6 +224,8 @@ export class Cloth {
     this.cols = opts && opts.cols ? opts.cols : CLOTH_COLS;
     this.iter = opts && opts.iter ? opts.iter : ITER;
     this.freeClew = opts && opts.freeClew != null ? opts.freeClew : FREE_CLEW;
+    this.cut3d = opts && opts.cut3d != null ? opts.cut3d : CUT3D;
+    this.designSide = -1;
     this.rigRef = null;
     this.nRows = this.rows;
     const N = this.rows * this.cols;
@@ -181,6 +240,10 @@ export class Cloth {
     // ткани и обязательно.
     this.px = new Float64Array(N);
     this.py = new Float64Array(N);
+    // Проектная поверхность трёхмерного кроя: те же узлы, но в пространстве.
+    this.dx = new Float64Array(N);
+    this.dy = new Float64Array(N);
+    this.dz = new Float64Array(N);
     this.area = new Float64Array(N);     // доля площади выкройки на узел
     this.mass = new Float64Array(N);
     this.rowW = new Float64Array(this.rows);   // ширина строки в выкройке
@@ -316,6 +379,79 @@ export class Cloth {
   // дают дугу на 4.4 % длиннее прямой, то есть серп 0.134 её длины. План Б1
   // оценивает LUFF_ROUND_K в 0.10…0.12, ничего о провисе не зная, — два
   // независимых конца сошлись.
+  // ТРЁХМЕРНЫЙ КРОЙ: длины покоя снимаются с ПРОЕКТНОЙ ПОВЕРХНОСТИ, а не с
+  // плоского листа.
+  //
+  // Плоская выкройка не может держать всё сразу, и это померено: концы строк на
+  // обводе, объявленные длины шкаторин и запас на пузо внутри строки —
+  // одновременно невозможны. Запас в десятую часть при хорде 3.89 м требует в
+  // плоскости стрелки 0.79 м, соседние строки выгибаются по-разному, и
+  // расстояния по столбцам уезжают процентов на пять (`docs/wake.md`).
+  //
+  // Выход — тот, что и назван ревью: поверхность строится СРАЗУ В ПРОСТРАНСТВЕ,
+  // с пузом, и метрика берётся с неё. Тогда двоякая кривизна не конфликтует с
+  // нерастяжимостью: лист и не обязан быть разворачивающимся, он сшит.
+  //
+  // Поверхность задают три угла и три шкаторины СВОЕЙ ОБЪЯВЛЕННОЙ ДЛИНЫ:
+  // передняя от галса к фалу, задняя от шкотового угла к задней кромке
+  // дощечки, нижняя от галса к шкотовому углу. Строки идут между передней и
+  // задней по равной доле их длины — так сшивают панели, — и каждая выгнута
+  // своим проектным пузом. Нижняя строка и дощечка пузо не получают: это
+  // границы, у них своя длина.
+  //
+  // Шкотовый угол берётся на ПРОЕКТНОМ шкоте (середина диапазона), а не на
+  // рабочем: крой у паруса один, а тримов много. Отсюда же и та самая дуга
+  // `gennakerClew` — на проектном триме обе шкаторины натянуты по определению,
+  // и это ровно то место, где дуга верна.
+  design3d(slack) {
+    const g = this.sail.gennaker ? this.sail.gennaker : null;
+    const gen = this.gen;
+    const side = this.designSide;
+    const T = [gen.tack[0], 0, gen.tack[1]];
+    const H = [gen.head[0], 0, gen.head[1]];
+    const HA = [gen.head_aft[0], 0, gen.head_aft[1]];
+    const cc = gennakerClew({ genSheetLen: 0.5 * (gen.sheet_min_m + gen.sheet_max_m) }, gen);
+    const C = [cc[0], Math.abs(cc[1]) * side, cc[2]];
+    // Куда выгибаются шкаторины: наружу от оси галс—фал, по борту постановки.
+    const nOut = [0, side, 0];
+    const A = this.tmpA, B = this.tmpB, P = this.tmpC;
+    for (let r = 0; r < this.rows; r++) {
+      const u = r / (this.rows - 1);
+      arcAt(T, H, gen.luff_m, nOut, u, A);          // точка передней шкаторины
+      arcAt(C, HA, gen.leech_m, nOut, u, B);        // точка задней
+      const ex = B[0] - A[0], ey = B[1] - A[1], ez = B[2] - A[2];
+      const chord = Math.max(0.02, Math.hypot(ex, ey, ez));
+      // ДЛИНА СТРОКИ — ШИРИНА ПО ОБВОДУ, а не хорда с запасом.
+      //
+      // Ширина обвода на высоте — это и есть ширина сшитого паруса там, вместе с
+      // серпом: `luffAt(z) − leechAt(z)` снято с чертежа. Запаса на пузо сверх
+      // неё НЕ НАДО: пузо у трёхмерного кроя уже в самой поверхности, а не в
+      // лишнем материале. Считать ширину от хорды между концами значило бы
+      // потерять обвод: поверхность вышла бы узким треугольником (померено:
+      // 18.5 м² против обмерных 27.0).
+      //
+      // Полнота при этом выходит спинакерная, и это не ошибка: на проектном
+      // триме ширина 3.58 м приходится на хорду 1.95, то есть пузо около 0.5.
+      // Спинакеры такими и бывают. У поляры сечения, однако, замеры есть до
+      // 0.18 — это известный долг, и он записан.
+      const L = r === 0 ? gen.foot_m
+              : (r === this.rows - 1 ? gen.head_width_m
+                                     : Math.max(chord, this.luffAt(A[2]) - this.leechAt(A[2])));
+      this.rowW[r] = L;
+      // Пузо строки смотрит вбок от её хорды, в горизонте: так сечение и
+      // выгнуто, а знак один на всё полотно — поверхность выходит гладкой.
+      let nx = -ey, ny = ex, nz = 0;
+      const nl = Math.hypot(nx, ny, nz);
+      if (nl < 1e-9) { nx = 1; ny = 0; } else { nx /= nl; ny /= nl; }
+      const nb = [nx, ny, 0];
+      for (let c = 0; c < this.cols; c++) {
+        const t = c / (this.cols - 1), i = this.ix(r, c);
+        arcAt(A, B, L, nb, t, P);
+        this.dx[i] = P[0]; this.dy[i] = P[1]; this.dz[i] = P[2];
+      }
+    }
+  }
+
   pattern(slack) {
     const s = this.sail, N = this.n;
     for (let r = 0; r < this.rows; r++) {
@@ -330,22 +466,30 @@ export class Cloth {
         this.px[i] = lx - u * W; this.py[i] = ly;
       }
     }
-    for (let k = 0; k < this.ci.length; k++) {
-      const a = this.ci[k], b = this.cj[k];
-      this.rest[k] = Math.hypot(this.px[a] - this.px[b], this.py[a] - this.py[b]);
-    }
-    // Масса узла — по площади выкройки вокруг него.
+    // Длины покоя и площади — с ПРОЕКТНОЙ ПОВЕРХНОСТИ, если крой трёхмерный, и
+    // с плоской выкройки иначе. Ниже всё одинаково: и то, и другое — набор
+    // точек, между которыми меряются расстояния.
+    if (this.cut3d) this.design3d(slack);
+    const X = this.cut3d ? this.dx : this.px;
+    const Y = this.cut3d ? this.dy : this.py;
+    const Z = this.cut3d ? this.dz : null;
+    const dist = (a, b) => Z
+      ? Math.hypot(X[a] - X[b], Y[a] - Y[b], Z[a] - Z[b])
+      : Math.hypot(X[a] - X[b], Y[a] - Y[b]);
+    for (let k = 0; k < this.ci.length; k++)
+      this.rest[k] = dist(this.ci[k], this.cj[k]);
+    // Масса узла — по площади поверхности вокруг него. Треугольник по трём
+    // сторонам, формулой Герона: она годится и в плоскости, и в пространстве.
+    const tri = (a, b, c) => {
+      const p = dist(a, b), q = dist(b, c), r2 = dist(c, a);
+      const sp = 0.5 * (p + q + r2);
+      return Math.sqrt(Math.max(0, sp * (sp - p) * (sp - q) * (sp - r2)));
+    };
     this.area.fill(0);
     for (let r = 0; r + 1 < this.rows; r++)
       for (let c = 0; c + 1 < this.cols; c++) {
         const a = this.ix(r, c), b = this.ix(r, c + 1), e = this.ix(r + 1, c), g = this.ix(r + 1, c + 1);
-        const ax = this.px[b] - this.px[a], ay = this.py[b] - this.py[a];
-        const bx = this.px[e] - this.px[a], by = this.py[e] - this.py[a];
-        const s1 = Math.abs(ax * by - ay * bx) / 2;
-        const cx = this.px[b] - this.px[g], cy = this.py[b] - this.py[g];
-        const dx2 = this.px[e] - this.px[g], dy2 = this.py[e] - this.py[g];
-        const s2 = Math.abs(cx * dy2 - cy * dx2) / 2;
-        const q = (s1 + s2) / 4;
+        const q = (tri(a, b, e) + tri(g, e, b)) / 4;
         this.area[a] += q; this.area[b] += q; this.area[e] += q; this.area[g] += q;
       }
     // Масса узла — ткань ПЛЮС ВОЗДУХ, и второе слагаемое больше первого в
@@ -471,6 +615,13 @@ export class Cloth {
       for (let i = 0; i < STRIPS; i++)
         if (this.slackWas[i] !== slack[i]) { same = false; break; }
     } else same = false;
+    // Крою нужны обмеры генакера и борт постановки: поверхность строится по
+    // углам и шкаторинам, а они в пакете.
+    const genPack = b.p.rig.gennaker;
+    if (this.cut3d && (!genPack || !(genPack.leech_m > 0))) this.cut3d = false;
+    this.gen = genPack;
+    const wantSide = Math.sign(side || -1);
+    if (this.cut3d && this.designSide !== wantSide) { this.designSide = wantSide; same = false; }
     if (!same) {
       this.rhoAir = env.rho_air;
       this.slackWas = slack.slice();
@@ -517,6 +668,17 @@ export class Cloth {
   }
 
   ix(r, c) { return r * this.cols + c; }
+
+  // Расстояние между узлами ПО КРОЮ — та самая мера, из которой взяты длины
+  // покоя. У плоской выкройки это расстояние в её плоскости, у трёхмерного
+  // кроя — на проектной поверхности. Отдаётся наружу, чтобы свидетели мерили
+  // ткань той же мерой, какой она скроена, а не той, какая была раньше.
+  matDist(i, j) {
+    return this.cut3d
+      ? Math.hypot(this.dx[i] - this.dx[j], this.dy[i] - this.dy[j],
+                   this.dz[i] - this.dz[j])
+      : Math.hypot(this.px[i] - this.px[j], this.py[i] - this.py[j]);
+  }
 
   // Площадь ячеек полотна В ПОЛЁТЕ, разнесённая по узлам. Считается тем же
   // способом, что площадь выкройки в `pattern()`, — двумя треугольниками на

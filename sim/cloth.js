@@ -75,6 +75,7 @@ export const CLOTH_COLS = 9;
 // раскачку. Оба числа — ворота стенда (`tests/cloth.test.mjs`), оба сейчас
 // красные, и оба держат шаг В1 открытым.
 export const CLOTH_ITER = 10;
+const TOP_SWEEPS = 4;
 const ITER = CLOTH_ITER;
 const OMEGA = 1;
 
@@ -208,6 +209,29 @@ export class Cloth {
     this.ci = Int32Array.from(ci);
     this.cj = Int32Array.from(cj);
     this.ck = Float64Array.from(ck);
+    // СВЯЗИ ВЕРХА — отдельным списком, для добавочных проходов по ним.
+    //
+    // Верх паруса сходится много медленнее низа, и это померено: при десяти
+    // проходах задняя шкаторина у фала слаба на 2.2 %, верхние строки на 1.6 %,
+    // и на этой слабине фаловая дощечка разворачивается к полотну на 49°. При
+    // четырёхстах проходах всё натянуто в ноль, а залом падает до 19°.
+    //
+    // Причина — вырождение сетки: ширина строки падает с 4.29 м у нижней
+    // шкаторины до 0.27 м у дощечки, рёбра строки становятся по 3.4 см при
+    // вертикальных под метр, а масса узла — 117 г против 1684 г. По таким
+    // связям Гаусс — Зейдель ползёт, и общие проходы тратятся в основном на
+    // низ, который сошёлся давно.
+    //
+    // Поэтому верх доводится ОТДЕЛЬНО: те же связи, тот же проектор, просто
+    // лишние проходы по четверти списка. Цена — доли миллисекунды вместо
+    // сорокакратной.
+    const top = this.rows - 1 - Math.max(2, Math.round((this.rows - 1) * 0.3));
+    const ti = [];
+    for (let k = 0; k < ci.length; k++) {
+      const r = Math.max(Math.floor(ci[k] / this.cols), Math.floor(cj[k] / this.cols));
+      if (r >= top) ti.push(k);
+    }
+    this.topIdx = Int32Array.from(ti);
     this.rest = new Float64Array(ci.length);
     this.luffAt = edgeFn(sail.luff);
     this.leechAt = edgeFn(sail.leech);
@@ -639,26 +663,62 @@ export class Cloth {
   // само собой выходит пузо: строка длиннее хорды, под давлением она
   // натягивается по дуге, и длина дуги равна длине ткани — ровно то уравнение,
   // которое решает мембрана для сечения.
-  project(b, side) {
+  // ФАЛОВАЯ ДОЩЕЧКА — ЖЁСТКАЯ ПЛАНКА, а не девять узлов ткани.
+  //
+  // Верхняя строка идёт по дощечке шириной 0.27 м, и сетка кладёт на неё те же
+  // девять узлов, что и на нижнюю шкаторину в четыре с лишним метра: рёбра по
+  // 3.4 см при вертикальных почти в метр, масса узла 117 г против 1684 г внизу.
+  // Семь лишних степеней свободы у детали, у которой их две — положение и
+  // поворот, — и на них полотно заламывалось: поворот хорды между двумя
+  // верхними строками 57° при 1…7° по всему остальному парусу.
+  //
+  // Дощечка настоящая и жёсткая: это планка, вшитая в фаловый угол. Поэтому её
+  // узлы не решаются, а САЖАЮТСЯ на отрезок между концами, каждый на своём
+  // месте по выкройке. Концы при этом решаются как прежде: фаловый закреплён,
+  // задний тянут задняя шкаторина и полотно. Ни одной новой постоянной.
+  board() {
+    const p = this.pos, R = this.rows - 1;
+    const a = this.ix(R, 0) * 3, z = this.ix(R, this.cols - 1) * 3;
+    const w = this.rowW[R];
+    if (!(w > 1e-9)) return;
+    for (let c = 1; c + 1 < this.cols; c++) {
+      const t = (this.px[this.ix(R, 0)] - this.px[this.ix(R, c)]) / w;
+      const k = this.ix(R, c) * 3;
+      p[k] = p[a] + (p[z] - p[a]) * t;
+      p[k + 1] = p[a + 1] + (p[z + 1] - p[a + 1]) * t;
+      p[k + 2] = p[a + 2] + (p[z + 2] - p[a + 2]) * t;
+    }
+  }
+
+  // Один проход по списку связей. `list` — либо все подряд, либо выборка верха.
+  sweep(list, M) {
     const p = this.pos, ci = this.ci, cj = this.cj, ck = this.ck, rest = this.rest;
-    const M = ci.length;
+    for (let n = 0; n < M; n++) {
+      const k = list ? list[n] : n;
+      const a = ci[k] * 3, c = cj[k] * 3;
+      const wa = this.w[ci[k]], wb = this.w[cj[k]];
+      const s = wa + wb;
+      if (s === 0) continue;
+      const dx = p[c] - p[a], dy = p[c + 1] - p[a + 1], dz = p[c + 2] - p[a + 2];
+      const d = Math.hypot(dx, dy, dz);
+      if (d < 1e-9) continue;
+      // Отрицательная жёсткость — метка двусторонней связи (излом): она и
+      // тянет, и распирает. Все прочие односторонние: ткань мнётся.
+      const kk = ck[k];
+      if (kk > 0 && d <= rest[k]) continue;
+      const g = OMEGA * Math.abs(kk) * (d - rest[k]) / d / s;
+      p[a] += wa * g * dx; p[a + 1] += wa * g * dy; p[a + 2] += wa * g * dz;
+      p[c] -= wb * g * dx; p[c + 1] -= wb * g * dy; p[c + 2] -= wb * g * dz;
+    }
+    this.board();
+  }
+
+  project(b, side) {
     for (let it = 0; it < this.iter; it++) {
-      for (let k = 0; k < M; k++) {
-        const a = ci[k] * 3, c = cj[k] * 3;
-        const wa = this.w[ci[k]], wb = this.w[cj[k]];
-        const s = wa + wb;
-        if (s === 0) continue;
-        const dx = p[c] - p[a], dy = p[c + 1] - p[a + 1], dz = p[c + 2] - p[a + 2];
-        const d = Math.hypot(dx, dy, dz);
-        if (d < 1e-9) continue;
-        // Отрицательная жёсткость — метка двусторонней связи (излом): она и
-        // тянет, и распирает. Все прочие односторонние: ткань мнётся.
-        const kk = ck[k];
-        if (kk > 0 && d <= rest[k]) continue;
-        const g = OMEGA * Math.abs(kk) * (d - rest[k]) / d / s;
-        p[a] += wa * g * dx; p[a + 1] += wa * g * dy; p[a + 2] += wa * g * dz;
-        p[c] -= wb * g * dx; p[c + 1] -= wb * g * dy; p[c + 2] -= wb * g * dz;
-      }
+      this.sweep(null, this.ci.length);
+      // Добавочные проходы по верху: вырожденные ячейки у дощечки сходятся
+      // много медленнее прочих, а список их вчетверо короче общего.
+      for (let j = 0; j < TOP_SWEEPS; j++) this.sweep(this.topIdx, this.topIdx.length);
     }
   }
 

@@ -62,7 +62,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
-import { gennakerSetOf, gennakerClew } from '../sim/aero.js';
+import { gennakerSetOf, gennakerClew, STRIPS } from '../sim/aero.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PACK = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
@@ -416,21 +416,58 @@ const G = PACK.rig.gennaker;
     b.psi = (100 - twa) * D;
     let lo = Infinity, hi = -Infinity, sum = 0, n = 0;
     let rollLo = Infinity, rollHi = -Infinity;
-    for (let i = 0; i < 28 * 30; i++) {
+    // ОКНО ЗАМЕРА ОТКРЫВАЕТСЯ ПО СОСТОЯНИЮ, а не по секундомеру, и это не
+    // послабление, а буквальное чтение названия проверки: «на установившемся
+    // режиме».
+    //
+    // У предохранителя выдержка удваивается и доходит до `FUSE_HOLD_MAX` —
+    // восьми секунд, — а срабатываний на разгоне бывает несколько. Парус тогда
+    // возвращается в решётку позже восемнадцатой секунды, и прежнее окно ловило
+    // не автоколебание, а ПЕРЕХОД. Замер (TWA 110°, шкот 6.5 м, ветер 6 м/с):
+    // предохранитель сработал четырежды к пятнадцатой секунде, парус вернулся на
+    // двадцать третьей, тяга сделала ступень 462 -> 408 с провалом до 213, и
+    // окно 18…28 объявляло 59 %. С двадцать восьмой секунды та же клетка даёт
+    // 1 % и держит его до восьмидесятой.
+    //
+    // Поэтому окно ждёт, пока восемь секунд подряд не сработает предохранитель,
+    // не сменится состав решётки И НЕ ОСТАНЕТСЯ ВЗВЕДЁННОЙ ВЫДЕРЖКА. Последнее
+    // обязательно: пока парус держат снаружи, состав решётки как раз неизменен,
+    // и без этого условия окно открывалось ровно в секунду возврата — то есть
+    // прицельно на переход (замер: открылось на 23.0 с при возврате на 22.83).
+    //
+    // Проверка от этого НЕ СЛЕПНЕТ: у настоящего автоколебания (флаттер ткани,
+    // дыра в вихревом листе) ни одно из трёх не успокаивается, и ожидание
+    // упирается в потолок, после которого замер идёт как прежде.
+    const QUIET = 8 * 30, CAP = 60 * 30;
+    let quiet = 0, was = -1, fuse = b.rig.fuseTrips || 0, start = -1;
+    for (let i = 0; i < CAP + 10 * 30; i++) {
       b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D,
         -(2.2 * wrap2((100 - twa) * D - b.psi) - 0.9 * b.r)));
       b.step(1 / 30);
-      if (i < 18 * 30) continue;
+      if (start < 0) {
+        let on = 0, held = false;
+        for (let k = 2 * STRIPS; k < 3 * STRIPS; k++) {
+          on = on * 2 + (b.rig.latOn[k] ? 1 : 0);
+          if (b.rig.latCool && b.rig.latCool[k] > 0) held = true;
+        }
+        const f = b.rig.fuseTrips || 0;
+        if (on !== was || f !== fuse || held) { quiet = 0; was = on; fuse = f; }
+        else quiet++;
+        if (i >= 18 * 30 && (quiet >= QUIET || i >= CAP)) start = i;
+        continue;
+      }
+      if (i >= start + 10 * 30) break;
       // Размах крена — справкой, по тому же окну: по нему отличают моду корпуса
       // от собственной раскачки паруса.
       rollLo = Math.min(rollLo, b.phi); rollHi = Math.max(rollHi, b.phi);
       const d = b.telemetry.driveN;
       lo = Math.min(lo, d); hi = Math.max(hi, d); sum += d; n++;
     }
-    const m = Math.abs(sum / n);
-    return { swing: m > 1 ? (hi - lo) / m : 0, roll: (rollHi - rollLo) / D };
+    const m = n ? Math.abs(sum / n) : 0;
+    return { swing: m > 1 ? (hi - lo) / m : 0, roll: (rollHi - rollLo) / D,
+             wait: start / 30 };
   };
-  let bad2 = 0, at2 = '', worst2 = 0, worstRoll = 0;
+  let bad2 = 0, at2 = '', worst2 = 0, worstRoll = 0, worstWait = 0;
   const rolls = [];
   for (const wind of [6, 10]) {
     console.log(`  ветер ${wind} м/с`);
@@ -440,9 +477,10 @@ const G = PACK.rig.gennaker;
     for (const L of LENS2) {
       let line = ('    ' + L.toFixed(1) + ' м').padStart(17);
       for (const t of TWAS2) {
-        const { swing: v, roll } = swing(t, L, wind);
+        const { swing: v, roll, wait } = swing(t, L, wind);
         worst2 = Math.max(worst2, v);
         worstRoll = Math.max(worstRoll, roll);
+        worstWait = Math.max(worstWait, wait);
         if (roll > 1) rolls.push(`TWA ${t}°/${L.toFixed(1)} м/${wind}: ${roll.toFixed(1)}°`);
         const ill = v > SWING;
         if (ill) { bad2++; if (!at2) at2 = `TWA ${t}°, шкот ${L.toFixed(1)} м, ветер ${wind}`; }
@@ -459,7 +497,8 @@ const G = PACK.rig.gennaker;
   // Качка — справкой и без ворот: она свойство корпуса, а не паруса. Держать её
   // в поле зрения надо, чтобы правка остойчивости или рига не прошла
   // незамеченной, и чтобы красную клетку было чем разобрать.
-  console.log(`\n  справка, без ворот: размах крена доходит до ` +
+  console.log(`\n  справка, без ворот: окно открывалось не позже ${worstWait.toFixed(0)} с; ` +
+              `размах крена доходит до ` +
               `${worstRoll.toFixed(1)}°` +
               (rolls.length ? '; больше градуса в клетках — ' + rolls.join(', ') : ''));
 }

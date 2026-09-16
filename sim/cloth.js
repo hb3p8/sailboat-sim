@@ -37,12 +37,46 @@ import { edgeFn, sailSagAt, STRIPS, NCHORD, gennakerClew } from './aero.js';
 // по три узла на панель давления. Больше не нужно: нагрузка по хорде известна с
 // точностью до трёх ступенек, и сгущать сетку значит уточнять то, чего во входе
 // нет.
+// Сетка ПО УМОЛЧАНИЮ. У экземпляра она своя (`opts.rows`, `opts.cols`), и
+// вынесена наружу ровно затем же, ради чего вынесена жёсткость на излом: пока
+// статическая форма не проверена на сгущении сетки, она не свойство модели, а
+// свойство разрешения.
 export const CLOTH_ROWS = 11;
 export const CLOTH_COLS = 9;
 
 // Проходов по связям за подшаг. Десять — из ряда 8…12, названного планом; на
 // двадцати установившаяся форма отличается меньше чем на миллиметр.
-const ITER = 10;
+// Проходов Гаусса — Зейделя за подшаг, и ПЕРЕСЛАБЛЕНИЕ при них.
+//
+// Десяти проходов НЕ ХВАТАЕТ, и это померено на неподвижной задаче: у решателя
+// при каждом числе проходов своя неподвижная точка, потому что баланс встаёт
+// там, где поправка за проход равна силе за подшаг. Летящая хорда на полувысоте
+// выходит 3.39 м против 3.47 у вчетверо более густых проходов и 3.45 у
+// сошедшегося решения; у фала 1.86 против 2.03 и 2.07.
+//
+// Видно это и глазом: у фала полотно ЗАЛАМЫВАЕТСЯ. Верхняя строка — дощечка в
+// четверть метра — развёрнута к соседней на 57°, тогда как по всему остальному
+// полотну поворот идёт по 1…7° на строку. На фотографиях настоящего SV20
+// никакого залома нет, парус гладкий до самого фала. Залом уходит вместе с
+// недоходом: 57° при десяти проходах, 42° при восьмидесяти, 32° при четырёхстах,
+// 17.5° при четырёхстах с переслаблением 1.9 — и твист самого полотна падает с
+// 27° до 2°.
+//
+// ПОЧЕМУ ЗДЕСЬ ВСЁ ЖЕ ДЕСЯТЬ И ЕДИНИЦА. Сходимость стоит не только времени.
+// Переслабление 1.9 (устойчиво, вдвое сокращает проходы, улучшает все
+// собственные числа ткани: растяжение 0.32 -> 0.15 %, дуга/ткань 0.984 -> 0.990,
+// совпадение с точной дугой 4.4 -> 2.9 %) РАЗНОСИТ связанную систему на
+// TWA 110°: клетка карты 99 % против нуля, качка 4.7°. Двадцать проходов с ним
+// же — 58 %, и боковая к тяге у эталона ORC уезжает с 0.46 на 0.58.
+//
+// То есть нынешняя связка «ткань — решётка» устойчива только на НЕСОШЕДШЕЙСЯ
+// ткани, и это куда более серьёзное утверждение, чем сам недоход. Менять
+// настройку, не разобравшись с этим, значит менять видимый залом на невидимую
+// раскачку. Оба числа — ворота стенда (`tests/cloth.test.mjs`), оба сейчас
+// красные, и оба держат шаг В1 открытым.
+export const CLOTH_ITER = 10;
+const ITER = CLOTH_ITER;
+const OMEGA = 1;
 
 // Жёсткость диагоналей относительно рёбер. Ткань тянется вдоль нитей плохо, а
 // перекашивается легко — на этом и держится крой парусов: одно и то же полотно
@@ -88,7 +122,6 @@ const SUB_MAX = 4;
 // молчит.
 const VMAX = 12;
 
-const idx = (r, c) => r * CLOTH_COLS + c;
 
 export class Cloth {
   // `opts.bend` — жёсткость на излом. Наружу вынесена ради стенда: при нуле
@@ -98,9 +131,13 @@ export class Cloth {
     this.sail = sail;
     this.si = si;
     this.bend = opts && opts.bend != null ? opts.bend : BEND;
+    // Сетка и число проходов — у экземпляра, чтобы стенд мог их сгустить.
+    this.rows = opts && opts.rows ? opts.rows : CLOTH_ROWS;
+    this.cols = opts && opts.cols ? opts.cols : CLOTH_COLS;
+    this.iter = opts && opts.iter ? opts.iter : ITER;
     this.rigRef = null;
-    this.nRows = CLOTH_ROWS;
-    const N = CLOTH_ROWS * CLOTH_COLS;
+    this.nRows = this.rows;
+    const N = this.rows * this.cols;
     this.n = N;
     this.pos = new Float64Array(N * 3);
     this.prev = new Float64Array(N * 3);
@@ -114,19 +151,19 @@ export class Cloth {
     this.py = new Float64Array(N);
     this.area = new Float64Array(N);     // доля площади выкройки на узел
     this.mass = new Float64Array(N);
-    this.rowW = new Float64Array(CLOTH_ROWS);   // ширина строки в выкройке
+    this.rowW = new Float64Array(this.rows);   // ширина строки в выкройке
     this.rhoAir = 1.225;
     // Связи: пары узлов, длина покоя и жёсткость. Топология постоянна, длины
     // пересчитываются каждый шаг — запас ткани ходит за ползунком пуза.
     const ci = [], cj = [], ck = [];
-    for (let r = 0; r < CLOTH_ROWS; r++)
-      for (let c = 0; c + 1 < CLOTH_COLS; c++) { ci.push(idx(r, c)); cj.push(idx(r, c + 1)); ck.push(1); }
-    for (let r = 0; r + 1 < CLOTH_ROWS; r++)
-      for (let c = 0; c < CLOTH_COLS; c++) { ci.push(idx(r, c)); cj.push(idx(r + 1, c)); ck.push(1); }
-    for (let r = 0; r + 1 < CLOTH_ROWS; r++)
-      for (let c = 0; c + 1 < CLOTH_COLS; c++) {
-        ci.push(idx(r, c)); cj.push(idx(r + 1, c + 1)); ck.push(SHEAR);
-        ci.push(idx(r, c + 1)); cj.push(idx(r + 1, c)); ck.push(SHEAR);
+    for (let r = 0; r < this.rows; r++)
+      for (let c = 0; c + 1 < this.cols; c++) { ci.push(this.ix(r, c)); cj.push(this.ix(r, c + 1)); ck.push(1); }
+    for (let r = 0; r + 1 < this.rows; r++)
+      for (let c = 0; c < this.cols; c++) { ci.push(this.ix(r, c)); cj.push(this.ix(r + 1, c)); ck.push(1); }
+    for (let r = 0; r + 1 < this.rows; r++)
+      for (let c = 0; c + 1 < this.cols; c++) {
+        ci.push(this.ix(r, c)); cj.push(this.ix(r + 1, c + 1)); ck.push(SHEAR);
+        ci.push(this.ix(r, c + 1)); cj.push(this.ix(r + 1, c)); ck.push(SHEAR);
       }
     // ПОВОДКИ ОТ ЗАКРЕПЛЁННЫХ УГЛОВ. Не выдумка и не жёсткость: у нерастяжимой
     // ткани расстояние между двумя точками В ПРОСТРАНСТВЕ не может превысить
@@ -148,20 +185,25 @@ export class Cloth {
     // длине по выкройке. Двусторонняя, в отличие от всех прочих: складку надо
     // распрямлять, а не только не давать тянуть.
     if (this.bend > 0) {
-      for (let r = 0; r < CLOTH_ROWS; r++)
-        for (let c = 1; c + 1 < CLOTH_COLS; c++) {
-          ci.push(idx(r, c - 1)); cj.push(idx(r, c + 1)); ck.push(-this.bend);
+      for (let r = 0; r < this.rows; r++)
+        for (let c = 1; c + 1 < this.cols; c++) {
+          ci.push(this.ix(r, c - 1)); cj.push(this.ix(r, c + 1)); ck.push(-this.bend);
         }
-      for (let r = 1; r + 1 < CLOTH_ROWS; r++)
-        for (let c = 0; c < CLOTH_COLS; c++) {
-          ci.push(idx(r - 1, c)); cj.push(idx(r + 1, c)); ck.push(-this.bend);
+      for (let r = 1; r + 1 < this.rows; r++)
+        for (let c = 0; c < this.cols; c++) {
+          ci.push(this.ix(r - 1, c)); cj.push(this.ix(r + 1, c)); ck.push(-this.bend);
         }
     }
-    for (let r = 0; r < CLOTH_ROWS; r++)
-      for (let c = 0; c < CLOTH_COLS; c++) {
-        const i = idx(r, c);
-        if (i !== idx(0, 0)) { ci.push(idx(0, 0)); cj.push(i); ck.push(1); }
-        if (i !== idx(CLOTH_ROWS - 1, 0)) { ci.push(idx(CLOTH_ROWS - 1, 0)); cj.push(i); ck.push(1); }
+    // Отвергнуто: поводки ещё и от ШКОТОВОГО угла. Он закреплён наравне с галсом
+    // и фалом, условие нерастяжимости от него такое же, и на сходимость они
+    // должны были работать — а не работают вовсе: летящая хорда на полувысоте
+    // 3.18 м против 3.17 без них, при восьмипроцентном недоходе до сошедшегося
+    // решения. Четверть лишних связей задаром (`docs/wake.md`, В1).
+    for (let r = 0; r < this.rows; r++)
+      for (let c = 0; c < this.cols; c++) {
+        const i = this.ix(r, c);
+        if (i !== this.ix(0, 0)) { ci.push(this.ix(0, 0)); cj.push(i); ck.push(1); }
+        if (i !== this.ix(this.rows - 1, 0)) { ci.push(this.ix(this.rows - 1, 0)); cj.push(i); ck.push(1); }
       }
     this.ci = Int32Array.from(ci);
     this.cj = Int32Array.from(cj);
@@ -179,13 +221,21 @@ export class Cloth {
     this.rnx = dz / L; this.rny = -dx / L;
     this.ready = false;
     this.tmpA = [0, 0, 0]; this.tmpB = [0, 0, 0]; this.tmpC = [0, 0, 0];
-    this.clew = idx(0, CLOTH_COLS - 1);
-    this.tack = idx(0, 0);
-    this.head = idx(CLOTH_ROWS - 1, 0);
+    this.clew = this.ix(0, this.cols - 1);
+    this.tack = this.ix(0, 0);
+    this.head = this.ix(this.rows - 1, 0);
   }
 
   // Высота строки над нижней шкаториной, в долях размаха.
-  rowF(r) { return r / (CLOTH_ROWS - 1); }
+  //
+  // Отвергнуто: СГУЩАТЬ строки к фалу. Довод был хорош — у дощечки полотно
+  // сходится к четверти метра, а шаг по высоте остаётся метровым, и верхняя
+  // ячейка выходит лучиной 3 см на метр, на которой Гаусс — Зейдель ползёт.
+  // Померено при `1 − (1 − u)^p`: недоход хорды на полувысоте до сошедшегося
+  // решения 1.2 % при p = 1, 5 % при p = 1.5, 7 % при p = 2. Сгущение
+  // сходимость УХУДШАЕТ: строк внизу становится меньше, а выигрыш наверху его не
+  // окупает (`docs/wake.md`, В1).
+  rowF(r) { return r / (this.rows - 1); }
 
   // Полоска, чьё давление и чей поток берёт строка. Тот же выбор ближайшей,
   // что у отрисовки: полосок шесть, строк одиннадцать.
@@ -213,15 +263,15 @@ export class Cloth {
   // независимых конца сошлись.
   pattern(slack) {
     const s = this.sail, N = this.n;
-    for (let r = 0; r < CLOTH_ROWS; r++) {
+    for (let r = 0; r < this.rows; r++) {
       const f = this.rowF(r), z = this.zLo + f * this.span;
       const d = sailSagAt(s, z, this.zLo, this.span);
       const lx = this.luffAt(z) + d * this.rnx, ly = z + d * this.rny;
       const chord = Math.max(0.02, this.luffAt(z) - this.leechAt(z));
       const W = chord * (1 + Math.max(0, slack[this.stripOf(r)]));
       this.rowW[r] = W;
-      for (let c = 0; c < CLOTH_COLS; c++) {
-        const u = c / (CLOTH_COLS - 1), i = idx(r, c);
+      for (let c = 0; c < this.cols; c++) {
+        const u = c / (this.cols - 1), i = this.ix(r, c);
         this.px[i] = lx - u * W; this.py[i] = ly;
       }
     }
@@ -231,9 +281,9 @@ export class Cloth {
     }
     // Масса узла — по площади выкройки вокруг него.
     this.area.fill(0);
-    for (let r = 0; r + 1 < CLOTH_ROWS; r++)
-      for (let c = 0; c + 1 < CLOTH_COLS; c++) {
-        const a = idx(r, c), b = idx(r, c + 1), e = idx(r + 1, c), g = idx(r + 1, c + 1);
+    for (let r = 0; r + 1 < this.rows; r++)
+      for (let c = 0; c + 1 < this.cols; c++) {
+        const a = this.ix(r, c), b = this.ix(r, c + 1), e = this.ix(r + 1, c), g = this.ix(r + 1, c + 1);
         const ax = this.px[b] - this.px[a], ay = this.py[b] - this.py[a];
         const bx = this.px[e] - this.px[a], by = this.py[e] - this.py[a];
         const s1 = Math.abs(ax * by - ay * bx) / 2;
@@ -261,7 +311,7 @@ export class Cloth {
     // ленивое скольжение узла по поверхности.
     const rho = this.rhoAir;
     for (let i = 0; i < N; i++) {
-      const c = this.rowW[Math.floor(i / CLOTH_COLS)];
+      const c = this.rowW[Math.floor(i / this.cols)];
       const m = Math.max(1e-4, this.area[i] * (AREAL_KG + rho * Math.PI * c / 4));
       this.w[i] = 1 / m;
       this.mass[i] = m;
@@ -279,15 +329,15 @@ export class Cloth {
   seed(b) {
     const rig = b.rig, calc = rig.stripCalc, base = this.si * STRIPS;
     const side = b.rigSide == null ? 1 : b.rigSide;
-    for (let r = 0; r < CLOTH_ROWS; r++) {
+    for (let r = 0; r < this.rows; r++) {
       const f = this.rowF(r), z = this.zLo + f * this.span;
       const g = calc[base + this.stripOf(r)] || {};
       const set = g.set == null ? 0.7 : g.set;
       const chord = Math.max(0.02, this.luffAt(z) - this.leechAt(z));
       const sag = sailSagAt(this.sail, z, this.zLo, this.span) * side;
       const ux = -Math.cos(set), uy = Math.sin(set) * side;
-      for (let c = 0; c < CLOTH_COLS; c++) {
-        const u = c / (CLOTH_COLS - 1), i = idx(r, c) * 3;
+      for (let c = 0; c < this.cols; c++) {
+        const u = c / (this.cols - 1), i = this.ix(r, c) * 3;
         this.pos[i] = this.luffAt(z) + chord * u * ux;
         this.pos[i + 1] = sag + chord * u * uy;
         this.pos[i + 2] = z;
@@ -321,12 +371,12 @@ export class Cloth {
   // сила, значит разрешать шум.
   rowNormals(wx, wy) {
     const p = this.pos, nr = this.nrm;
-    for (let r = 0; r < CLOTH_ROWS; r++) {
+    for (let r = 0; r < this.rows; r++) {
       // Летящая хорда строки и направление вдоль передней шкаторины: их
       // векторное произведение и есть нормаль сечения.
-      const a = idx(r, 0) * 3, b = idx(r, CLOTH_COLS - 1) * 3;
-      const rLo = Math.max(0, r - 1), rHi = Math.min(CLOTH_ROWS - 1, r + 1);
-      const e = idx(rHi, 0) * 3, g = idx(rLo, 0) * 3;
+      const a = this.ix(r, 0) * 3, b = this.ix(r, this.cols - 1) * 3;
+      const rLo = Math.max(0, r - 1), rHi = Math.min(this.rows - 1, r + 1);
+      const e = this.ix(rHi, 0) * 3, g = this.ix(rLo, 0) * 3;
       const tx = p[b] - p[a], ty = p[b + 1] - p[a + 1], tz = p[b + 2] - p[a + 2];
       const sx = p[e] - p[g], sy = p[e + 1] - p[g + 1], sz = p[e + 2] - p[g + 2];
       let nx = ty * sz - tz * sy, ny = tz * sx - tx * sz, nz = tx * sy - ty * sx;
@@ -334,8 +384,8 @@ export class Cloth {
       if (L < 1e-9) { nx = 0; ny = wy; nz = 0; }
       else { nx /= L; ny /= L; nz /= L; }
       if (nx * wx + ny * wy < 0) { nx = -nx; ny = -ny; nz = -nz; }
-      for (let c = 0; c < CLOTH_COLS; c++) {
-        const k = idx(r, c) * 3;
+      for (let c = 0; c < this.cols; c++) {
+        const k = this.ix(r, c) * 3;
         nr[k] = nx; nr[k + 1] = ny; nr[k + 2] = nz;
       }
     }
@@ -410,6 +460,8 @@ export class Cloth {
     return true;
   }
 
+  ix(r, c) { return r * this.cols + c; }
+
   // Площадь ячеек полотна В ПОЛЁТЕ, разнесённая по узлам. Считается тем же
   // способом, что площадь выкройки в `pattern()`, — двумя треугольниками на
   // ячейку, — но по текущим положениям.
@@ -417,10 +469,10 @@ export class Cloth {
     const A = this._areaNow || (this._areaNow = new Float64Array(this.n));
     const p = this.pos;
     A.fill(0);
-    for (let r = 0; r + 1 < CLOTH_ROWS; r++)
-      for (let c = 0; c + 1 < CLOTH_COLS; c++) {
-        const a = idx(r, c), b = idx(r, c + 1),
-              e = idx(r + 1, c), g = idx(r + 1, c + 1);
+    for (let r = 0; r + 1 < this.rows; r++)
+      for (let c = 0; c + 1 < this.cols; c++) {
+        const a = this.ix(r, c), b = this.ix(r, c + 1),
+              e = this.ix(r + 1, c), g = this.ix(r + 1, c + 1);
         const tri = (i, j, k) => {
           const ux = p[j * 3] - p[i * 3], uy = p[j * 3 + 1] - p[i * 3 + 1],
                 uz = p[j * 3 + 2] - p[i * 3 + 2];
@@ -465,11 +517,11 @@ export class Cloth {
     const kShape = this._kShape || (this._kShape = new Float64Array(STRIPS));
     const kFlat = this._kFlat || (this._kFlat = new Float64Array(STRIPS));
     raw.fill(0); absRaw.fill(0); aSum.fill(0); kShape.fill(0); kFlat.fill(0);
-    for (let r = 0; r < CLOTH_ROWS; r++) {
+    for (let r = 0; r < this.rows; r++) {
       const si = this.stripOf(r), g = calc[base + si];
       if (!g || !g.live || !g.q) continue;
-      for (let c = 0; c < CLOTH_COLS; c++) {
-        const i = idx(r, c), u = c / (CLOTH_COLS - 1);
+      for (let c = 0; c < this.cols; c++) {
+        const i = this.ix(r, c), u = c / (this.cols - 1);
         const kp = Math.min(NCHORD - 1, Math.floor(u * NCHORD));
         raw[si] += g.q[kp] * area[i];
         absRaw[si] += Math.abs(g.q[kp]) * area[i];
@@ -523,7 +575,7 @@ export class Cloth {
     const L = this.load || (this.load = { fx: 0, fy: 0, fz: 0, mx: 0 });
     L.fx = 0; L.fy = 0; L.fz = 0; L.mx = 0;
     const cgz = b.p.mass.cg_m[2];
-    for (let r = 0; r < CLOTH_ROWS; r++) {
+    for (let r = 0; r < this.rows; r++) {
       const si = this.stripOf(r), g = calc[base + si] || {};
       const live = !!g.live;
       const q = g.q;
@@ -532,8 +584,8 @@ export class Cloth {
       // линеаризация нестационарной подъёмной силы пластины, что даёт затухание
       // качки крыла. Множителя при ней нет: единица, и та из формулы.
       const cd = live ? this.rhoAir * g.ve : 0;
-      for (let c = 0; c < CLOTH_COLS; c++) {
-        const i = idx(r, c), k = i * 3;
+      for (let c = 0; c < this.cols; c++) {
+        const i = this.ix(r, c), k = i * 3;
         // Тяжесть — по массе ТКАНИ, а не по массе с воздухом: присоединённая
         // масса весит ровно ноль. Перепутать их стоило одного прогона, в котором
         // парус повис в диаметральной плоскости мокрой тряпкой.
@@ -549,7 +601,7 @@ export class Cloth {
           f[k] += dmp * nx; f[k + 1] += dmp * ny; f[k + 2] += dmp * nz;
         }
         if (!q) continue;
-        const u = c / (CLOTH_COLS - 1);
+        const u = c / (this.cols - 1);
         const kp = Math.min(NCHORD - 1, Math.floor(u * NCHORD));
         const pr = (kShape[si] * q[kp] + kFlat[si]) * area[i];
         f[k] += pr * nx; f[k + 1] += pr * ny; f[k + 2] += pr * nz;
@@ -590,7 +642,7 @@ export class Cloth {
   project(b, side) {
     const p = this.pos, ci = this.ci, cj = this.cj, ck = this.ck, rest = this.rest;
     const M = ci.length;
-    for (let it = 0; it < ITER; it++) {
+    for (let it = 0; it < this.iter; it++) {
       for (let k = 0; k < M; k++) {
         const a = ci[k] * 3, c = cj[k] * 3;
         const wa = this.w[ci[k]], wb = this.w[cj[k]];
@@ -603,7 +655,7 @@ export class Cloth {
         // тянет, и распирает. Все прочие односторонние: ткань мнётся.
         const kk = ck[k];
         if (kk > 0 && d <= rest[k]) continue;
-        const g = Math.abs(kk) * (d - rest[k]) / d / s;
+        const g = OMEGA * Math.abs(kk) * (d - rest[k]) / d / s;
         p[a] += wa * g * dx; p[a + 1] += wa * g * dy; p[a + 2] += wa * g * dz;
         p[c] -= wb * g * dx; p[c + 1] -= wb * g * dy; p[c + 2] -= wb * g * dz;
       }
@@ -615,7 +667,7 @@ export class Cloth {
   // Нормаль строки — наружу от полотна, по потоку. Ею отрисовка отклоняет
   // заполаскивающий пузырь: бить он обязан поперёк ткани, а не куда попало.
   rowNormal(r) {
-    const k = idx(r, 0) * 3;
+    const k = this.ix(r, 0) * 3;
     return [this.nrm[k], this.nrm[k + 1], this.nrm[k + 2]];
   }
 
@@ -624,13 +676,13 @@ export class Cloth {
   // ложатся. Между строками и столбцами — билинейная выборка: полотно гладкое, и
   // разрешать его мельче сетки узлов всё равно нечем.
   sample(rf, t, out) {
-    const y = Math.min(CLOTH_ROWS - 1, Math.max(0, rf));
-    const r = Math.min(CLOTH_ROWS - 2, Math.floor(y)), u = y - r;
-    const x = Math.min(CLOTH_COLS - 1, Math.max(0, t * (CLOTH_COLS - 1)));
-    const c = Math.min(CLOTH_COLS - 2, Math.floor(x)), v = x - c;
+    const y = Math.min(this.rows - 1, Math.max(0, rf));
+    const r = Math.min(this.rows - 2, Math.floor(y)), u = y - r;
+    const x = Math.min(this.cols - 1, Math.max(0, t * (this.cols - 1)));
+    const c = Math.min(this.cols - 2, Math.floor(x)), v = x - c;
     const p = this.pos;
-    const a = idx(r, c) * 3, b = idx(r, c + 1) * 3;
-    const e = idx(r + 1, c) * 3, f = idx(r + 1, c + 1) * 3;
+    const a = this.ix(r, c) * 3, b = this.ix(r, c + 1) * 3;
+    const e = this.ix(r + 1, c) * 3, f = this.ix(r + 1, c + 1) * 3;
     for (let k = 0; k < 3; k++) {
       const lo = p[a + k] + (p[b + k] - p[a + k]) * v;
       const hi = p[e + k] + (p[f + k] - p[e + k]) * v;
@@ -648,8 +700,8 @@ export class Cloth {
     const c = Math.hypot(ex, ey, ez);
     if (c < 1e-6) return { camber: 0, draft: 0.5, chord: c };
     let best = 0, at = 0.5;
-    for (let k = 1; k + 1 < CLOTH_COLS; k++) {
-      this.sample(rf, k / (CLOTH_COLS - 1), C);
+    for (let k = 1; k + 1 < this.cols; k++) {
+      this.sample(rf, k / (this.cols - 1), C);
       const vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
       const t = (vx * ex + vy * ey + vz * ez) / (c * c);
       const dx = vx - t * ex, dy = vy - t * ey, dz = vz - t * ez;
@@ -665,8 +717,8 @@ export class Cloth {
     const ex = p[b] - p[a], ey = p[b + 1] - p[a + 1], ez = p[b + 2] - p[a + 2];
     const L = Math.hypot(ex, ey, ez) || 1;
     let best = 0, at = 0;
-    for (let r = 1; r + 1 < CLOTH_ROWS; r++) {
-      const i = idx(r, 0) * 3;
+    for (let r = 1; r + 1 < this.rows; r++) {
+      const i = this.ix(r, 0) * 3;
       const vx = p[i] - p[a], vy = p[i + 1] - p[a + 1], vz = p[i + 2] - p[a + 2];
       const t = (vx * ex + vy * ey + vz * ez) / (L * L);
       const dx = vx - t * ex, dy = vy - t * ey, dz = vz - t * ez;

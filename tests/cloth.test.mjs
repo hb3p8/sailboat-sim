@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
 import { Cloth, CLOTH_ROWS, CLOTH_COLS } from '../sim/cloth.js';
-import { STRIPS, gennakerClew } from '../sim/aero.js';
+import { STRIPS, NCHORD, gennakerClew } from '../sim/aero.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PACK = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
@@ -304,6 +304,95 @@ for (const c of FCASES) {
               `        ${f.lateSag.toFixed(3)} м`);
 }
 console.log('');
+
+// === АУДИТ ПЕРЕНОСА НАГРУЗКИ: два пути к одной силе ============================
+//
+// Шаг В0 нового порядка (docs/gennaker-sota-plan.md, часть В). Нагрузка
+// генакера считается ДВАЖДЫ и по-разному:
+//
+//   ткань   — перепад давления по панельной циркуляции, Δp = ρ·V·Γ/Δx,
+//             на площадях выкройки, по одной нормали на строку;
+//   полоски — сила сечения из поляры со всеми поправками, она и уходит в лодку.
+//
+// Это два вычислительных пути к одной физической величине, то есть прямое
+// нарушение «одной реализации одной вещи». Пока они расходятся, любое суждение о
+// летящей форме опирается на нагрузку, которой лодка не видит, и наоборот.
+//
+// Сравниваются: сила по составляющим (вдоль корпуса, поперёк в плоскости,
+// перпендикулярной мачте, и ВДОЛЬ МАЧТЫ — у полосок такой нет вовсе) и момент
+// крена вокруг центра тяжести, потому что совпадение сумм ещё не означает
+// совпадения точек приложения.
+//
+// ПОКА БЕЗ ВОРОТ. Сперва число, потом порог: назначать предел до того, как
+// известен разброс по режимам, — это подгонка. Числа печатаются, чтобы правка,
+// сводящая два пути в один, мерялась ими же.
+function loadAudit(b) {
+  const cl = b.rig.cloth, calc = b.rig.stripCalc, st = b.rig.stripState;
+  const base = 2 * STRIPS;
+  const cphi = Math.cos(b.phi), sphi = Math.sin(b.phi);
+  const cgz = b.p.mass.cg_m[2];
+  // --- полоски: сила, уходящая в лодку, и её НОРМАЛЬНАЯ к полотну доля
+  let full = [0, 0], norm = [0, 0], gmx = 0, nmx = 0, gArea = 0;
+  for (let i = base; i < 3 * STRIPS; i++) {
+    const g = calc[i], d = st[i];
+    if (!g || !g.live) continue;
+    gArea += g.area;
+    full[0] += d.drive; full[1] += d.side;
+    gmx += g.yi * (d.side * sphi) - (g.zi - cgz) * (d.side * cphi);
+    const cd0 = g.chordDir || 0, nc = -Math.sin(cd0), ns = Math.cos(cd0);
+    const fn = d.drive * nc + d.side * ns;
+    norm[0] += fn * nc; norm[1] += fn * ns;
+    nmx += g.yi * (fn * ns * sphi) - (g.zi - cgz) * (fn * ns * cphi);
+  }
+  // --- ткань: то, что она ДЕЙСТВИТЕЛЬНО приложила (отдаётся из `Cloth.advance`)
+  const L = cl.load || { fx: 0, fy: 0, fz: 0, mx: 0 };
+  let areaCut = 0;
+  for (let i = 0; i < cl.n; i++) areaCut += cl.area[i];
+  const A = cl.flyingAreas();
+  let areaNow = 0;
+  for (let i = 0; i < cl.n; i++) areaNow += A[i];
+  return { F: [L.fx, L.fy, L.fz], mx: L.mx, full, norm, gmx, nmx,
+           areaCut, areaNow, gArea };
+}
+
+console.log('=== аудит переноса нагрузки: ткань против полосок ===\n');
+console.log('Полотно надувает только НОРМАЛЬНАЯ к нему доля силы сечения:');
+console.log('касательная (трение вдоль ткани) мембрану не растягивает. Поэтому');
+console.log('сравнивается ткань с нормальной долей, а полная сила полосок');
+console.log('печатается рядом — по разнице видно, сколько уходит в касательную.\n');
+console.log('  курс шкот ветер | вдоль: ткань/норм./полная | поперёк: ткань/норм./полная' +
+            ' | вдоль мачты | Mx: ткань/норм.');
+const AUDIT = [
+  { twa: 120, len: 4.5, wind: 6 }, { twa: 140, len: 5.5, wind: 6 },
+  { twa: 160, len: 6.5, wind: 6 }, { twa: 165, len: 5.5, wind: 10 },
+  { twa: 180, len: 6.5, wind: 10 },
+];
+let worstLoad = 0, worstMom = 0, areaLine = '';
+for (const a of AUDIT) {
+  const b = boatFor(a.twa, a.len);
+  b.o.windSpeed = a.wind; b.o.windDir = 100 * D; b.psi = (100 - a.twa) * D;
+  for (let i = 0; i < 25 * 30; i++) {
+    const e = wrapPi((100 - a.twa) * D - b.psi);
+    b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D, -(2.2 * e - 0.9 * b.r)));
+    b.step(1 / 30);
+  }
+  const z = loadAudit(b);
+  const fc = Math.hypot(z.F[0], z.F[1]), fn = Math.hypot(z.norm[0], z.norm[1]);
+  if (fn > 1) worstLoad = Math.max(worstLoad, Math.abs(fc / fn - 1));
+  if (Math.abs(z.nmx) > 10) worstMom = Math.max(worstMom, Math.abs(z.mx / z.nmx - 1));
+  const n3 = v => v.toFixed(0).padStart(5);
+  console.log(`  ${String(a.twa).padStart(3)}° ${a.len} ${String(a.wind).padStart(2)}  |` +
+    ` ${n3(z.F[0])}/${n3(z.norm[0])}/${n3(z.full[0])} |` +
+    ` ${n3(z.F[1])}/${n3(z.norm[1])}/${n3(z.full[1])} |` +
+    ` ${n3(z.F[2])} / 0 |` +
+    ` ${n3(z.mx)}/${n3(z.nmx)}`);
+  if (!areaLine) areaLine = `выкройка ${z.areaCut.toFixed(2)} м², ` +
+    `полотно в полёте ${z.areaNow.toFixed(2)} м², полоски ${z.gArea.toFixed(2)} м²`;
+}
+console.log(`\n  площади (первая клетка): ${areaLine}`);
+console.log(`  расхождение с нормальной долей: по силе до ` +
+            `${(100 * worstLoad).toFixed(0)} %, по моменту крена до ` +
+            `${(100 * worstMom).toFixed(0)} %\n`);
 
 // --- что проверяется ---------------------------------------------------------
 

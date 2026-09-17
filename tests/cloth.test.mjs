@@ -273,11 +273,18 @@ for (const sh of SHAPES) {
     const ratio = even > 0.5 ? f.kink * DEG / even : 1;
     back = Math.max(back, f.back); flip = Math.max(flip, f.flip);
     worstBack = Math.max(worstBack, f.back);
-    if (f.flip > worstFlip) { worstFlip = f.flip; flipAt = `TWA ${sh.twa}°, строка ${row.r}`; }
+    // Вывернутость и знак входа спрашиваются с тех же строк, что и ровность:
+    // у почти прямой строки (нижняя шкаторина, пузо 0.006) СТОРОНЫ ХОРДЫ нет —
+    // точки лежат на ней, и знак их крошечного отстояния это счётный шум.
+    if (f.camber >= ARC_MIN && f.flip > worstFlip) {
+      worstFlip = f.flip; flipAt = `TWA ${sh.twa}°, строка ${row.r}`;
+    }
     if (f.camber >= ARC_MIN && ratio > worstEven) {
       worstEven = ratio; worstAt = `TWA ${sh.twa}°, строка ${row.r}`;
     }
-    if (f.entry * DEG < minEntry) { minEntry = f.entry * DEG; entryAt = `TWA ${sh.twa}°, строка ${row.r}`; }
+    if (f.camber >= ARC_MIN && f.entry * DEG < minEntry) {
+      minEntry = f.entry * DEG; entryAt = `TWA ${sh.twa}°, строка ${row.r}`;
+    }
     console.log(`   ${String(row.r).padStart(2)} |${k.chord.toFixed(2).padStart(6)}` +
       `${k.camber.toFixed(3).padStart(6)}${(k.entry * DEG).toFixed(0).padStart(4)}` +
       `${(k.exit * DEG).toFixed(0).padStart(5)} |${f.chord.toFixed(2).padStart(6)}` +

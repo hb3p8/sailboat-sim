@@ -441,9 +441,67 @@ export class Cloth {
     const HA = [gen.head_aft[0], 0, gen.head_aft[1]];
     const cc = gennakerClew({ genSheetLen: 0.5 * (gen.sheet_min_m + gen.sheet_max_m) }, gen);
     const C = [cc[0], Math.abs(cc[1]) * side, cc[2]];
-    // Куда выгибаются шкаторины: наружу от оси галс—фал, по борту постановки.
-    const nOut = [0, side, 0];
+    // КУДА ВЫГИБАЮТСЯ ШКАТОРИНЫ — и это, оказалось, главное число кроя.
+    //
+    // Серп шкаторины — это лишняя длина по сравнению с прямой между её концами.
+    // Куда её деть, крой решает сам, и от решения зависит ВСЯ полнота паруса:
+    // если обе шкаторины выгнуть в одну сторону поперёк (как стояло), их
+    // расстояние друг от друга не меняется вовсе, и вся ширина обвода уходит в
+    // пузо — на полувысоте 3.31 м ткани на хорду 1.99, то есть пузо 0.54. Если
+    // же выгнуть их ВРОЗЬ, в плоскости паруса, хорда растёт, и пузо падает.
+    //
+    // Угол `bow` и есть эта развёртка: ноль — поперёк, как было; девяносто —
+    // целиком врозь. Значение не назначается, а подбирается ниже под
+    // ОБЪЯВЛЕННОЕ пузо (`sail.design`, те же 0.20/0.16, по которым считает
+    // аэродинамика). Одно пузо на модель, а не два.
     const A = this.tmpA, B = this.tmpB, P = this.tmpC;
+    const nOf = (E0, E1, other, bow) => {
+      let ex = E1[0] - E0[0], ey = E1[1] - E0[1], ez = E1[2] - E0[2];
+      const el = Math.hypot(ex, ey, ez) || 1;
+      ex /= el; ey /= el; ez /= el;
+      // Поперёк: борт постановки, очищенный от доли вдоль шкаторины.
+      let ox = 0, oy = side, oz = 0;
+      const d0 = ox * ex + oy * ey + oz * ez;
+      ox -= d0 * ex; oy -= d0 * ey; oz -= d0 * ez;
+      const ol = Math.hypot(ox, oy, oz) || 1;
+      ox /= ol; oy /= ol; oz /= ol;
+      // Второе направление той же плоскости: e × nOut. Знак берётся так, чтобы
+      // плюс угла уводил шкаторину ПРОЧЬ от другой.
+      let mx = ey * oz - ez * oy, my = ez * ox - ex * oz, mz = ex * oy - ey * ox;
+      const ax = 0.5 * (E0[0] + E1[0]) - other[0], ay = 0.5 * (E0[1] + E1[1]) - other[1];
+      if (mx * ax + my * ay < 0) { mx = -mx; my = -my; mz = -mz; }
+      const cb = Math.cos(bow), sb = Math.sin(bow);
+      return [ox * cb + mx * sb, oy * cb + my * sb, oz * cb + mz * sb];
+    };
+    const midL = [0.5 * (T[0] + H[0]), 0.5 * (T[1] + H[1])];
+    const midB = [0.5 * (C[0] + HA[0]), 0.5 * (C[1] + HA[1])];
+    // Пузо, объявленное для середины размаха, — цель подбора.
+    const dsg = this.sail.design || [0.2, 0.2];
+    const want = 0.5 * (dsg[0] + dsg[1]);
+    // Хорда середины при данной развёртке; пузо из неё и ширины обвода.
+    const camAt = bow => {
+      const nL = nOf(T, H, midB, bow), nB = nOf(C, HA, midL, bow);
+      const z = this.zLo + 0.5 * this.span;
+      arcAtZ(T, H, gen.luff_m, nL, z, A);
+      arcAtZ(C, HA, gen.leech_m, nB, z, B);
+      const c = Math.max(0.02, Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]));
+      const W = Math.max(c, this.luffAt(A[2]) - this.leechAt(A[2]));
+      const th = arcHalfAngle(W / c);
+      return th < 1e-6 ? 0 : (1 - Math.cos(th)) / (2 * Math.sin(th));
+    };
+    // Пузо падает с углом монотонно: чем больше врозь, тем длиннее хорда.
+    // Поэтому деление пополам, двадцати шагов хватает на тысячную.
+    let lo = 0, hi = Math.PI / 2;
+    if (camAt(hi) > want) lo = hi;                  // врозь до упора и всё мало
+    else if (camAt(lo) > want) {
+      for (let k = 0; k < 20; k++) {
+        const m = 0.5 * (lo + hi);
+        if (camAt(m) > want) lo = m; else hi = m;
+      }
+      lo = 0.5 * (lo + hi);
+    }
+    this.cutBow = lo;
+    const nL = nOf(T, H, midB, lo), nB = nOf(C, HA, midL, lo);
     for (let r = 0; r < this.rows; r++) {
       // СТРОКИ СТОЯТ ПО ВЫСОТЕ, а не по равной доле длины шкаторин. Ширина
       // паруса объявлена обводом НА ВЫСОТЕ, и снимать её надо там же: по доле
@@ -462,8 +520,8 @@ export class Cloth {
         B[0] = HA[0]; B[1] = HA[1]; B[2] = HA[2];
       } else {
         const z = this.zLo + (r / (this.rows - 1)) * this.span;
-        arcAtZ(T, H, gen.luff_m, nOut, z, A);       // точка передней шкаторины
-        arcAtZ(C, HA, gen.leech_m, nOut, z, B);     // точка задней
+        arcAtZ(T, H, gen.luff_m, nL, z, A);         // точка передней шкаторины
+        arcAtZ(C, HA, gen.leech_m, nB, z, B);       // точка задней
       }
       const ex = B[0] - A[0], ey = B[1] - A[1], ez = B[2] - A[2];
       const chord = Math.max(0.02, Math.hypot(ex, ey, ez));

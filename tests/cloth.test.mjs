@@ -55,7 +55,10 @@ function hold(b) {
 function boatFor(twa, len) {
   const b = new Boat(PACK);
   b.o.freeWake = true; b.o.wakeForces = true;
-  b.o.crewHike = -1; b.o.crewMass = 219.9;
+  // Наветренный борт — от знака курса: при отрицательном TWA ветер с другого
+  // борта, и экипаж сидит на другом. Иначе «другой галс» вышел бы тем же
+  // галсом с экипажем под ветром.
+  b.o.crewHike = -Math.sign(twa || 1); b.o.crewMass = 219.9;
   b.wind.o.gust = 0; b.wind.o.shift = 0;
   b.setGennaker(true);
   b.o.sheet = 70 * D; b.o.twist = 8 * D; b.o.genSheetLen = len;
@@ -174,8 +177,31 @@ const CASES = [
   { twa: 160, len: 6.5 },
 ];
 
+// Сторона пуза по каждой живой полоске генакера: как её видит аэродинамика и
+// как её на самом деле выгнула ткань. Аэродинамика строит сечение из хорды и
+// ЗНАКА пуза (`camberSign`), ткань — из кроя; считается одно, рисуется другое,
+// и разойтись они не имеют права.
+function bellySides(b) {
+  const cl = b.rig.cloth, S = b.rig.strips, g = b.rig.stripCalc;
+  if (!cl) return [];
+  const rows = (cl.nRows - 1) / 6, A = [0, 0, 0], B = [0, 0, 0], M = [0, 0, 0];
+  const out = [];
+  for (let i = 0; i < S.length; i++) {
+    if (!S[i].gennaker || !g[i].live) continue;
+    const j = i - 2 * 6, rf = (j + 0.5) * rows;
+    const cd = g[i].chordDir, sg = g[i].sign;
+    const ax = -Math.sin(cd) * sg, ay = Math.cos(cd) * sg;   // пузо по аэродинамике
+    cl.sample(rf, 0, A); cl.sample(rf, 1, B); cl.sample(rf, 0.5, M);
+    const bx = M[0] - (A[0] + B[0]) / 2, by = M[1] - (A[1] + B[1]) / 2;
+    const bl = Math.hypot(bx, by);
+    if (bl < 1e-4) continue;                                  // плоское сечение
+    out.push({ i, dot: (ax * bx + ay * by) / bl });
+  }
+  return out;
+}
+
 let worstStretch = 0, worstEdge = 0, worstQuiver = 0, worstMs = 0, worstFold = 1, worstPhys = 0;
-const SHAPES = [];
+const SHAPES = [], SIDES = [];
 for (const c of CASES) {
   const { b, cloth, ms, phys } = run(c.twa, c.len);
   const st = stretch(cloth), stw = stretchWhole(cloth);
@@ -211,6 +237,10 @@ for (const c of CASES) {
   // Форма снимается с ТОГО ЖЕ прогона: своих прогонов разделу не нужно.
   SHAPES.push({ twa: c.twa, len: c.len, rows: Array.from(
     { length: CLOTH_ROWS }, (_, r) => ({ r, cut: cloth.rowShape(r, true), fly: cloth.rowShape(r) })) });
+  // В какую сторону выгнуто сечение — по ткани и по аэродинамике. Ткань берётся
+  // РИГОВА, а не своя: именно из неё аэродинамика взяла направление хорды, и
+  // сверять надо две половины одного расчёта, а не два разных полотна.
+  SIDES.push({ twa: c.twa, pairs: bellySides(b) });
 }
 
 // === форма расправленного паруса =================================================
@@ -264,6 +294,45 @@ for (const sh of SHAPES) {
   console.log(`  ход назад ${(back * 100).toFixed(1)} %, вывернуто ${(flip * 100).toFixed(0)} %`);
   console.log(`  твист по строкам: ${tw}\n`);
 }
+
+// --- в какую сторону выгнут парус ---------------------------------------------
+console.log('=== сторона пуза: ткань против аэродинамики ===\n');
+console.log('У паруса наветренная сторона вогнутая. Аэродинамика знает свою');
+console.log('сторону из `camberSign`, ткань — из кроя. Считается и рисуется');
+console.log('обязано быть одно и то же: иначе сила берётся с одного паруса, а');
+console.log('глаз видит другой.\n');
+let worstSide = 1, sideAt = '', sideSeen = 0;
+for (const s of SIDES) {
+  const bad = s.pairs.filter(x => x.dot <= 0).length;
+  console.log(`  TWA ${s.twa}°: полосок ${s.pairs.length}, согласны ${s.pairs.length - bad}` +
+    `, худшее совпадение ${Math.min(...s.pairs.map(x => x.dot)).toFixed(2)}`);
+  for (const x of s.pairs) {
+    sideSeen++;
+    if (x.dot < worstSide) { worstSide = x.dot; sideAt = `TWA ${s.twa}°, полоска ${x.i}`; }
+  }
+}
+console.log('');
+check(sideSeen > 0 && worstSide > 0.5,
+  'ткань выгнута в ту же сторону, в какую считает аэродинамика',
+  `${sideSeen} полосок, худшее совпадение ${worstSide.toFixed(2)} (${sideAt})`);
+
+// ОБА ГАЛСА, и это не формальность. Сторона пуза бралась поворотом хорды на
+// четверть оборота, и такой поворот НЕ СИММЕТРИЧЕН по галсам: на одном парус
+// выгибался верно, на другом наизнанку. Глаз это поймал раньше стенда, потому
+// что стенд ходил только левым галсом.
+console.log('=== оба галса ===\n');
+let tackWorst = 1, tackAt = '';
+for (const twa of [140, -140]) {
+  const { b } = run(twa, 5.5, 20);
+  const pairs = bellySides(b);
+  const w = pairs.length ? Math.min(...pairs.map(x => x.dot)) : -1;
+  if (w < tackWorst) { tackWorst = w; tackAt = `TWA ${twa}°`; }
+  console.log(`  TWA ${twa}° (ветер с ${twa > 0 ? 'левого' : 'правого'} борта): ` +
+    `полосок ${pairs.length}, худшее совпадение ${w.toFixed(2)}`);
+}
+console.log('');
+check(tackWorst > 0.5, 'на ОБОИХ галсах ткань выгнута в ту же сторону, что и расчёт',
+  `худшее совпадение ${tackWorst.toFixed(2)} (${tackAt})`);
 
 check(worstBack <= 0.01, 'сечение идёт от передней шкаторины к задней и не складывается вдвое (предел 1 % хорды)',
   `${(worstBack * 100).toFixed(1)} %`);

@@ -31,7 +31,7 @@
 // 39 % (docs/gennaker-sota-plan.md, «Б3 сделан»).
 
 import { edgeFn, sailSagAt, STRIPS, NCHORD, gennakerClew,
-         gennakerSheetLen } from './aero.js';
+         gennakerSheetLen, designAt } from './aero.js';
 
 // Сетка ткани. Строк — как у отрисовки (SAIL_ROWS), чтобы полотно и обвод резались
 // по одним и тем же высотам; столбцов девять при трёх панелях решётки, то есть
@@ -475,9 +475,11 @@ export class Cloth {
     };
     const midL = [0.5 * (T[0] + H[0]), 0.5 * (T[1] + H[1])];
     const midB = [0.5 * (C[0] + HA[0]), 0.5 * (C[1] + HA[1])];
-    // Пузо, объявленное для середины размаха, — цель подбора.
-    const dsg = this.sail.design || [0.2, 0.2];
-    const want = 0.5 * (dsg[0] + dsg[1]);
+    // Пузо, объявленное НА ПОЛУВЫСОТЕ, — цель подбора. Раньше бралось среднее
+    // двух концов, потому что и объявление было прямой; теперь это ломаная по
+    // обмеру, и середина у неё своя.
+    const dsg = this.sail.design || [0.2];
+    const want = designAt(dsg, 0.5);
     // Хорда середины при данной развёртке; пузо из неё и ширины обвода.
     const camAt = bow => {
       const nL = nOf(T, H, midB, bow), nB = nOf(C, HA, midL, bow);

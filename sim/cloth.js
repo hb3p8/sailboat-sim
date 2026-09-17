@@ -1009,39 +1009,144 @@ export class Cloth {
   // ложатся. Между строками и столбцами — билинейная выборка: полотно гладкое, и
   // разрешать его мельче сетки узлов всё равно нечем.
   sample(rf, t, out) {
-    const y = Math.min(this.rows - 1, Math.max(0, rf));
-    const r = Math.min(this.rows - 2, Math.floor(y)), u = y - r;
-    const x = Math.min(this.cols - 1, Math.max(0, t * (this.cols - 1)));
-    const c = Math.min(this.cols - 2, Math.floor(x)), v = x - c;
-    const p = this.pos;
-    const a = this.ix(r, c) * 3, b = this.ix(r, c + 1) * 3;
-    const e = this.ix(r + 1, c) * 3, f = this.ix(r + 1, c + 1) * 3;
+    const b = this.biAt(rf, t);
+    const p = this.pos, a3 = b.a * 3, b3 = b.b * 3, e3 = b.e * 3, f3 = b.f * 3;
     for (let k = 0; k < 3; k++) {
-      const lo = p[a + k] + (p[b + k] - p[a + k]) * v;
-      const hi = p[e + k] + (p[f + k] - p[e + k]) * v;
-      out[k] = lo + (hi - lo) * u;
+      const lo = p[a3 + k] + (p[b3 + k] - p[a3 + k]) * b.v;
+      const hi = p[e3 + k] + (p[f3 + k] - p[e3 + k]) * b.v;
+      out[k] = lo + (hi - lo) * b.u;
     }
     return out;
   }
 
+  // Та же точка, но на ПОВЕРХНОСТИ КРОЯ. Нужна затем, чтобы летящую форму было
+  // с чем сравнить: крой — единственный эталон формы, который у нас есть весь,
+  // а не по трём числам с фотографии.
+  cutAt(rf, t, out) {
+    const b = this.biAt(rf, t);
+    const X = this.cut3d ? this.dx : this.px;
+    const Y = this.cut3d ? this.dy : this.py;
+    const Z = this.cut3d ? this.dz : null;
+    const m = (V, d) => {
+      if (!V) return d;
+      const lo = V[b.a] + (V[b.b] - V[b.a]) * b.v;
+      const hi = V[b.e] + (V[b.f] - V[b.e]) * b.v;
+      return lo + (hi - lo) * b.u;
+    };
+    out[0] = m(X, 0); out[1] = m(Y, 0); out[2] = m(Z, 0);
+    return out;
+  }
+
+  // Место выборки: четыре узла и два веса. Одно на обе поверхности — летящую и
+  // кроя, — чтобы они мерились ровно в одних и тех же точках полотна.
+  biAt(rf, t) {
+    const o = this._bi || (this._bi = { a: 0, b: 0, e: 0, f: 0, u: 0, v: 0 });
+    const y = Math.min(this.rows - 1, Math.max(0, rf));
+    const r = Math.min(this.rows - 2, Math.floor(y));
+    const x = Math.min(this.cols - 1, Math.max(0, t * (this.cols - 1)));
+    const c = Math.min(this.cols - 2, Math.floor(x));
+    o.u = y - r; o.v = x - c;
+    o.a = this.ix(r, c); o.b = this.ix(r, c + 1);
+    o.e = this.ix(r + 1, c); o.f = this.ix(r + 1, c + 1);
+    return o;
+  }
+
+  // --- ФОРМА РАСПРАВЛЕННОГО СЕЧЕНИЯ ---------------------------------------------
+  //
+  // Числа, которыми парус меряет парусный мастер, плюс три числа про то,
+  // расправлен ли он вообще. Методология и обоснование — docs/sail-shape.md.
+  //
+  // Первые пять описывают форму и сравниваются с кроем: хорда, пузо, место
+  // пуза, вход, выход, азимут хорды (из азимутов получается твист).
+  //
+  // Последние три не нуждаются в эталоне вовсе: это СВОЙСТВА расправленного
+  // сечения, и нарушить их может только складка.
+  //
+  //   ход назад   доля хорды, которую сечение проходит В ОБРАТНУЮ сторону.
+  //               У расправленного паруса сечение однозначно над хордой:
+  //               каждый шаг идёт от передней шкаторины к задней. Складка —
+  //               единственный способ пойти назад, и она даёт число сразу.
+  //   вывернуто   доля длины сечения, лежащая по ДРУГУЮ сторону хорды, чем
+  //               пузо. У дуги таких точек нет ни одной.
+  //   залом       наибольший угол между соседними звеньями и где он стоит.
+  //               У дуги из восьми звеньев поворот на звено ровно один и тот
+  //               же; всё, что заметно больше, — перегиб, а не дуга.
+  rowShape(rf, cut) {
+    const n = this.cols, P = [];
+    for (let k = 0; k < n; k++) {
+      const o = [0, 0, 0];
+      if (cut) this.cutAt(rf, k / (n - 1), o); else this.sample(rf, k / (n - 1), o);
+      P.push(o);
+    }
+    const A = P[0], B = P[n - 1];
+    const ex = B[0] - A[0], ey = B[1] - A[1], ez = B[2] - A[2];
+    const chord = Math.hypot(ex, ey, ez);
+    const nil = { chord, camber: 0, draft: 0.5, entry: 0, exit: 0, bearing: 0,
+                  back: 0, flip: 0, kink: 0, kinkAt: 0, arc: 0 };
+    if (chord < 1e-6) return nil;
+    const ux = ex / chord, uy = ey / chord, uz = ez / chord;
+    // Отступ каждой точки от хорды и сторона, в которую смотрит пузо.
+    const off = [], along = [];
+    let sx = 0, sy = 0, sz = 0;
+    for (let k = 0; k < n; k++) {
+      const vx = P[k][0] - A[0], vy = P[k][1] - A[1], vz = P[k][2] - A[2];
+      const t = vx * ux + vy * uy + vz * uz;
+      const ox = vx - t * ux, oy = vy - t * uy, oz = vz - t * uz;
+      along.push(t); off.push([ox, oy, oz]);
+      sx += ox; sy += oy; sz += oz;
+    }
+    const sl = Math.hypot(sx, sy, sz) || 1;
+    const nx = sx / sl, ny = sy / sl, nz = sz / sl;   // куда смотрит пузо
+    // Пузо и его место — ровно как их мерила `rowCamber`: наибольшее удаление
+    // от хорды. Менять здесь нечего, иначе разойдутся старые числа стенда.
+    let best = 0, at = 0.5;
+    for (let k = 1; k + 1 < n; k++) {
+      const d = Math.hypot(off[k][0], off[k][1], off[k][2]);
+      if (d > best) { best = d; at = along[k] / chord; }
+    }
+    // Ход назад, вывернутость, залом и длина дуги — по звеньям.
+    let back = 0, flip = 0, arc = 0, kink = 0, kinkAt = 0;
+    const dir = [];
+    for (let k = 0; k + 1 < n; k++) {
+      const dx = P[k + 1][0] - P[k][0], dy = P[k + 1][1] - P[k][1], dz = P[k + 1][2] - P[k][2];
+      const L = Math.hypot(dx, dy, dz);
+      arc += L;
+      dir.push(L > 1e-9 ? [dx / L, dy / L, dz / L] : [ux, uy, uz]);
+      const step = along[k + 1] - along[k];
+      if (step < 0) back -= step;
+      const mid = 0.5 * ((off[k][0] + off[k + 1][0]) * nx +
+                         (off[k][1] + off[k + 1][1]) * ny +
+                         (off[k][2] + off[k + 1][2]) * nz);
+      if (mid < 0) flip += L;
+    }
+    for (let k = 0; k + 1 < dir.length; k++) {
+      const d = Math.max(-1, Math.min(1, dir[k][0] * dir[k + 1][0] +
+                                         dir[k][1] * dir[k + 1][1] +
+                                         dir[k][2] * dir[k + 1][2]));
+      const a = Math.acos(d);
+      if (a > kink) { kink = a; kinkAt = along[k + 1] / chord; }
+    }
+    // Вход и выход — знаковые, и знак тут главное. Положительный значит «в
+    // сторону пуза», как у нормальной дуги; отрицательный — кромка завёрнута на
+    // наветренную сторону, то есть ровно то, что на парусе видно глазом как
+    // заворот передней шкаторины или крюк задней.
+    const ang = (d, sgn) => Math.atan2(d[0] * nx + d[1] * ny + d[2] * nz,
+                                       sgn * (d[0] * ux + d[1] * uy + d[2] * uz));
+    return {
+      chord, camber: best / chord, draft: at, arc,
+      entry: ang(dir[0], 1),
+      exit: ang([-dir[n - 2][0], -dir[n - 2][1], -dir[n - 2][2]], -1),
+      bearing: Math.atan2(ey, ex),
+      back: back / chord, flip: flip / (arc || 1), kink, kinkAt,
+    };
+  }
+
   // Пузо строки: наибольшее отклонение от хорды, в долях хорды. Меряется тем
   // же, чем меряет себя мембрана, — иначе сравнивать их было бы не с чем.
+  // Отдельного счёта здесь больше нет: это три поля из `rowShape`.
   rowCamber(rf) {
-    const A = this.tmpA, B = this.tmpB, C = this.tmpC;
-    this.sample(rf, 0, A); this.sample(rf, 1, B);
-    const ex = B[0] - A[0], ey = B[1] - A[1], ez = B[2] - A[2];
-    const c = Math.hypot(ex, ey, ez);
-    if (c < 1e-6) return { camber: 0, draft: 0.5, chord: c };
-    let best = 0, at = 0.5;
-    for (let k = 1; k + 1 < this.cols; k++) {
-      this.sample(rf, k / (this.cols - 1), C);
-      const vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
-      const t = (vx * ex + vy * ey + vz * ez) / (c * c);
-      const dx = vx - t * ex, dy = vy - t * ey, dz = vz - t * ez;
-      const d = Math.hypot(dx, dy, dz);
-      if (d > best) { best = d; at = t; }
-    }
-    return { camber: best / c, draft: at, chord: c };
+    const sh = this.rowShape(rf);
+    return { camber: sh.camber, draft: sh.draft, chord: sh.chord };
   }
 
   // Провис передней шкаторины: наибольшее удаление её узлов от прямой галс—фал.

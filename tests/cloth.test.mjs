@@ -175,6 +175,7 @@ const CASES = [
 ];
 
 let worstStretch = 0, worstEdge = 0, worstQuiver = 0, worstMs = 0, worstFold = 1, worstPhys = 0;
+const SHAPES = [];
 for (const c of CASES) {
   const { b, cloth, ms, phys } = run(c.twa, c.len);
   const st = stretch(cloth), stw = stretchWhole(cloth);
@@ -207,7 +208,72 @@ for (const c of CASES) {
   console.log(`  провис передней ${ls.sag.toFixed(3)} м на ${(ls.at * 100).toFixed(0)} % высоты ` +
               `(полоскам предписано ${cloth.sail.gennaker ? '1.212 м на 50 %' : '0'})`);
   console.log(`  шкотовый угол выше галса на ${cloth.clewRise().toFixed(3)} м\n`);
+  // Форма снимается с ТОГО ЖЕ прогона: своих прогонов разделу не нужно.
+  SHAPES.push({ twa: c.twa, len: c.len, rows: Array.from(
+    { length: CLOTH_ROWS }, (_, r) => ({ r, cut: cloth.rowShape(r, true), fly: cloth.rowShape(r) })) });
 }
+
+// === форма расправленного паруса =================================================
+//
+// Методология и обоснование каждого числа — docs/sail-shape.md. Коротко: слева
+// то, что объявил крой, справа то, что получилось; а три последних столбца
+// отвечают на вопрос «расправился ли вообще» и эталона не требуют.
+console.log('=== форма расправленного паруса: полёт против кроя ===\n');
+const DEG = 180 / Math.PI;
+// Ровная дуга с пузом f входит и выходит под углом 2·arctg(2f), а поворот у неё
+// на каждом звене один и тот же. Отсюда два безэталонных числа: во сколько раз
+// худший залом круче ровного и насколько вход отстал от дуги.
+const arcAngle = f => 2 * Math.atan(2 * f) * DEG;
+// Ровность залома спрашивается только с тех строк, у которых дуга ЕСТЬ: у
+// почти прямой нижней шкаторины (пузо 0.04) ровный поворот равен двум градусам,
+// и отношение к нему ничего не значит.
+const ARC_MIN = 0.08;
+let worstBack = 0, worstFlip = 0, worstEven = 0, minEntry = 1e9;
+let worstAt = '', flipAt = '', entryAt = '';
+for (const sh of SHAPES) {
+  let back = 0, flip = 0;
+  console.log(`TWA ${sh.twa}°, шкот ${sh.len} м`);
+  console.log('  стр |        крой         |               полёт                | дуге положено');
+  console.log('      | хорда  пузо вх  вых | хорда  пузо место вх  вых  залом/где |  вход  залом');
+  for (const row of sh.rows) {
+    const k = row.cut, f = row.fly;
+    if (f.chord < 0.3) continue;
+    const seg = CLOTH_COLS - 1;
+    const even = 2 * arcAngle(f.camber) / seg;          // ровный поворот на звено
+    const ratio = even > 0.5 ? f.kink * DEG / even : 1;
+    back = Math.max(back, f.back); flip = Math.max(flip, f.flip);
+    worstBack = Math.max(worstBack, f.back);
+    if (f.flip > worstFlip) { worstFlip = f.flip; flipAt = `TWA ${sh.twa}°, строка ${row.r}`; }
+    if (f.camber >= ARC_MIN && ratio > worstEven) {
+      worstEven = ratio; worstAt = `TWA ${sh.twa}°, строка ${row.r}`;
+    }
+    if (f.entry * DEG < minEntry) { minEntry = f.entry * DEG; entryAt = `TWA ${sh.twa}°, строка ${row.r}`; }
+    console.log(`   ${String(row.r).padStart(2)} |${k.chord.toFixed(2).padStart(6)}` +
+      `${k.camber.toFixed(3).padStart(6)}${(k.entry * DEG).toFixed(0).padStart(4)}` +
+      `${(k.exit * DEG).toFixed(0).padStart(5)} |${f.chord.toFixed(2).padStart(6)}` +
+      `${f.camber.toFixed(3).padStart(6)}${(f.draft * 100).toFixed(0).padStart(5)}%` +
+      `${(f.entry * DEG).toFixed(0).padStart(4)}${(f.exit * DEG).toFixed(0).padStart(5)}` +
+      `${(f.kink * DEG).toFixed(0).padStart(6)}°/${(f.kinkAt * 100).toFixed(0)}%` +
+      ` |${arcAngle(f.camber).toFixed(0).padStart(6)}${even.toFixed(0).padStart(6)}`);
+  }
+  // Твист — разность азимутов хорды со второй строкой снизу: нижняя лежит на
+  // галсе и шкотовом углу и азимут имеет свой, к твисту отношения не имеющий.
+  const base = sh.rows[1].fly.bearing;
+  const tw = sh.rows.filter(x => x.fly.chord > 0.3 && x.r > 1)
+    .map(x => `${x.r}:${(wrapPi(x.fly.bearing - base) * DEG).toFixed(0)}°`).join(' ');
+  console.log(`  ход назад ${(back * 100).toFixed(1)} %, вывернуто ${(flip * 100).toFixed(0)} %`);
+  console.log(`  твист по строкам: ${tw}\n`);
+}
+
+check(worstBack <= 0.01, 'сечение идёт от передней шкаторины к задней и не складывается вдвое (предел 1 % хорды)',
+  `${(worstBack * 100).toFixed(1)} %`);
+check(worstFlip <= 0.02, 'все точки сечения с одной стороны хорды, как у дуги (предел 2 %)',
+  `${(worstFlip * 100).toFixed(0)} % (${flipAt})`);
+check(worstEven <= 2, 'ткань гнётся дугой, а не ломается: худший залом не круче ровного вдвое',
+  `${worstEven.toFixed(1)}× (${worstAt})`);
+check(minEntry >= -1, 'передняя шкаторина не завёрнута на наветренную сторону (вход не отрицателен)',
+  `${minEntry.toFixed(0)}° (${entryAt})`);
+console.log('');
 
 console.log('=== та же ткань без жёсткости на излом: сверка с теорией ===\n');
 console.log('Без излома натянутая строка — равномерно нагруженная нить, и её дуга');

@@ -220,6 +220,101 @@ function arcAtZ(A, B, L, n, z, out) {
   return arcAt(A, B, L, n, 0.5 * (lo + hi), out);
 }
 
+// --- ПРОФИЛЬ СЕЧЕНИЯ ------------------------------------------------------------
+//
+// Строка кроя была дугой окружности. У дуги постоянная кривизна, а значит место
+// наибольшего пуза ровно посередине хорды, а углы входа и выхода равны. Обмер
+// настоящего асимметрика (`data/sail/deparday_j80_2016.json`) даёт место пуза
+// 41…49 % в рабочей части и вход вдвое-втрое круче выхода. Дугой такого не
+// построить ни при каких длинах.
+//
+// Семейство взято у парусных мастеров: Sailcut CAD (R. & J. Lainé, GPL-2)
+// задаёт сечение не формой, а РАСПРЕДЕЛЕНИЕМ КРИВИЗНЫ по хорде
+//
+//     z'' = −(a·(1−x)^kluff + kleech·x),   a = 1 + kluff/4,
+//
+// дважды проинтегрированным при z(0) = z(1) = 0. Код оттуда не взят — он под
+// GPL-2 и в этот проект скопирован быть не может; переписано по уравнениям,
+// которые в том исходнике выписаны комментарием.
+//
+// Два показателя и всё: `kluff` собирает кривизну у передней шкаторины,
+// `kleech` у задней. При нуле обоих семейство вырождается в параболу с
+// максимумом ровно на половине — то есть в то, что было. Пара (1, 0.5) даёт
+// максимум на 0.465: это измеренное среднее по рабочим сечениям.
+const PROF_LUFF = 1;
+const PROF_LEECH = 0.5;
+const PROF_A = 1 + PROF_LUFF / 4;
+const PROF_B = PROF_A / ((PROF_LUFF + 2) * (PROF_LUFF + 1));
+const PROF_C = PROF_LEECH / 6 - PROF_B;
+const PROF_N = 48;                       // шагов по хорде при интегрировании
+
+function profZ(x) {
+  return -PROF_A * Math.pow(1 - x, PROF_LUFF + 2) /
+         ((PROF_LUFF + 1) * (PROF_LUFF + 2)) -
+         PROF_LEECH / 6 * x * x * x + PROF_C * x + PROF_B;
+}
+function profDZ(x) {
+  return PROF_A * Math.pow(1 - x, PROF_LUFF + 1) / (PROF_LUFF + 1) -
+         PROF_LEECH / 2 * x * x + PROF_C;
+}
+const PROF_MAX = (() => {
+  let m = 0;
+  for (let x = 0; x <= 1; x += 0.0005) m = Math.max(m, profZ(x));
+  return m;
+})();
+
+// Длина профиля в долях хорды при данной глубине, и заодно накопленная длина по
+// шагам: по ней потом ищется точка на доле ДЛИНЫ.
+const PROF_CUM = new Float64Array(PROF_N + 1);
+function profLen(depth) {
+  const k = depth / PROF_MAX;
+  let L = 0, prev = Math.hypot(1, k * profDZ(0));
+  PROF_CUM[0] = 0;
+  for (let i = 1; i <= PROF_N; i++) {
+    const cur = Math.hypot(1, k * profDZ(i / PROF_N));
+    L += 0.5 * (prev + cur) / PROF_N;
+    PROF_CUM[i] = L;
+    prev = cur;
+  }
+  return L;
+}
+
+// Глубина, при которой профиль имеет заданную длину в долях хорды: длина растёт
+// с глубиной монотонно, тридцати делений пополам хватает на шесть знаков.
+function profDepth(k) {
+  if (!(k > 1 + 1e-9)) return 0;
+  let lo = 0, hi = 1.5;
+  for (let i = 0; i < 30; i++) {
+    const m = 0.5 * (lo + hi);
+    if (profLen(m) < k) lo = m; else hi = m;
+  }
+  return 0.5 * (lo + hi);
+}
+
+// Точка профиля длиной `L` между A и B, выгнутого в сторону `n`. `t` — доля
+// ДЛИНЫ, как и у дуги: узлы садятся поровну по материалу.
+function profAt(A, B, L, n, t, out) {
+  const ex = B[0] - A[0], ey = B[1] - A[1], ez = B[2] - A[2];
+  const c = Math.hypot(ex, ey, ez);
+  if (c < 1e-9) { out[0] = A[0]; out[1] = A[1]; out[2] = A[2]; return out; }
+  const d = profDepth(L / c);
+  const total = profLen(d);            // заполняет PROF_CUM под эту глубину
+  const want = t * total;
+  let x = t;
+  for (let i = 1; i <= PROF_N; i++) {
+    if (PROF_CUM[i] >= want) {
+      const lo = PROF_CUM[i - 1], hi = PROF_CUM[i];
+      x = (i - 1 + (hi > lo ? (want - lo) / (hi - lo) : 0)) / PROF_N;
+      break;
+    }
+  }
+  const z = d * profZ(x) / PROF_MAX * c;
+  out[0] = A[0] + ex * x + n[0] * z;
+  out[1] = A[1] + ey * x + n[1] * z;
+  out[2] = A[2] + ez * x + n[2] * z;
+  return out;
+}
+
 // Точка на дуге длиной `L` между A и B, выгнутой в сторону `n` (единичный,
 // перпендикулярный хорде). `t` — доля ДЛИНЫ ДУГИ, а не хорды: узлы садятся
 // поровну по материалу.
@@ -488,8 +583,7 @@ export class Cloth {
       arcAtZ(C, HA, gen.leech_m, nB, z, B);
       const c = Math.max(0.02, Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]));
       const W = Math.max(c, this.luffAt(A[2]) - this.leechAt(A[2]));
-      const th = arcHalfAngle(W / c);
-      return th < 1e-6 ? 0 : (1 - Math.cos(th)) / (2 * Math.sin(th));
+      return profDepth(W / c);
     };
     // Пузо падает с углом монотонно: чем больше врозь, тем длиннее хорда.
     // Поэтому деление пополам, двадцати шагов хватает на тысячную.
@@ -568,7 +662,7 @@ export class Cloth {
       const nb = [nx, ny, 0];
       for (let c = 0; c < this.cols; c++) {
         const t = c / (this.cols - 1), i = this.ix(r, c);
-        arcAt(A, B, L, nb, t, P);
+        profAt(A, B, L, nb, t, P);
         this.dx[i] = P[0]; this.dy[i] = P[1]; this.dz[i] = P[2];
       }
     }

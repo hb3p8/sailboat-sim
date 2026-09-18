@@ -2,7 +2,7 @@
 //
 // Вынесено из `main.js` целиком: полтысячи строк, которые работают только по
 // клавише G и в обычном ходу не участвуют вовсе. Здесь центры сил, линии тока,
-// поле ветра стрелками, хорды полосок, пробы воды, вид сверху на струи,
+// поле ветра стрелками, панели решётки, пробы воды, вид сверху на струи,
 // ортогональные виды и карточки с числами.
 //
 // Файл вклеивается ПОСЛЕ main.js и живёт в общей с ним области видимости — как
@@ -382,9 +382,10 @@ function updateTop() {
 // направление в каждой точке. По ним видно и заход, и то, что порыв приходит
 // не сразу на всю акваторию.
 //
-// Латы на парусе — это хорды полосок, нарисованные каждая под своим углом.
-// Твист по ним читается сразу: латы разворачиваются веером. Цвет — угол атаки:
-// синий заполаскивает, зелёный работает, красный сорван.
+// Плитки на парусе — это ПАНЕЛИ вихревой решётки, взятые прямо из расчёта:
+// шесть полосок по высоте, три панели по хорде. Твист по ним читается сразу,
+// а вместе с ним и то, чем парус представлен в модели. Цвет — тяга полоски:
+// красный тормозит, зелёный везёт. Подробности — у самой геометрии ниже.
 
 const DBG_STEP = 12, DBG_HALF = 3;             // сетка стрелок ветра, м
 const arrowPts = [];
@@ -484,17 +485,58 @@ function updateField(cx, cz, t) {
 }
 const curProbe = { x: 0, y: 0 };
 
-const NSTRIP = 12, BAT_V = 6, BAT_HALF = 0.055;
+// --- ПАНЕЛИ: то, что физика видит вместо паруса --------------------------------
+//
+// Раньше здесь рисовались «латы» — по одной плоской хорде на полоску, и хорда
+// эта СТРОИЛАСЬ ЗАНОВО: из высоты полоски, шкота и твиста. Второй расчёт той же
+// вещи рядом с первым; расходиться им ничто не мешало, и они разошлись. У
+// генакера хорда берётся не из шкота, а С ПОЛОТНА — там её начало, конец и
+// высота, — то есть нарисованная лата показывала парус, которого в расчёте нет.
+// А главное, латы были рассчитаны на двенадцать полосок: генакера в отладочном
+// виде не было вовсе.
+//
+// Теперь берётся `rig.surf` — тот самый массив станций по хорде, которым парус
+// ПРЕДСТАВЛЕН в расчёте: о него спотыкается пелена, по его точкам стоят
+// присоединённые вихри. Ничего не выводится заново, показывается имеющееся.
+//
+// Видно при этом сразу три вещи, которых по числам не прочесть:
+//
+//   — сколько у паруса полосок и панелей по хорде (шесть и три) и насколько
+//     грубо этим представлена настоящая форма;
+//   — что сечение в расчёте — ПАРАБОЛА проектного пуза на хорде с полотна, а не
+//     форма самого полотна: у генакера нарисованный парус и посчитанный видны
+//     порознь и расходятся тем сильнее, чем глубже крой;
+//   — стоит ли полоска В РЕШЁТКЕ. Панели разделены зазором, пока решётка
+//     полоску считает; когда её выносит предохранитель, зазор пропадает и
+//     полоска идёт сплошной лентой. На полных курсах генакер так и идёт — и это
+//     не сбой картинки, а то самое «вне решётки 95…100 % шагов».
+const PAN_SAILS = 3;                                  // грот, стаксель, генакер
+const PAN_MAX = PAN_SAILS * STRIPS * NCHORD;
+const PAN_V = 6;                                      // два треугольника на панель
+const PAN_INSET = 0.10;                               // доля панели на зазор
+// Четыре угла панели и разбивка на два треугольника. Оба буфера модульные:
+// `updateBattens` зовётся каждый кадр, и заводить их внутри значит класть мусор
+// в горячий путь отрисовки.
+const PAN_Q = new Float64Array(12);
+const PAN_TRI = [0, 1, 2, 0, 2, 3];
 const battenGeo = new BufferGeometry();
 battenGeo.setAttribute('position',
-  new Float32BufferAttribute(new Float32Array(NSTRIP * BAT_V * 3), 3));
+  new Float32BufferAttribute(new Float32Array(PAN_MAX * PAN_V * 3), 3));
 battenGeo.setAttribute('color',
-  new Float32BufferAttribute(new Float32Array(NSTRIP * BAT_V * 3), 3));
+  new Float32BufferAttribute(new Float32Array(PAN_MAX * PAN_V * 3), 3));
+// Панели ПРОСВЕЧИВАЮТ, и это не украшение. Прежние латы были лентами в
+// одиннадцать сантиметров и ничего собой не закрывали; панели — это вся
+// поверхность паруса, и глухими они закрыли бы ровно то, с чем их и надо
+// сравнивать: само полотно. Сквозь полупрозрачные видно и то и другое, и видно,
+// НАСКОЛЬКО они разошлись — у генакера сечение в расчёте это парабола
+// проектного пуза, а полотно летит как летит.
 const battens = new Mesh(battenGeo, new MeshBasicMaterial({
-  vertexColors: true, depthTest: false, side: DoubleSide }));
+  vertexColors: true, depthTest: false, side: DoubleSide,
+  transparent: true, opacity: 0.62 }));
 battens.frustumCulled = false;
 battens.renderOrder = 4;
-boatGroup.add(battens);
+// В сцену панели встают ниже, вместе с горизонтной группой: она объявлена
+// дальше по файлу, и тронуть её здесь значит попасть во временную мёртвую зону.
 
 // Цвет по ТЯГЕ полоски, а не по углу атаки.
 //
@@ -515,41 +557,57 @@ function driveColour(f) {
   return [0.55 - 0.25 * k, 0.55 + 0.4 * k, 0.6 - 0.25 * k];
 }
 
-function updateBattens(side) {
+function updateBattens() {
+  const rig = boat.rig, surf = rig && rig.surf;
+  const st = boat.telemetry && boat.telemetry.strips;
+  if (!surf || !st) { battenGeo.setDrawRange(0, 0); return; }
+  const NS = Math.min(rig.strips.length, PAN_SAILS * STRIPS);
   const p = battenGeo.attributes.position.array;
   const c = battenGeo.attributes.color.array;
-  const st = boat.telemetry && boat.telemetry.strips;
   // Нормируем по самой тянущей полоске: важно, кто здесь и сейчас работает,
   // а не абсолютные ньютоны, которые меняются на порядок с силой ветра.
   let peak = 1e-6;
-  if (st) for (const d of st) peak = Math.max(peak, Math.abs(d.drive));
-  for (let i = 0; i < NSTRIP; i++) {
-    const s = boat.rig.strips[i], d = st ? st[i] : null;
-    const aw = d ? d.awaDeg * D : Math.PI;
-    // Настройки берутся у ТОГО паруса, которому полоска принадлежит: шкоты,
-    // твист и пузо у грота со стакселем свои.
-    const own = s.jib ? jibSheetOf(boat.o) : boat.o.sheet;
-    const tw = s.jib
-      ? (boat.rig.twistEffJib != null ? boat.rig.twistEffJib : boat.o.jibTwist || 0)
-      : (boat.rig.twistEff || boat.o.twist);
-    const held = Math.min(own, aw);
-    const over = Math.min(1, Math.max(0, (own - s.maxSheet) / (25 * D)));
-    const sheet = held + (aw - held) * over + tw * s.twistF;
-    const ax = s.xLuff, az = 0;
-    const bx = s.xLuff - s.chord * Math.cos(sheet);
-    const bz = s.chord * Math.sin(sheet) * side;
-    let k = i * BAT_V * 3;
-    const put = (x, y, z) => { p[k] = x; p[k + 1] = y; p[k + 2] = z; k += 3; };
-    put(ax, s.h - BAT_HALF, az); put(ax, s.h + BAT_HALF, az);
-    put(bx, s.h - BAT_HALF, bz);
-    put(ax, s.h + BAT_HALF, az); put(bx, s.h + BAT_HALF, bz);
-    put(bx, s.h - BAT_HALF, bz);
-    const col = driveColour(d ? d.drive / peak : 0);
-    for (let v = 0; v < BAT_V; v++) {
-      const b = (i * BAT_V + v) * 3;
-      c[b] = col[0]; c[b + 1] = col[1]; c[b + 2] = col[2];
+  for (const d of st) peak = Math.max(peak, Math.abs(d.drive));
+  let v = 0;
+  const q = PAN_Q;
+  for (let i = 0; i < NS; i++) {
+    // Убранный парус пропускается: его полоски выходят из прохода геометрии до
+    // того, как заполнят `surf`, и там лежат координаты с последнего шага, когда
+    // он ещё стоял. Без этого поднятый генакер тащил бы за собой призрак
+    // спущенного стакселя.
+    if (rig.stripCalc && rig.stripCalc[i] && !rig.stripCalc[i].live) continue;
+    // Станции по хорде: низ полоски и верх, от передней шкаторины к задней.
+    const o = i * 2 * (NCHORD + 1) * 3;
+    const col = driveColour(st[i] ? st[i].drive / peak : 0);
+    // Зазор между панелями — признак того, что решётка эту полоску СЧИТАЕТ.
+    // Вынутая предохранителем идёт сплошной лентой: панелей у неё в решётке нет.
+    const inset = (rig.latOn && !rig.latOn[i]) ? 0 : PAN_INSET;
+    for (let j = 0; j < NCHORD; j++) {
+      const a = o + j * 6, b = o + (j + 1) * 6;
+      for (let k = 0; k < 3; k++) {
+        q[k] = surf[a + k];             // низ, станция j
+        q[3 + k] = surf[b + k];         // низ, станция j+1
+        q[6 + k] = surf[b + 3 + k];     // верх, станция j+1
+        q[9 + k] = surf[a + 3 + k];     // верх, станция j
+      }
+      if (inset) {
+        for (let k = 0; k < 3; k++) {
+          const m = (q[k] + q[3 + k] + q[6 + k] + q[9 + k]) / 4;
+          for (let g = 0; g < 4; g++) q[g * 3 + k] += (m - q[g * 3 + k]) * inset;
+        }
+      }
+      // Оси: у рига X в нос, Y влево, Z вверх; у сцены Y вверх, Z вправо.
+      for (let t = 0; t < 6; t++) {
+        const g = PAN_TRI[t] * 3;
+        p[v] = bodyPointLocalX(q[g]);
+        p[v + 1] = bodyPointLocalY(q[g + 2]);
+        p[v + 2] = bodyPointLocalZ(q[g + 1]);
+        c[v] = col[0]; c[v + 1] = col[1]; c[v + 2] = col[2];
+        v += 3;
+      }
     }
   }
+  battenGeo.setDrawRange(0, v / 3);
   battenGeo.attributes.position.needsUpdate = true;
   battenGeo.attributes.color.needsUpdate = true;
 }
@@ -635,6 +693,10 @@ const FLOW_SPAN = 0.25;
 
 const flowGroup = new Group();
 scene.add(flowGroup);
+// Панели — в ГОРИЗОНТНУЮ группу, а не в связанную с корпусом: `surf` посчитан в
+// тех же осях, в которых считает риг, — курс есть, крена нет, крен уже внутри
+// самих координат. На `boatGroup` панели получили бы его дважды.
+flowGroup.add(battens);
 
 function flowGeometry() {
   const nv = FLOW_LINES * FLOW_PTS * FLOW_SIDES;
@@ -1271,7 +1333,18 @@ function updateRig(t) {
   if (!st) return;
   const H = rig.mast_height_m;
   const y = h => RIG_H - RIG_PAD - (h / H) * (RIG_H - 2 * RIG_PAD);
-  const main = st.slice(0, 6), jib = st.slice(6);
+  // Полоски РАЗБИРАЮТСЯ ПО ПАРУСАМ, а не режутся по счёту.
+  //
+  // Здесь стояло `st.slice(0, 6)` и `st.slice(6)` — грот и всё остальное. С
+  // третьим парусом «всё остальное» стало двенадцатью полосками двух разных
+  // парусов, и ломаная скакала между стакселем и генакером по их высотам. Номер
+  // паруса у полоски есть, и спросить его дешевле, чем помнить порядок.
+  const rows = [[], [], []];
+  const sails = boat.rig.strips;
+  for (let i = 0; i < st.length && i < sails.length; i++)
+    rows[sails[i].sail].push(st[i]);
+  const [main, jib, gen] = rows;
+  const genUp = gen.length > 0;
   let peakDrive = 1e-6;
   for (const s of st) peakDrive = Math.max(peakDrive, Math.abs(s.drive));
 
@@ -1294,16 +1367,22 @@ function updateRig(t) {
   svg += poly(main.map(s => [xw(s.ws), y(s.z)]), 'w') + '</g>';
 
   // --- угол атаки: ноль и срыв отмечены, между ними парус работает
-  const aLo = -20, aHi = 34;
+  //
+  // Шкала раздвигается, когда поднят генакер: на полных курсах его полоски
+  // стоят под 60…76°, и на прежней шкале до 34° все шесть ложились на упор —
+  // то есть показывали одно и то же там, где между ними вся разница.
+  const aLo = -20, aHi = genUp ? 80 : 34;
   const xa = v => 8 + ((Math.max(aLo, Math.min(aHi, v)) - aLo) / (aHi - aLo)) *
                       (RIG_W - 20);
-  svg += axis(1, 'угол атаки', [[xa(0) - 4, '0'], [xa(18) - 8, '18°']]);
+  svg += axis(1, 'угол атаки', [[xa(0) - 4, '0'], [xa(18) - 8, '18°'],
+                                ...(genUp ? [[xa(aHi) - 22, aHi + '°']] : [])]);
   svg += '<line class="zero" x1="' + xa(0) + '" y1="' + y(H) + '" x2="' +
     xa(0) + '" y2="' + y(0) + '"/>';
   svg += '<line class="stall" x1="' + xa(18) + '" y1="' + y(H) + '" x2="' +
     xa(18) + '" y2="' + y(0) + '"/>';
   svg += poly(main.map(s => [xa(s.alphaDeg), y(s.z)]), 'a') +
-         poly(jib.map(s => [xa(s.alphaDeg), y(s.z)]), 'aj');
+         poly(jib.map(s => [xa(s.alphaDeg), y(s.z)]), 'aj') +
+         poly(gen.map(s => [xa(s.alphaDeg), y(s.z)]), 'ag');
   for (const s of st)
     svg += '<circle cx="' + xa(s.alphaDeg).toFixed(1) + '" cy="' +
       y(s.z).toFixed(1) + '" r="1.8" fill="rgb(' +
@@ -1319,33 +1398,69 @@ function updateRig(t) {
   svg += axis(2, 'тяга / боковая', [[10, 'бок'], [RIG_W - 26, 'тяга']]);
   svg += '<line class="ax" x1="' + mid + '" y1="' + y(rig.mast_height_m) +
     '" x2="' + mid + '" y2="' + y(0) + '"/>';
-  for (const [arr, dim] of [[main, false], [jib, true]]) {
+  for (const [arr, kd, ks] of [[main, 'bd', 'bm'], [jib, 'bdj', 'bj'],
+                               [gen, 'bdg', 'bg']]) {
     for (const s of arr) {
       const yy = (y(s.z) - 2.6).toFixed(1);
       const wd = (Math.abs(s.drive) / fMax) * half;
       const ws = (Math.abs(s.side) / fMax) * half;
-      svg += '<rect class="' + (dim ? 'bdj' : 'bd') + '" x="' + mid +
+      svg += '<rect class="' + kd + '" x="' + mid +
         '" y="' + yy + '" width="' + Math.max(0.4, wd).toFixed(1) + '" height="5.2"/>';
-      svg += '<rect class="' + (dim ? 'bj' : 'bm') + '" x="' +
+      svg += '<rect class="' + ks + '" x="' +
         (mid - Math.max(0.4, ws)).toFixed(1) + '" y="' + yy +
         '" width="' + Math.max(0.4, ws).toFixed(1) + '" height="5.2"/>';
     }
   }
   svg += '</g>';
 
-  // --- пузо: сколько его осталось после того, как посчиталась форма
-  const cMax = 0.16;
+  // --- пузо: сколько его осталось после того, как посчиталась форма.
+  // Шкала до 30 % с генакером: его кроят вдвое полнее грота, и на шкале до 16 %
+  // он упирался в край всей высотой.
+  const cMax = genUp ? 0.30 : 0.16;
   const xc = v => 8 + (Math.min(cMax, Math.max(0, v)) / cMax) * (RIG_W - 20);
-  svg += axis(3, 'пузо, % хорды', [[8, '0'], [RIG_W - 30, (100 * cMax).toFixed(0)]]);
+  // Черта измеренного: докуда поляра сечения СНЯТА в трубе. Правее неё таблица
+  // держит последний ряд, то есть сечение с пузом 0.27 считается как 0.18 — и
+  // именно там генакер снимает большую часть своей силы. Та же роль, что у
+  // срывной черты в столбце угла атаки: за ней модель перестаёт опираться на
+  // измерение.
+  const cLast = PACK.sail_polar && PACK.sail_polar.camber
+    ? PACK.sail_polar.camber[PACK.sail_polar.camber.length - 1] : null;
+  svg += axis(3, 'пузо, % хорды', [[8, '0'], [RIG_W - 30, (100 * cMax).toFixed(0)],
+    ...(cLast != null && cLast < cMax ? [[xc(cLast) - 6, (100 * cLast).toFixed(0)]] : [])]);
+  if (cLast != null && cLast < cMax)
+    svg += '<line class="stall" x1="' + xc(cLast) + '" y1="' + y(H) + '" x2="' +
+      xc(cLast) + '" y2="' + y(0) + '"/>';
   svg += poly(main.map(s => [xc(Math.abs(s.camber)), y(s.z)]), 'cam') +
-         poly(jib.map(s => [xc(Math.abs(s.camber)), y(s.z)]), 'camj') + '</g>';
+         poly(jib.map(s => [xc(Math.abs(s.camber)), y(s.z)]), 'camj') +
+         poly(gen.map(s => [xc(Math.abs(s.camber)), y(s.z)]), 'camg') + '</g>';
 
   rigSvg.innerHTML = svg;
+  // Подпись: к прежним числам добавлены два, без которых полные курсы не
+  // прочесть, — сколько полосок ВНЕ решётки и насколько полно у паруса работает
+  // зеркало от воды. Оба меняются на ходу и оба решают, откуда берётся сила.
+  // Считаются только ЖИВЫЕ полоски: у убранного паруса решётки нет по другой
+  // причине, и мешать их в одно число значит сказать «вне решётки двенадцать»
+  // там, где шесть из них — спущенный стаксель.
+  const lat = boat.rig.latOn, calc = boat.rig.stripCalc;
+  let off = 0, live = 0;
+  for (let i = 0; i < st.length && calc && i < calc.length; i++) {
+    if (!calc[i].live) continue;
+    live++;
+    if (lat && !lat[i]) off++;
+  }
+  const mir = boat.rig.mirK;
+  const gap = boat.rig.stripCalc && boat.rig.stripCalc.length
+    ? boat.rig.stripCalc[genUp ? 2 * STRIPS : 0].zLo : 0;
   document.getElementById('rignote').innerHTML =
     'ЦП по нагрузке <b>' + (t.ceHeightM || 0).toFixed(2) + ' м</b>' +
     ' &nbsp;·&nbsp; твист <b>' + ((boat.rig.twistEff || 0) / D).toFixed(0) + '°</b>' +
     (boat.rig.twistEff > boat.o.twist + 1 * D ? ' <span class="slack">шкот провис</span>' : '') +
-    ' &nbsp;·&nbsp; ветер у рига <b>' + (t.twsKn || 0).toFixed(1) + '</b> уз';
+    ' &nbsp;·&nbsp; ветер у рига <b>' + (t.twsKn || 0).toFixed(1) + '</b> уз' +
+    '<br>вне решётки <b>' + off + '</b> из ' + live + ' живых' +
+    ' &nbsp;·&nbsp; щель под ' + (genUp ? 'генакером' : 'гротом') +
+    ' <b>' + gap.toFixed(2) + ' м</b>' +
+    ', зеркало <b>' + (mir ? mir[genUp ? 2 : 0] : 0.5).toFixed(2) + '</b>' +
+    ' <span class="hint">(½ — полное)</span>';
 }
 
 // Начальное состояние. Стоит здесь, а не в конце main.js: setDebug трогает

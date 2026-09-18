@@ -3251,7 +3251,7 @@ function frame() {
   if (debugMode >= 1 && debugMode <= 3) {
     flowGroup.position.set(toSceneX(ix), 0, toSceneZ(iy));
     flowGroup.rotation.y = headingRotY(ipsi);
-    updateBattens(side);
+    updateBattens();
   }
   if (debugMode === 1) {
     updateField(toSceneX(ix), toSceneZ(iy), now);

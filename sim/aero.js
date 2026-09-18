@@ -2952,6 +2952,17 @@ export class Rig {
       chord: this.stripCalc.map(g => g.chord || 0),
       live: this.stripCalc.map(g => (g.live ? 1 : 0)),
       ve: this.stripCalc.map(g => g.ve || 0),
+      slack: this.stripCalc.map(g => g.slack || 0),
+      slackCut: this.stripCalc.map(g => g.slackCut || 0),
+      // Нагрузка по хорде, направление потока и сила полоски — это то, чем
+      // кормится ТКАНЬ. Шагает она в начале шага, до прохода геометрии, то есть
+      // по этим числам с прошлого; на нулях полотно первый шаг идёт БЕЗ
+      // ДАВЛЕНИЯ и сползает на сантиметр с лишним.
+      q: this.stripCalc.map(g => Array.from(g.q)),
+      d1: this.stripCalc.map(g => g.d1 || 0),
+      d2: this.stripCalc.map(g => g.d2 || 0),
+      drive: this.stripState.map(d => d.drive || 0),
+      side: this.stripState.map(d => d.side || 0),
       // Кажущийся угол с прошлого шага: из него считается провис шкота.
       awa: this.sailOut ? this.sailOut.awa : 0,
       fuse: this.fuseTrips || 0,
@@ -2989,6 +3000,11 @@ export class Rig {
         if (st.alpha) g.alpha = st.alpha[i];
         if (st.chord) g.chord = st.chord[i];
         if (st.live) g.live = !!st.live[i];
+        if (st.slack) { g.slack = st.slack[i]; g.slackCut = st.slackCut[i]; }
+        if (st.q && st.q[i] && st.q[i].length === g.q.length) g.q.set(st.q[i]);
+        if (st.d1) { g.d1 = st.d1[i]; g.d2 = st.d2[i]; }
+        if (st.drive) { this.stripState[i].drive = st.drive[i]; }
+        if (st.side) { this.stripState[i].side = st.side[i]; }
         // Признак того, что состояние прошлого шага у полоски есть: затенение
         // проверяет его по `ve`, и нулевое значит «шагов ещё не было».
         if (st.ve) g.ve = st.ve[i];

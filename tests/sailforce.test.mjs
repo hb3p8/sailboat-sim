@@ -75,7 +75,8 @@ function refAt(betaDeg, spi) {
   const cdi = (kp + AREF / (Math.PI * HEFF * HEFF)) * cl * cl;
   const b = betaDeg * Math.PI / 180;
   return { cx: cl * Math.sin(b) - (cd0 + cdi) * Math.cos(b),
-           cy: cl * Math.cos(b) + (cd0 + cdi) * Math.sin(b) };
+           cy: cl * Math.cos(b) + (cd0 + cdi) * Math.sin(b),
+           cl: cl, cd0: cd0, cdi: cdi };
 }
 
 // --- модель ---------------------------------------------------------------------
@@ -142,6 +143,57 @@ for (const r of best) {
     e.cx.toFixed(3).padStart(7), e.cy.toFixed(3).padStart(7));
 }
 console.log('');
+
+// --- РАЗЛОЖЕНИЕ НА ПОДЪЁМНУЮ И СОПРОТИВЛЕНИЕ -------------------------------------
+//
+// C_x и C_y — это одна и та же сила в разных осях, и по ним одним не понять, что
+// именно разошлось. Поворот в оси кажущегося ветра разделяет ответ надвое:
+//
+//     CL =  C_x·sin β + C_y·cos β        поперёк потока
+//     CD = −C_x·cos β + C_y·sin β        вдоль потока
+//
+// Обе красные проверки стенда — и тяга, и отношение боковой к тяге — это ОДНО
+// расхождение, увиденное с двух сторон: если сопротивления мало, вектор силы
+// повёрнут к носу, тяга растёт, боковая падает. Разложение показывает это прямо,
+// поэтому печатается всегда.
+//
+// Модуль боковой: у эталона она положительна по построению, у модели знак
+// говорит, с какого борта ветер.
+console.log('  Разложение в осях кажущегося ветра (сила поперёк потока и вдоль):\n');
+console.log('  курс   AWA |  модель CL   CD   CD/CL |  эталон CL   CD   CD/CL | CD эталона: cd0 + cdi');
+for (const m of model) {
+  const b = m.awa * Math.PI / 180, s = Math.sin(b), c = Math.cos(b);
+  const cy = Math.abs(m.cy);
+  const CL = m.cx * s + cy * c, CD = -m.cx * c + cy * s;
+  const rcy = Math.abs(m.ref.cy);
+  const rCL = m.ref.cx * s + rcy * c, rCD = -m.ref.cx * c + rcy * s;
+  console.log('  %s° %s° | %s %s %s | %s %s %s | %s + %s',
+    String(m.twa).padStart(4), m.awa.toFixed(0).padStart(5),
+    CL.toFixed(3).padStart(9), CD.toFixed(3).padStart(6),
+    (CD / Math.abs(CL || 1)).toFixed(2).padStart(6),
+    rCL.toFixed(3).padStart(9), rCD.toFixed(3).padStart(6),
+    (rCD / Math.abs(rCL || 1)).toFixed(2).padStart(6),
+    m.ref.cd0.toFixed(3), m.ref.cdi.toFixed(3));
+}
+console.log('');
+
+// --- сколько силы снято за пределами измеренной поляры ---------------------------
+//
+// Поляра сечения измерена до пуза 0.18, а генакер кроится глубже: объявленный
+// закон полноты доходит до 0.28. За последним рядом таблица держит его значения
+// (правила продолжения проверены и отвергнуты, docs/wake.md), то есть сечение с
+// пузом 0.275 считается как 0.18. Насколько это важно — видно по доле силы,
+// снятой оттуда.
+{
+  const last = PACK.sail_polar ? PACK.sail_polar.camber[PACK.sail_polar.camber.length - 1] : null;
+  if (last != null) {
+    console.log('  Поляра сечения измерена до пуза ' + last.toFixed(2) +
+                ', а крой генакера доходит до 0.28: за последним рядом');
+    console.log('  таблица держит его значения, то есть сечение с пузом 0.275 ' +
+                'считается как 0.18.');
+    console.log('  Доля силы генакера, снятой оттуда, — 62…86 % (замер в docs/wake.md).\n');
+  }
+}
 
 // --- сравнение по форме ---------------------------------------------------------
 const peak = a => a.reduce((p, x) => (x.cx > p.cx ? x : p), a[0]);

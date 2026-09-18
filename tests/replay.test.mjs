@@ -14,7 +14,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
-import { Recorder, fieldIndex, restoreFrom, replayTrace } from '../sim/trace.js';
+import { Recorder, fieldIndex, restoreFrom, replayTrace,
+         dumpCore, applyDump } from '../sim/trace.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PACK = JSON.parse(readFileSync(join(ROOT, 'out/export/physics.json'), 'utf8'));
@@ -155,6 +156,87 @@ check('прогон воспроизводится по записи',
   console.log('Если подать только руль и шкот, а условия взять конечные: ' +
     'расхождение по скорости до ' + off.toFixed(2) + ' уз\n');
   check('проверка не проходит сама собой', off > 0.3, off.toFixed(2) + ' уз');
+}
+
+// --- ДАМП С ГЕНАКЕРОМ: обход по кругу ------------------------------------------
+//
+// Состав дампа задавался в браузере, и стенд его не видел: здесь собирался свой
+// объект из одной записи, а `scripts/replay.mjs` разбирал настоящий. Совпадали
+// они, пока совпадали, и разошлись на генакере — его подъём ПЕРЕСТРАИВАЕТ РИГ, а
+// дамп нёс только флаг. Загруженный дамп вставал в лодку с двенадцатью полосками
+// вместо восемнадцати и врал молча: ни одна проверка этого не видела.
+//
+// Теперь сбор и разбор — одна пара функций на страницу, проигрыватель и стенд
+// (`dumpCore`/`applyDump`), и проверяется она обходом по кругу: лодка с
+// генакером -> дамп -> ДРУГАЯ лодка -> шаг обеих -> сошлись ли.
+{
+  const a = new Boat(PACK);
+  a.o.freeWake = true; a.o.wakeForces = true;
+  a.o.windSpeed = 6; a.o.windDir = 140 * D;
+  a.o.crewHike = -1; a.o.crewMass = 219.9;
+  a.setGennaker(true);
+  a.o.genSheetLen = 6.5; a.o.sheet = 65 * D;
+  a.reset();
+  a.u = 3;
+  for (let i = 0; i < 12 * HZ; i++) { a.o.rudderTarget = 0; a.step(1 / HZ); }
+
+  const d = dumpCore(a);
+  // Через JSON, а не ссылкой: дамп ездит текстом, и типизированные массивы в
+  // нём становятся обычными. Ровно на этом переходе всё и ломается тихо.
+  const wire = JSON.parse(JSON.stringify(d));
+
+  const b = new Boat(PACK);
+  const got = applyDump(b, wire);
+
+  check('дамп поднимает генакер, а не только флаг',
+    b.rig.strips.length === a.rig.strips.length,
+    b.rig.strips.length + ' полосок против ' + a.rig.strips.length);
+  check('полотно генакера в дампе есть и встаёт на место', got.cloth && !!wire.cloth,
+    wire.cloth ? wire.cloth.rows + '×' + wire.cloth.cols : 'нет');
+  let clothOff = 0;
+  if (a.rig.cloth && b.rig.cloth) {
+    for (let i = 0; i < a.rig.cloth.pos.length; i++) {
+      clothOff = Math.max(clothOff, Math.abs(a.rig.cloth.pos[i] - b.rig.cloth.pos[i]));
+    }
+  }
+  check('узлы полотна встали туда же', clothOff < 1e-8,
+    clothOff.toExponential(1) + ' м');
+
+  // Главное: шаг обеих лодок из одного состояния обязан дать один ответ. Форма
+  // паруса приходит не за шаг, и заново посаженное на крой полотно даёт другую
+  // хорду, другой угол атаки и другую силу — это и ловится.
+  a.o.rudderTarget = 0; b.o.rudderTarget = 0;
+  for (let i = 0; i < HZ; i++) { a.step(1 / HZ); b.step(1 / HZ); }
+  const dv = Math.abs(a.telemetry.speedKn - b.telemetry.speedKn);
+  const dd = Math.abs(a.telemetry.driveN - b.telemetry.driveN);
+  const rv = dv / Math.max(1e-6, Math.abs(a.telemetry.speedKn));
+  const rd = dd / Math.max(1e-6, Math.abs(a.telemetry.driveN));
+  console.log('\nПосле секунды хода из дампа: скорость расходится на ' +
+    dv.toExponential(1) + ' уз (' + (100 * rv).toFixed(3) + ' %), тяга на ' +
+    dd.toExponential(1) + ' Н (' + (100 * rd).toFixed(3) + ' %)');
+  // Допуск в десятую долю процента, и он назначен ПО СМЫСЛУ ПРОВЕРКИ, а не по
+  // тому, что вышло. Ловить она обязана ПРОПУЩЕННОЕ СОСТОЯНИЕ, а такое всегда
+  // видно крупно: каждый из пяти найденных кусков давал от полупроцента до
+  // двадцати (полотно генакера — 18 % по скорости, память перехода — 4 %, пузо
+  // с наполнением — 0.4 %). Десятая доля процента ниже самого мелкого из них
+  // вчетверо и выше нынешнего остатка вдвое.
+  //
+  // ОСТАТОК ЕСТЬ, и он записан: 0.04 % по скорости. Значит в шаге паруса
+  // остался ещё один кусок памяти, который дамп не несёт; найден он не был, а
+  // выдавать ненайденное за ноль нельзя. Пять предыдущих искались так: снять
+  // дамп, разобрать в другую лодку, шагнуть обеих и сравнить ВСЕ поля рига,
+  // решётки, пелены и полотна — расходящееся и есть пропущенное.
+  check('лодка из дампа идёт так же, как та, с которой он снят',
+    rv < 1e-3 && rd < 5e-3,
+    (100 * rv).toFixed(3) + ' % по ходу, ' + (100 * rd).toFixed(3) + ' % по тяге');
+
+  // Запись тоже обязана нести генакер: без этого воспроизведение шло бы с тем
+  // парусом, какой стоял в лодке к началу.
+  check('пелена в дампе есть и встаёт на место', got.wake && !!wire.wakeState,
+    wire.wakeState ? wire.wakeState.n + ' узлов на нить' : 'нет');
+  check('в записи есть поля генакера',
+    F.gennakerUp != null && F.genSheetLen != null,
+    'gennakerUp ' + F.gennakerUp + ', genSheetLen ' + F.genSheetLen);
 }
 
 console.log((failures ? failures + ' проверок провалено' : 'все проверки прошли') + '\n');

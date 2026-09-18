@@ -36,6 +36,11 @@ WebGPU, а его браузер выдаёт только в ЗАЩИЩЁННО
 фигурки экипажа и то, что появится дальше. Модели лежат в `assets/`, распаковщик
 Draco — в `viewer/vendor/draco/`.
 
+**Принимать дампы симулятора.** Кнопка «Сдампать состояние» шлёт их сюда, а не
+в папку загрузок; сервер кладёт дамп в `out/dumps/` и отвечает коротким именем
+вида `a3f9c2`. По этому имени дамп зовут и `scripts/replay.mjs`, и `sv20load` в
+консоли страницы. Без сервера страница скачивает дамп файлом, как раньше.
+
 Страницы по-прежнему открываются двойным кликом, но уже не в полном составе:
 `sim/index.html` без сервера покажет лодку без экипажа, `viewer/terrain.html` —
 без полей физики и разметки. Обе об этом скажут, а не сломаются.
@@ -46,6 +51,7 @@ import http.server
 import json
 import os
 import re
+import secrets
 import socket
 import socketserver
 import ssl
@@ -110,6 +116,90 @@ def perf_append(data):
     with open(path, encoding="utf-8") as f:
         n = sum(1 for _ in f)
     return os.path.relpath(path, ROOT), n
+
+
+# --- дампы симулятора ------------------------------------------------------
+#
+# Кнопка «Сдампать состояние» раньше скачивала файл в «Загрузки», и каждый
+# разбор начинался с того, что его оттуда доставали и тащили в репозиторий.
+# Сослаться на дамп в разговоре было нечем — только временем, когда его сняли.
+#
+# Теперь страница шлёт его сюда, сервер кладёт в `out/dumps/` и отвечает
+# КОРОТКИМ ИМЕНЕМ. По нему дамп зовут и `scripts/replay.mjs`, и `sv20load` в
+# консоли страницы; его же удобно назвать вслух.
+#
+# Почему это можно при открытой сети — то же, что у профиля: пишется в `out/`,
+# который не коммитится, имя собирает СЕРВЕР (подсунуть путь нельзя), размер
+# ограничен. Худшее, что сделает чужой в этой сети, — насорит в out/dumps.
+DUMP_URL = "/api/dump"
+DUMP_DIR = os.path.join(ROOT, "out", "dumps")
+DUMP_MAX_BODY = 64 * 1024 * 1024   # запись за двадцать секунд плюс пелена
+DUMP_LIST = 12                     # сколько последних показывать списком
+
+
+def dump_save(raw):
+    """Положить дамп и вернуть его имя. Имя выбирает сервер, а не проситель."""
+    text = raw.decode("utf-8")
+    data = json.loads(text)
+    if not isinstance(data, dict) or "boat" not in data or "controls" not in data:
+        raise ValueError("это не дамп симулятора")
+    os.makedirs(DUMP_DIR, exist_ok=True)
+    day = time.strftime("%Y%m%d-")
+    for _ in range(64):
+        did = secrets.token_hex(3)
+        path = os.path.join(DUMP_DIR, day + did + ".json")
+        if not os.path.exists(path):
+            break
+    else:
+        raise ValueError("не вышло выбрать свободное имя")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)           # целиком: половины дампа не бывает
+    return {"id": did, "file": os.path.relpath(path, ROOT),
+            "kb": round(len(raw) / 1024)}
+
+
+def dump_path(did):
+    """Файл по имени. Имя чистится ЗДЕСЬ: через него не пройти по каталогам."""
+    did = re.sub(r"[^a-z0-9-]", "", str(did or "").lower())[:32]
+    if not did or not os.path.isdir(DUMP_DIR):
+        return None
+    # Имя файла — дата и идентификатор; спрашивать можно и то, и другое целиком.
+    for name in sorted(os.listdir(DUMP_DIR), reverse=True):
+        if not name.endswith(".json"):
+            continue
+        stem = name[:-5]
+        if stem == did or stem.endswith("-" + did):
+            return os.path.join(DUMP_DIR, name)
+    return None
+
+
+def dump_list():
+    """Последние дампы: имя, когда снят, что за случай. Для `sv20load()`."""
+    if not os.path.isdir(DUMP_DIR):
+        return []
+    names = sorted((n for n in os.listdir(DUMP_DIR) if n.endswith(".json")),
+                   reverse=True)[:DUMP_LIST]
+    out = []
+    for name in names:
+        path = os.path.join(DUMP_DIR, name)
+        row = {"id": name[:-5].split("-")[-1], "file": os.path.relpath(path, ROOT),
+               "kb": round(os.path.getsize(path) / 1024)}
+        try:
+            with open(path, encoding="utf-8") as f:
+                d = json.load(f)
+            c = d.get("controls") or {}
+            t = d.get("telemetry") or {}
+            row["saved"] = d.get("saved")
+            row["build"] = (d.get("build") or {}).get("commit")
+            row["gennaker"] = bool(c.get("gennakerUp"))
+            row["twa"] = round(t.get("twaAbsDeg") or 0)
+            row["kn"] = round(t.get("speedKn") or 0, 2)
+        except Exception as e:
+            row["error"] = str(e)
+        out.append(row)
+    return out
 
 
 def read_marks():
@@ -222,18 +312,55 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path.split("?")[0] == MARKS_URL:
+        path = self.path.split("?")[0]
+        if path == MARKS_URL:
             try:
                 self._json(200, read_marks())
             except Exception as e:
                 self._json(500, {"error": str(e)})
             return
+        # Дампы: без имени — список последних, с именем — сам дамп.
+        if path == DUMP_URL or path.startswith(DUMP_URL + "/"):
+            did = path[len(DUMP_URL) + 1:]
+            if not did:
+                try:
+                    self._json(200, {"dumps": dump_list()})
+                except Exception as e:
+                    self._json(500, {"error": str(e)})
+                return
+            file = dump_path(did)
+            if not file:
+                self._json(404, {"error": "дампа %r нет" % did[:32]})
+                return
+            with open(file, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         super().do_GET()
 
     def do_POST(self):
-        # Профиль сессии. Пишется и при открытой сети — почему, написано у
-        # PERF_URL; разметка при этом остаётся запрещённой.
-        if self.path.split("?")[0] != PERF_URL:
+        # Профиль сессии и дампы. Пишутся и при открытой сети — почему, написано
+        # у PERF_URL и DUMP_URL; разметка при этом остаётся запрещённой.
+        path = self.path.split("?")[0]
+        if path == DUMP_URL:
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > DUMP_MAX_BODY:
+                self._json(413, {"error": "слишком большой дамп"})
+                return
+            try:
+                res = dump_save(self.rfile.read(n))
+            except Exception as e:
+                self._json(400, {"error": str(e)})
+                return
+            sys.stderr.write("  дамп %s -> %s (%d КБ)\n"
+                             % (res["id"], res["file"], res["kb"]))
+            self._json(200, res)
+            return
+        if path != PERF_URL:
             self._json(404, {"error": "сюда не пишут"})
             return
         n = int(self.headers.get("Content-Length") or 0)
@@ -412,6 +539,10 @@ def main():
         if a.tls:
             print("сертификат самоподписанный: браузер один раз спросит согласия")
         if not a.no_open:
+            # Адрес собирается ЗДЕСЬ. Раньше тут стояло имя `url`, которого в
+            # этой области нет вовсе, и запуск без `--no-open` падал в потоке
+            # таймера — молча, потому что поток свой.
+            url = "%s://%s:%d/viewer/terrain.html" % (proto, shown, a.port)
             threading.Timer(0.4, lambda: webbrowser.open(url)).start()
         try:
             srv.serve_forever()

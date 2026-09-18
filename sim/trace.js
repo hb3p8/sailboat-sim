@@ -49,12 +49,18 @@ export const TRACE_FIELDS = [
   // запись давала бы разный ответ в зависимости от галочки, которую забыли
   // переключить.
   'jibTwist', 'jibDraft', 'mainUp', 'jibUp',
+  // Генакер. Тоже в конец и тоже нарочно: его не было в записи вовсе, и
+  // воспроизведение шло с тем парусом, какой стоял в лодке к началу, а шкот
+  // держался тем, что записан в настройках дампа, — то есть последним. Подъём
+  // при этом ПЕРЕСТРАИВАЕТ РИГ, а не поднимает флаг, поэтому обратно он
+  // подаётся не присваиванием, а `setGennaker` (см. `applyFrom`).
+  'gennakerUp', 'genSheetLen',
 ];
 
 // Поля, которые при воспроизведении надо подавать обратно в лодку.
 export const TRACE_INPUTS = [
   'rudder', 'sheet', 'jibSheet', 'twist', 'draft', 'fetch', 'fetchOverride',
-  'jibTwist', 'jibDraft', 'mainUp', 'jibUp',
+  'jibTwist', 'jibDraft', 'mainUp', 'jibUp', 'genSheetLen',
   'windSpeed', 'windDir',
   'crewHike', 'crewMass', 'crewX', 'crewZ', 'sailScale',
   'current', 'shadeD0', 'shadeK', 'shadeGust', 'chan',
@@ -63,7 +69,7 @@ export const TRACE_INPUTS = [
 // Поля, которые в записи лежат единицей и нулём, а в лодке обязаны быть
 // логическими. Без этого убранный парус восстанавливался нулём, а ноль — не
 // `false`, и парус молча оставался стоять.
-const TRACE_BOOLS = new Set(['fetchOverride', 'mainUp', 'jibUp']);
+const TRACE_BOOLS = new Set(['fetchOverride', 'mainUp', 'jibUp', 'gennakerUp']);
 
 // Округление разное, и не для красоты.
 //
@@ -104,6 +110,7 @@ export function traceFrame(boat) {
     r9(boat.o.jibTwist != null ? boat.o.jibTwist : boat.o.twist),
     r9(boat.o.jibDraft != null ? boat.o.jibDraft : boat.o.draft),
     boat.o.mainUp === false ? 0 : 1, boat.o.jibUp === false ? 0 : 1,
+    boat.o.gennakerUp ? 1 : 0, r9(boat.o.genSheetLen),
   ];
 }
 
@@ -238,6 +245,118 @@ export function applyFrom(boat, frame, index) {
   }
   if (index.gust != null) boat.wind.o.gust = frame[index.gust];
   if (index.shift != null) boat.wind.o.shift = frame[index.shift];
+  // Генакер — НЕ присваивание. Подъём перестраивает риг: меняется число
+  // полосок, панелей и нитей пелены, и делает это `setGennaker`, а не флаг.
+  // Поставить флаг и не перестроить риг — значит получить лодку, которая
+  // считает себя с генакером, а считает без него.
+  if (index.gennakerUp != null) {
+    const up = !!frame[index.gennakerUp];
+    if (up !== !!boat.o.gennakerUp || !!boat.rig.gennakerUp !== up) {
+      boat.setGennaker(up);
+    }
+  }
+}
+
+// --- дамп: физическая его часть, одна на страницу, проигрыватель и стенд -------
+//
+// Состав дампа задавался в `sim/main.js`, то есть в браузере, и стенд его не
+// видел вовсе: `tests/replay.test.mjs` собирал свой объект из записи, а
+// `scripts/replay.mjs` разбирал настоящий — и совпадали они, пока совпадали.
+// Разъехались на генакере: дамп его СОСТОЯНИЕ нёс (флаг лежит в `o`), а
+// восстановление рига — нет, и поднятый генакер загружался в лодку с двенадцатью
+// полосками вместо восемнадцати.
+//
+// Поэтому физическая часть дампа и её разбор живут здесь, рядом и парой.
+// Страница добавляет к этому своё — сборку, акваторию, вид, телеметрию и саму
+// запись, — но состояние лодки собирает не сама.
+export function dumpCore(boat) {
+  const cloth = boat.rig && boat.rig.cloth;
+  return {
+    boat: {
+      x: boat.x, y: boat.y, psi: boat.psi, u: boat.u, v: boat.v, r: boat.r,
+      phi: boat.phi, p_: boat.p_, t: boat.t, rigSide: boat.rigSide,
+      zc: boat.zc, w: boat.w, th: boat.th, q: boat.q,
+      // Три величины, которые КАДР ЗАПИСИ несёт давно, а снимок состояния — нет.
+      //
+      // Расходились они молча: проигрыватель добирался до них через первый же
+      // кадр записи, а `sv20load` — нет, и загруженная лодка шла не так.
+      // Момент откренивания: экипаж отзывается с запаздыванием. Скорость гика:
+      // `rigSide` говорит, где он, но не куда идёт.
+      hike: boat.hike, rigRate: boat.rigRate,
+    },
+    // Состояние рига между шагами — своим списком и своей парой методов
+    // (`Rig.stateDump`/`stateLoad`): запаздывающие углы полосок, память
+    // перехода между постановками, предохранитель, сопротивление прошлого шага.
+    // Длины зависят от того, поднят ли генакер, поэтому кладётся оно ПОСЛЕ
+    // настроек и разбирается после перестройки рига.
+    rigState: boat.rig && boat.rig.stateDump ? boat.rig.stateDump() : null,
+    controls: Object.assign({}, boat.o),
+    wind: Object.assign({}, boat.wind.o),
+    // ПОЛОТНО ГЕНАКЕРА — тоже состояние, и без него дамп неполон.
+    //
+    // Форма летящего паруса — это решение мягкой ткани, и приходит она не за
+    // шаг: полотно помнит, куда шло. Заново посаженное на крой, оно даст ДРУГУЮ
+    // форму, а значит другую хорду, другой угол атаки и другую силу. Кладутся
+    // положения и предыдущие положения — в позиционной динамике скорость это
+    // они и есть.
+    cloth: cloth ? { rows: cloth.rows, cols: cloth.cols,
+                     pos: Array.from(cloth.pos, r9),
+                     prev: Array.from(cloth.prev, r9) } : null,
+    // СВОБОДНАЯ ПЕЛЕНА — тем же снимком, каким она кладётся в опорные кадры
+    // записи. В кадр её класть нельзя (полторы тысячи чисел против полусотни),
+    // а в дамп — можно и нужно: он один, а кадров шестьсот.
+    //
+    // Без неё «вернуть лодку в это состояние» возвращает лодку С ПУСТОЙ
+    // ПЕЛЕНОЙ, то есть в другое состояние. Проигрыватель этого не замечал,
+    // потому что доходил до пелены через опорный кадр записи; а `sv20load` в
+    // консоли — замечал, и молча.
+    wakeState: wakeSnapshot(boat),
+  };
+}
+
+// Разбор дампа: обратное к `dumpCore`.
+//
+// Порядок здесь существенный и весь вышел из ошибок. Сперва настройки, потом
+// РИГ (подъём генакера убирает стаксель и перестраивает решётку), потом
+// признаки поставленных парусов — иначе `setGennaker` перетрёт их своим
+// `jibUp = !up`, — и только потом полотно: до перестройки его просто нет.
+export function applyDump(boat, dump) {
+  const c = dump.controls || {};
+  Object.assign(boat.o, c);
+  // Старый дамп знает шкот стакселя поправкой к гроту, новый — своим углом.
+  //
+  // Признаком старого служит САМА ПОПРАВКА, а не отсутствие угла: у нового
+  // дампа `jibSheet` равен null нарочно — это «стаксель идёт за гротом», — и
+  // прежнее условие принимало его за старый формат и подставляло на его место
+  // конкретный угол. Лодка из дампа после этого шла с ПРИБИТЫМ стакселем, и
+  // тяга расходилась на четверть ньютона на первом же шаге.
+  if (c.jibSheet == null && c.jibTrim != null) boat.o.jibSheet = c.sheet + c.jibTrim;
+  if (c.jibTwist == null) boat.o.jibTwist = null;
+  if (c.jibDraft == null) boat.o.jibDraft = null;
+  boat.setGennaker(!!c.gennakerUp);
+  boat.o.mainUp = c.mainUp !== false;
+  boat.o.jibUp = c.jibUp !== false;
+  if (dump.boat) Object.assign(boat, dump.boat);
+  Object.assign(boat.wind.o, dump.wind || {});
+  // Состояние рига — после перестройки: длины зависят от числа полосок. Старый
+  // дамп нёс одни запаздывающие углы отдельным полем; читаем и его.
+  const gotRig = boat.rig.stateLoad
+    ? boat.rig.stateLoad(dump.rigState)
+    : false;
+  if (!dump.rigState && dump.lag && boat.rig.alphaLag &&
+      dump.lag.length === boat.rig.alphaLag.length) {
+    boat.rig.alphaLag.set(dump.lag);
+  }
+  const cl = boat.rig && boat.rig.cloth, d = dump.cloth;
+  // Сетка могла смениться между дампом и разбором — тогда полотно остаётся
+  // посаженным на крой, и это честнее, чем растянуть чужие числа по своей сетке.
+  const gotCloth = !!(cl && d && cl.restore(d.pos, d.prev, boat.rig));
+  // Пелена — последней: до перестройки рига её нити другой длины и числа. И
+  // заводить её приходится явно: без свободной пелены она не существует до
+  // первого шага, а снимок кладётся в готовые буферы.
+  if (dump.wakeState && boat.rig && boat.rig.ensureWake) boat.rig.ensureWake();
+  const gotWake = dump.wakeState ? wakeRestore(boat, dump.wakeState) : false;
+  return { cloth: gotCloth, wake: gotWake, rig: gotRig };
 }
 
 // Проход по записи — ОДИН на всех, кто её воспроизводит.

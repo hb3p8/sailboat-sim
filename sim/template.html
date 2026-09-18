@@ -83,6 +83,18 @@
     margin-top: 8px; color: var(--dim); font-size: 10.5px; line-height: 1.5;
     font-variant-numeric: tabular-nums;
   }
+  /* Имя последнего дампа. Держится до следующего: на него ссылаются в
+     разговоре и им зовут проигрыватель, а значит оно обязано быть на виду, а
+     не мелькнуть на кнопке и пропасть. */
+  #dumpid {
+    margin-top: 6px; color: var(--dim); font-size: 10.5px; line-height: 1.6;
+    font-variant-numeric: tabular-nums;
+  }
+  #dumpid b { color: var(--accent); font-weight: 600; user-select: all; }
+  #dumpid code {
+    display: block; margin-top: 2px; font-size: 10px; opacity: .75;
+    user-select: all; word-break: break-all;
+  }
   #panel select {
     background: rgba(0,0,0,.3); color: var(--fg); border: 1px solid var(--line);
     border-radius: 6px; padding: 4px;
@@ -501,6 +513,7 @@
     <select id="startpt"></select></label>
   <div class="cap"><span>Камера</span><span id="cammode">погоня</span></div>
   <button id="dump" type="button">Сдампать состояние</button>
+  <div id="dumpid" hidden></div>
   <div id="stamp"></div>
 </div>
 <div id="topcard" class="card" hidden>
@@ -567,7 +580,13 @@
   Из консоли: <b>sv20top()</b> — вид сверху на струи ветра, схематично и с
   подсчётом, сколько их впереди и сколько позади; <b>sv20top(false)</b> убрать.
   <b>copy(JSON.stringify(sv20dump()))</b> — снимок состояния для разбора без
-  браузера (scripts/replay.mjs).
+  браузера.<br><br>
+  Кнопка <b>«Сдампать состояние»</b> (или <b>P</b>) отправляет дамп на сервер, и
+  тот отвечает коротким именем — оно остаётся под кнопкой. По нему дамп зовётся
+  откуда угодно: <b>node scripts/replay.mjs a3f9c2</b> разберёт его без
+  браузера, <b>sv20load('a3f9c2')</b> вернёт лодку в это состояние, а
+  <b>sv20load()</b> покажет последние. Без сервера (страница открыта с диска)
+  дамп по-прежнему скачивается файлом.
 </div>
 
 <script>

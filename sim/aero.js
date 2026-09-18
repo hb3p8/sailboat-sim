@@ -2909,10 +2909,117 @@ export class Rig {
   // берётся, так что перевод осей туда-обратно тут не накладной расход, а сама
   // задача: точка схода из корпуса в мир, точка запроса к решётке из мира в
   // корпус, наведённая ею скорость обратно в мир.
+  // --- СОСТОЯНИЕ РИГА МЕЖДУ ШАГАМИ, одним списком ------------------------------
+  //
+  // Не всё, что риг помнит, пересчитывается каждый шаг заново, и вот это «не
+  // всё» и есть его состояние. Собрано оно здесь, в одном месте, потому что
+  // расползалось: запаздывающие углы попали в кадр записи, пелена — в опорные
+  // кадры, а память перехода и предохранитель не попали никуда, и лодка,
+  // поднятая из дампа, шла не так, как та, с которой дамп снят. Ловилось это
+  // не как «дамп неполон», а как расхождение по тяге в полтысячи ньютонов на
+  // первом же шаге.
+  //
+  // Правило простое: появилось у рига поле, которое переживает шаг, — ему сюда.
+  // Свидетель на это есть (`tests/replay.test.mjs`, обход дампа по кругу), и
+  // забыть его теперь дороже, чем вписать.
+  stateDump() {
+    const arr = a => (a ? Array.from(a) : null);
+    return {
+      alphaLag: arr(this.alphaLag),
+      // Память перехода между постановками: чем была сила, была ли полоска в
+      // решётке и сколько шагов ещё доводить.
+      fPrev: arr(this.fPrev), fWas: arr(this.fWas), fRamp: arr(this.fRamp),
+      // Предохранитель: кто сейчас вне решётки и сколько ему ещё остывать.
+      latOn: arr(this.latOn), latCool: arr(this.latCool), latWarm: arr(this.latWarm),
+      // ВСЁ, ЧТО ПОЛОСКА СЧИТАЕТ В КОНЦЕ ШАГА, А СПРАШИВАЕТ В НАЧАЛЕ
+      // СЛЕДУЮЩЕГО. Это состояние, а не промежуточный результат, и собрано оно
+      // тут по одному разбору за другим:
+      //
+      //   пузо и наполнение — их даёт мембрана ПОСЛЕ решения, а предписанная
+      //     циркуляция вынутой из решётки полоски спрашивает их ДО него; на
+      //     восстановленной лодке они были нулями, и сечение отдавало cl 0.66
+      //     вместо 2.32 — плоскую пластину вместо полного паруса;
+      //   место, хорда, угол и сопротивление — по ним строится ЗАТЕНЕНИЕ, а оно
+      //     считается в начале шага, до прохода геометрии, «по состоянию
+      //     прошлого шага»; без них восстановленная лодка первый шаг шла ВОВСЕ
+      //     БЕЗ ТЕНИ (напор верхних полосок генакера выше на полтора процента).
+      cdWake: this.stripCalc.map(g => g.cdWake || 0),
+      camber: this.stripCalc.map(g => g.camber || 0),
+      fill: this.stripCalc.map(g => g.fill || 0),
+      xi: this.stripCalc.map(g => g.xi || 0),
+      yi: this.stripCalc.map(g => g.yi || 0),
+      alpha: this.stripCalc.map(g => g.alpha || 0),
+      chord: this.stripCalc.map(g => g.chord || 0),
+      live: this.stripCalc.map(g => (g.live ? 1 : 0)),
+      ve: this.stripCalc.map(g => g.ve || 0),
+      // Кажущийся угол с прошлого шага: из него считается провис шкота.
+      awa: this.sailOut ? this.sailOut.awa : 0,
+      fuse: this.fuseTrips || 0,
+    };
+  }
+
+  stateLoad(st) {
+    if (!st) return false;
+    const put = (dst, src) => {
+      if (!dst || !src || src.length !== dst.length) return false;
+      dst.set(src);
+      return true;
+    };
+    let ok = put(this.alphaLag, st.alphaLag);
+    ok = put(this.fPrev, st.fPrev) && ok;
+    ok = put(this.fWas, st.fWas) && ok;
+    ok = put(this.fRamp, st.fRamp) && ok;
+    // Буферы предохранителя заводятся по требованию — до первого шага их нет.
+    const NS = this.strips.length;
+    if (st.latOn && st.latOn.length === NS) {
+      if (!this.latOn || this.latOn.length !== NS) this.latOn = new Uint8Array(NS);
+      if (!this.latCool || this.latCool.length !== NS) this.latCool = new Int16Array(NS);
+      if (!this.latWarm || this.latWarm.length !== NS) this.latWarm = new Int16Array(NS);
+      this.latOn.set(st.latOn);
+      if (st.latCool) this.latCool.set(st.latCool);
+      if (st.latWarm) this.latWarm.set(st.latWarm);
+    } else ok = false;
+    if (st.cdWake && st.cdWake.length === this.stripCalc.length) {
+      for (let i = 0; i < st.cdWake.length; i++) {
+        const g = this.stripCalc[i];
+        g.cdWake = st.cdWake[i];
+        if (st.camber) g.camber = st.camber[i];
+        if (st.fill) g.fill = st.fill[i];
+        if (st.xi) { g.xi = st.xi[i]; g.yi = st.yi[i]; }
+        if (st.alpha) g.alpha = st.alpha[i];
+        if (st.chord) g.chord = st.chord[i];
+        if (st.live) g.live = !!st.live[i];
+        // Признак того, что состояние прошлого шага у полоски есть: затенение
+        // проверяет его по `ve`, и нулевое значит «шагов ещё не было».
+        if (st.ve) g.ve = st.ve[i];
+      }
+    } else ok = false;
+    if (st.awa != null && this.sailOut) this.sailOut.awa = st.awa;
+    this.fuseTrips = st.fuse || 0;
+    return ok;
+  }
+
+  // Пелена заводится при первом шаге, а не в конструкторе: без свободной пелены
+  // её нет вовсе, а это полтысячи узлов. Отдельным методом — потому что завести
+  // её нужно и ВНЕ шага: восстановление дампа кладёт снимок в готовые буферы, а
+  // до первого шага их не было, и снимок молча не вставал.
+  ensureWake() {
+    if (!this.wake) {
+      this.wake = new FreeWake(this.wakeFil(), this.wakeLen || WAKE_LEN);
+      // Топология листа — сразу здесь, вместе с буферами: между какими парами
+      // нитей натянуто полотно, известно из раскладки полосок и не меняется.
+      // Ставилась она первым `commitWake`, по одноразовому флагу, и потому
+      // восстановленная из дампа пелена до своего первого шага стояла БЕЗ
+      // ПОЛОТНА: толщину листа мерить не по чему, и скос выходил другой.
+      const map = this.wakeMap();
+      for (let q = 0; q < this.wake.fil; q++) this.wake.ring[q] = map[q] >= 0 ? 1 : 0;
+    }
+    return this.wake;
+  }
+
   stepWake(b, dt) {
     const NS = this.strips.length, lat = this.lattice;
-    if (!this.wake) this.wake = new FreeWake(this.wakeFil(), this.wakeLen || WAKE_LEN);
-    const w = this.wake;
+    const w = this.ensureWake();
     w.core = lat.core;
     // Циркуляции полосок в буфер, а не в новый массив: `stepWake` идёт каждый шаг.
     const G = this._wakeG && this._wakeG.length === NS
@@ -2932,13 +3039,8 @@ export class Rig {
     // Полотно пелены натянуто между соседними нитями ОДНОГО паруса, и признак
     // для него берётся отсюда.
     const sail = this.wakeSail || (this.wakeSail = new Int8Array(w.fil));
-    // Топология листа — раз и навсегда, из раскладки полосок: между какими
-    // парами нитей натянуто полотно. Пелена меряет по ней толщину листа.
-    if (!this.ringSet) {
-      const map = this.wakeMap();
-      for (let q = 0; q < w.fil; q++) w.ring[q] = map[q] >= 0 ? 1 : 0;
-      this.ringSet = true;
-    }
+    // Топология листа ставится вместе с буферами пелены (`ensureWake`): она
+    // известна из раскладки полосок и не меняется, пока стоит этот риг.
     let f = 0;
     for (let i = 0; i <= NS && f < w.fil; i++) {
       const prev = i > 0 ? this.strips[i - 1] : null;

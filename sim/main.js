@@ -2337,29 +2337,37 @@ const recorder = new Recorder(TRACE_SECONDS, HZ);
 
 function dumpState() {
   const t = boat.telemetry || {};
-  return {
+  // Состояние лодки, настройки, ветер и полотно собирает `dumpCore`
+  // (`sim/trace.js`) — тот же код, которым дамп потом разбирается, и тот же,
+  // который проверяет стенд. Здесь к нему добавляется всё, чего нет вне
+  // браузера: сборка, акватория, вид, телеметрия, запись и сводка по пелене.
+  return Object.assign(dumpCore(boat), {
     build: typeof BUILD !== 'undefined' ? BUILD : null,
     // Отпечаток полей акватории. Запись, сделанная на ней, без неё не
     // воспроизводится — и об этом надо сказать вслух, а не разойтись молча.
     terrain: terrain.ready ? { hash: TERRAIN_PACK.hash } : null,
     saved: new Date().toISOString(),
-    boat: {
-      x: boat.x, y: boat.y, psi: boat.psi, u: boat.u, v: boat.v, r: boat.r,
-      phi: boat.phi, p_: boat.p_, t: boat.t, rigSide: boat.rigSide,
-      zc: boat.zc, w: boat.w, th: boat.th, q: boat.q,
-    },
-    controls: Object.assign({}, boat.o),
-    wind: Object.assign({}, boat.wind.o),
     scene: {
       camera: CAMS[camMode], autopilot: autopilot, apHeading: apHeading,
       debug: debugOn,
     },
     telemetry: Object.assign({}, t, { strips: undefined }),
     strips: (t.strips || []).map(s => Object.assign({}, s)),
-    rig: boat.rig.strips.map(s => ({
-      h: s.h, area: s.area, chord: s.chord, xLuff: s.xLuff,
+    // Полоски: у каждой НОМЕР ПАРУСА. Без него по восемнадцати строкам не
+    // понять, где кончается грот и начинается генакер, — а от этого зависит
+    // всё, что по ним потом считают.
+    rig: boat.rig.strips.map((s, i) => ({
+      sail: s.sail, h: s.h, area: s.area, chord: s.chord, xLuff: s.xLuff,
       ar: s.ar, twistF: s.twistF,
+      // В решётке полоска или её вынес предохранитель. Меняется на ходу и
+      // решает, откуда взялась сила, — в отладочном виде это те самые зазоры
+      // между панелями.
+      lat: boat.rig.latOn ? !!boat.rig.latOn[i] : true,
     })),
+    // Зеркало от воды по парусам и сколько раз за прогон сработал
+    // предохранитель: два числа, по которым читается вся полнокурсовая часть.
+    mirror: boat.rig.mirK ? Array.from(boat.rig.mirK, v => +v.toFixed(3)) : null,
+    fuse: boat.rig.fuseTrips || 0,
     trace: recorder.dump(),
     // Свободная пелена — короткой сводкой, а не целиком: узлов пятьсот с
     // лишним, и в дампе они заняли бы больше всего остального. Для разбора
@@ -2393,7 +2401,7 @@ function dumpState() {
                             r: wakeGeo.boundingSphere ? +wakeGeo.boundingSphere.radius.toFixed(1) : null }
                         : null };
     })() : null,
-  };
+  });
 }
 
 // Загрузка дампа: файл бросают в окно.
@@ -2409,17 +2417,10 @@ function dumpState() {
 // поворот ветра долиной зависят от места, и молча разойтись тут проще всего.
 function loadDump(d) {
   if (!d || !d.boat || !d.controls) throw new Error('это не дамп симулятора');
-  Object.assign(boat.o, d.controls);
-  // Старый дамп знает шкот стакселя поправкой к гроту, новый — своим углом.
-  if (d.controls.jibSheet == null) {
-    boat.o.jibSheet = d.controls.sheet + (d.controls.jibTrim || 0);
-  }
-  if (d.controls.jibTwist == null) boat.o.jibTwist = null;
-  if (d.controls.jibDraft == null) boat.o.jibDraft = null;
-  boat.o.mainUp = d.controls.mainUp !== false;
-  boat.o.jibUp = d.controls.jibUp !== false;
-  Object.assign(boat, d.boat);
-  Object.assign(boat.wind.o, d.wind || {});
+  // Состояние лодки, настройки, риг и полотно — общим разбором (`sim/trace.js`),
+  // тем же, которым пользуется проигрыватель без браузера. Здесь остаётся
+  // только то, чего вне браузера нет: вид, панель и отрисовка.
+  applyDump(boat, d);
   if (d.scene) {
     autopilot = !!d.scene.autopilot;
     apHeading = d.scene.apHeading != null ? d.scene.apHeading : boat.psi;
@@ -2491,21 +2492,86 @@ addEventListener('drop', e => {
   });
 });
 
-function saveDump() {
+// --- дамп уходит НА СЕРВЕР, а не в папку загрузок -----------------------------
+//
+// Файлом было так: браузер кладёт дамп в «Загрузки» под именем с временной
+// меткой, дальше его ищут глазами, тащат в репозиторий и зовут проигрыватель
+// путём в тридцать символов. Каждый разбор начинался с этой возни, а сослаться
+// на дамп в разговоре было нечем: «тот, что я снял примерно в семь вечера».
+//
+// Теперь дамп уходит в `/api/dump`, сервер кладёт его в `out/dumps/` и
+// возвращает КОРОТКИЙ ИДЕНТИФИКАТОР. Он же и показывается — под кнопкой, и
+// висит там до следующего дампа, — и им же дамп зовётся отовсюду:
+//
+//     node scripts/replay.mjs a3f9c2       разобрать без браузера
+//     sv20load('a3f9c2')                   вернуть лодку в это состояние
+//
+// Файл остаётся запасным путём и никуда не девается: страница обязана
+// открываться двойным кликом, а с `file://` никакого сервера нет. Тогда дамп
+// скачивается по-старому, и кнопка об этом говорит.
+const DUMP_URL = '/api/dump';
+
+function downloadDump(text) {
   const name = 'sv20-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const blob = new Blob([JSON.stringify(dumpState(), null, 1)],
-                        { type: 'application/json' });
+  const blob = new Blob([text], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name + '.json';
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+// Подпись под кнопкой. Держится до следующего дампа: на неё и нужно смотреть,
+// когда дамп зовут по имени.
+function showDumpId(res, frames) {
+  const el = document.getElementById('dumpid');
+  if (!el) return;
+  el.hidden = false;
+  el.innerHTML = 'дамп <b>' + res.id + '</b> · ' + frames + ' кадров · ' +
+    (res.kb != null ? res.kb + ' КБ' : '') +
+    '<br><code>node scripts/replay.mjs ' + res.id + '</code>';
+}
+
+async function saveDump() {
   const btn = document.getElementById('dump');
-  if (btn) {
-    btn.textContent = 'записано: ' + recorder.frames.length + ' кадров';
-    setTimeout(() => { btn.textContent = 'Сдампать состояние'; }, 2200);
+  const say = (txt, hold = 2600) => {
+    if (!btn) return;
+    btn.textContent = txt;
+    setTimeout(() => { btn.textContent = 'Сдампать состояние'; }, hold);
+  };
+  const state = dumpState();
+  const frames = (state.trace && state.trace.frames ? state.trace.frames : []).length;
+  const text = JSON.stringify(state, null, 1);
+  try {
+    const r = await fetch(DUMP_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: text,
+    });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.error || ('сервер ответил ' + r.status));
+    showDumpId(res, frames);
+    say('дамп ' + res.id);
+    console.log('дамп ' + res.id + ' — ' + res.file + ', кадров ' + frames +
+                '\n  node scripts/replay.mjs ' + res.id);
+  } catch (err) {
+    // Сервера нет (открыто с диска) или он отказал — тогда файлом, как раньше.
+    downloadDump(text);
+    say('файлом: ' + (err && err.message ? err.message : 'нет сервера'), 4000);
   }
 }
+
+// Вернуть лодку в состояние дампа по его идентификатору. Из консоли:
+// sv20load('a3f9c2'). Без аргумента — список последних.
+window.sv20load = async (id) => {
+  const r = await fetch(DUMP_URL + (id ? '/' + id : ''));
+  const res = await r.json();
+  if (!r.ok) throw new Error(res.error || ('сервер ответил ' + r.status));
+  if (!id) return res.dumps;
+  const note = loadDump(res);
+  console.log('загружен дамп ' + id + (note || ''));
+  return id + (note || '');
+};
 
 // --- акватория: рельеф, покров, дальняя вода ----------------------------------
 //

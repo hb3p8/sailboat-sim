@@ -1,0 +1,131 @@
+{
+ "case_id": "gen-pair-d15",
+ "condition": {
+  "alpha_deg": 15.0,
+  "camber": 0.28,
+  "speed_ms": 4.5
+ },
+ "convergence_group": "gen-pair-a15",
+ "family": "sail-2d",
+ "fluid": {
+  "nu": 1.48e-05,
+  "rho": 1.225
+ },
+ "geometry": {
+  "bodies": [
+   "gen-deep"
+  ],
+  "files": {
+   "gen-deep": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "revision": "подставляется при разворачивании"
+ },
+ "mesh": {
+  "base_size_m": 2.0,
+  "boundary_layers": 0,
+  "cells_target": 3000000,
+  "domain": {
+   "aft_l": 20.0,
+   "down_l": 1.0,
+   "fwd_l": 20.0,
+   "seed": [
+    30.0,
+    30.0,
+    0.0
+   ],
+   "side_l": 20.0,
+   "span_m": 0.2,
+   "up_l": 1.0
+  },
+  "family": "sail2d-v1",
+  "feature_level": 7,
+  "level": "medium",
+  "n_proc": 8,
+  "refine": [
+   3,
+   5
+  ],
+  "regions": [
+   {
+    "box": [
+     [
+      -12.0,
+      -12.0,
+      -0.3
+     ],
+     [
+      24.0,
+      12.0,
+      0.3
+     ]
+    ],
+    "level": 1
+   },
+   {
+    "box": [
+     [
+      -4.0,
+      -5.0,
+      -0.3
+     ],
+     [
+      16.0,
+      5.0,
+      0.3
+     ]
+    ],
+    "level": 2
+   },
+   {
+    "box": [
+     [
+      -1.5,
+      -2.5,
+      -0.3
+     ],
+     [
+      7.0,
+      2.5,
+      0.3
+     ]
+    ],
+    "level": 3
+   }
+  ],
+  "surface_distance": [
+   [
+    0.6,
+    4
+   ]
+  ]
+ },
+ "notes": "Глубокое сечение пары: пузо 0.28 — самый полный ряд кроя генакера (0.277). Длинный рецепт: счёт до 100 с, усреднение с 40-й. Короткий (40/10) на этом угле не сходится — дрейф на окне вышел 1.38 у пуза 0.28 при пороге 1.0 (cfd/lib/convergence.py, gate), то есть среднее ещё ползло и сравнивать его было не с чем. Пара по пузу (0.185 и 0.28) считается ОДНИМ рецептом нарочно: в таблицу поляры пойдёт их ОТНОШЕНИЕ, приложенное к измеренному ряду Милгрэма, — так собственное смещение расчёта сокращается, а разный рецепт внутри пары это сокращение ломает.",
+ "numerics": {
+  "average_from": 40.0,
+  "dt_s": 0.01,
+  "end_time": 100.0,
+  "maxCo": 1.0,
+  "write_interval": 4.0
+ },
+ "reference": {
+  "area_m2": 0.78,
+  "chord_m": 3.9,
+  "length_m": 3.9,
+  "origin_m": [
+   0.975,
+   0.0,
+   0.0
+  ],
+  "rho": 1.225,
+  "speed_ms": 4.5
+ },
+ "schema": 1,
+ "solver": {
+  "application": "pimpleFoam",
+  "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
+  "name": "OpenFOAM",
+  "turbulence": "kOmegaSST",
+  "wall_treatment": "wall-function"
+ },
+ "template": "openfoam-2d-urans"
+}

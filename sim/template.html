@@ -119,6 +119,17 @@
   /* Выше подсказок, а не вровень с карточкой рига: эта на два ряда цифр
      длиннее и налезала на них снизу. */
   #balcard { bottom: 88px; left: 14px; padding: 10px 12px; width: 384px; }
+  /* Там же, где карточка баланса: оба вида показываются по одному. */
+  #cfdcard { bottom: 88px; left: 14px; padding: 10px 12px; width: 384px; }
+  #cfdcard h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--dim); margin: 0 0 8px; font-weight: 600;
+  }
+  #cfdnote {
+    font-size: 11px; color: var(--dim); line-height: 1.6;
+    font-variant-numeric: tabular-nums;
+  }
+  #cfdnote b { color: var(--fg); font-weight: 600; }
   #balcard h2 {
     font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
     color: var(--dim); margin: 0 0 8px; font-weight: 600;
@@ -204,6 +215,7 @@
    */
   body.game #hud, body.game #rosecard, body.game #panel, body.game #keys,
   body.game #stamp, body.game #topnote, body.game #balnote, body.game #rignote,
+  body.game #cfdcard,
   body.game #top, body.game #bal, body.game #rigcard { display: none !important; }
   #game { display: none; }
   body.game #game { display: block; }
@@ -520,6 +532,10 @@
   <canvas id="top"></canvas>
   <div id="topnote"></div>
 </div>
+<div id="cfdcard" class="card" hidden>
+  <h2>Сетка CFD</h2>
+  <div id="cfdnote"></div>
+</div>
 <div id="balcard" class="card" hidden>
   <h2>Баланс сил</h2>
   <table id="baltab"></table>
@@ -534,7 +550,7 @@
   <b>R F</b> стаксель-шкот &nbsp;·&nbsp; <b>N</b> генакер &nbsp;·&nbsp;
   <b>H</b> авторулевой &nbsp;·&nbsp;
   <b>T</b> чёрная тень &nbsp;·&nbsp;
-  <b>C</b> камера &nbsp;·&nbsp; <b>G</b> отладка: поток, пелена, пелена на чёрном, баланс &nbsp;·&nbsp;
+  <b>C</b> камера &nbsp;·&nbsp; <b>G</b> отладка: поток, пелена, пелена на чёрном, баланс, сетка CFD &nbsp;·&nbsp;
   <b>P</b> дамп &nbsp;·&nbsp; <b>X</b> сброс &nbsp;·&nbsp; <b>?</b> подсказки<br>
   в свободной камере: <b>ЛКМ</b> вращать &nbsp;·&nbsp; <b>колесо</b> приблизить
 </div>

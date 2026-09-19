@@ -1186,7 +1186,129 @@ function updateFlow() {
 // берег, небо, паруса, сетка и след; остаётся корпус для привязки и сама
 // пелена, вдвое толще и в полный цвет. Это не украшение вида, а единственный
 // способ увидеть, ЧТО именно посчиталось.
-const DEBUG_MODES = 5;
+// --- вид «сетка CFD»: что считает офлайновый расчёт вместо паруса -------------
+//
+// Сеток в этом проекте три, и путать их дорого:
+//
+//   полотно генакера — 11 × 9 узлов мягкой ткани, живёт в кадре симулятора;
+//   вихревая решётка — 6 полосок на парус по 3 панели, тоже в кадре;
+//   СЕТКА CFD — вот эта: двумерный срез сечения в отдельном решателе
+//     (`cfd/cases/sail-2d/`), от реального времени отделена полностью.
+//
+// Этот вид показывает третью, потому что по числам её размеров не почувствовать.
+// Считается срез ОДНОГО сечения: хорда 3.9 м — как у генакера в трети высоты, —
+// домен двадцать хорд в каждую сторону, то есть 156 × 156 м при лодке в шесть.
+// На воде это рисуется в масштабе: прямоугольник домена, внутри три коробки
+// сгущения, и на самом парусе — та строка, чьё сечение и считается.
+//
+// Числа взяты из манифеста случая и здесь ПОВТОРЕНЫ, а не выведены: манифест
+// живёт в питоновском контуре, страница собирается без него. Меняются они
+// редко, а разойтись им не дают подписи — в карточке печатается и хорда, и
+// размер домена в хордах, так что расхождение с манифестом видно глазом.
+const CFD_CHORD = 3.9;               // хорда сечения в случае, м
+const CFD_DOMAIN = 20;               // полудомен в хордах
+const CFD_SPAN = 0.2;                // толщина слоя, м
+// Коробки сгущения в осях случая (носок сечения в нуле, хорда вдоль X), м.
+const CFD_BOXES = [[-12, -12, 24, 12], [-4, -5, 16, 5], [-1.5, -2.5, 7, 2.5]];
+const CFD_CAMBER = [0.185, 0.28];    // два считанных ряда: измеренный и глубокий
+
+const cfdGroup = new Group();
+scene.add(cfdGroup);
+cfdGroup.visible = false;
+
+// Плоская рамка из четырёх лент: линию в один пиксель на воде не видно.
+function cfdRect(x0, y0, x1, y1, w, colour, y) {
+  const g = new BufferGeometry();
+  const p = new Float32Array(4 * 6 * 3);
+  let k = 0;
+  const put = (x, z) => { p[k] = x; p[k + 1] = y; p[k + 2] = z; k += 3; };
+  const side = (ax, az, bx, bz) => {
+    const dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz) || 1;
+    const nx = -dz / L * w, nz = dx / L * w;
+    put(ax - nx, az - nz); put(bx - nx, bz - nz); put(bx + nx, bz + nz);
+    put(ax - nx, az - nz); put(bx + nx, bz + nz); put(ax + nx, az + nz);
+  };
+  side(x0, y0, x1, y0); side(x1, y0, x1, y1);
+  side(x1, y1, x0, y1); side(x0, y1, x0, y0);
+  g.setAttribute('position', new Float32BufferAttribute(p, 3));
+  const m = new Mesh(g, new MeshBasicMaterial({ color: colour, depthTest: false,
+                                                transparent: true, opacity: 0.75 }));
+  m.frustumCulled = false;
+  return m;
+}
+
+// Сечение: средняя линия того же пуза, что в случае. Рисуется НЕ толщиной —
+// полтора процента хорды в случае стоят там ради сеточника, а не ради физики,
+// и показывать их значило бы выдать условность за форму.
+function cfdSection(camber, colour, y) {
+  const N = 40, g = new BufferGeometry();
+  const p = new Float32Array((N - 1) * 6 * 3);
+  let k = 0;
+  const z = x => 4 * camber * x * (1 - x) * CFD_CHORD;   // парабола того же пуза
+  const w = 0.03;
+  for (let i = 0; i + 1 < N; i++) {
+    const t0 = i / (N - 1), t1 = (i + 1) / (N - 1);
+    const ax = t0 * CFD_CHORD, az = z(t0), bx = t1 * CFD_CHORD, bz = z(t1);
+    const dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz) || 1;
+    const nx = -dz / L * w, nz = dx / L * w;
+    const put = (x, zz) => { p[k] = x; p[k + 1] = y; p[k + 2] = zz; k += 3; };
+    put(ax - nx, az - nz); put(bx - nx, bz - nz); put(bx + nx, bz + nz);
+    put(ax - nx, az - nz); put(bx + nx, bz + nz); put(ax + nx, az + nz);
+  }
+  g.setAttribute('position', new Float32BufferAttribute(p, 3));
+  const m = new Mesh(g, new MeshBasicMaterial({ color: colour, depthTest: false,
+                                               transparent: true, opacity: 0.9 }));
+  m.frustumCulled = false;
+  return m;
+}
+
+{
+  const Y = 0.05;                     // чуть над водой, чтобы не мерцало с ней
+  cfdGroup.add(cfdRect(-CFD_DOMAIN * CFD_CHORD, -CFD_DOMAIN * CFD_CHORD,
+                       CFD_DOMAIN * CFD_CHORD, CFD_DOMAIN * CFD_CHORD,
+                       0.25, 0x7fc4ff, Y));
+  for (let i = 0; i < CFD_BOXES.length; i++) {
+    const b = CFD_BOXES[i];
+    cfdGroup.add(cfdRect(b[0], b[1], b[2], b[3], 0.12 - 0.03 * i, 0x6ee7a8, Y));
+  }
+  for (let i = 0; i < CFD_CAMBER.length; i++)
+    cfdGroup.add(cfdSection(CFD_CAMBER[i], i ? 0xc9a7ff : 0xffcf5a, Y + 0.02 + 0.02 * i));
+}
+
+// Рамки стоят в осях СЛУЧАЯ и на воде: сечение считается горизонтальным срезом,
+// а где именно оно взято по высоте — говорит подпись, не картинка.
+function updateCfd() {
+  if (!cfdGroup.visible) return;
+  cfdGroup.position.set(toSceneX(boat.x), 0, toSceneZ(boat.y));
+  cfdGroup.rotation.y = headingRotY(boat.psi);
+  const rig = boat.rig, note = document.getElementById('cfdnote');
+  if (!note) return;
+  // Какая наша строка ближе всего к считанному сечению — по хорде.
+  let best = -1, bd = 1e9;
+  for (let i = 0; i < rig.strips.length; i++) {
+    const g = rig.stripCalc[i];
+    if (!g || !g.live || !rig.strips[i].gennaker) continue;
+    const d = Math.abs(g.chord - CFD_CHORD);
+    if (d < bd) { bd = d; best = i; }
+  }
+  const g = best >= 0 ? rig.stripCalc[best] : null;
+  note.innerHTML =
+    'сечение <b>' + CFD_CHORD.toFixed(1) + ' м</b> хордой, пузо <b>' +
+    CFD_CAMBER.map(c => c.toFixed(3)).join('</b> и <b>') + '</b>' +
+    ' &nbsp;·&nbsp; слой <b>' + CFD_SPAN.toFixed(1) + ' м</b>' +
+    '<br>домен <b>' + (2 * CFD_DOMAIN) + ' хорд</b> = ' +
+    (2 * CFD_DOMAIN * CFD_CHORD).toFixed(0) + ' м, коробок сгущения ' +
+    CFD_BOXES.length +
+    // Пузо и угол — ПО МОДУЛЮ: у полоски они знаковые (знак говорит, на каком
+    // борту стоит парус), а случай CFD знака не знает вовсе — сечение в нём
+    // одно и повёрнуто в одну сторону.
+    (g ? '<br>ближайшая наша строка — полоска <b>' + best + '</b>: хорда <b>' +
+         g.chord.toFixed(2) + ' м</b>, пузо <b>' + Math.abs(g.camber || 0).toFixed(3) +
+         '</b>, угол <b>' + Math.abs((g.alpha || 0) * 180 / Math.PI).toFixed(0) + '°</b>'
+       : '<br>генакер не поднят — сравнивать не с чем');
+}
+
+const DEBUG_MODES = 6;
 let debugMode = 0;
 let debugOn = false;                 // «хоть какой-то» — им гасится общее
 // Что снимается на чёрном и каким оно было. Список строится при первом входе:
@@ -1217,6 +1339,7 @@ function setDebug(on) {
   // локальная переменная их перекрывает — картинка при этом не ломается, а
   // падает вся отрисовка.
   const isFlow = debugMode === 1, isBal = debugMode === 4;
+  const isCfd = debugMode === 5;
   const isDark = debugMode === 3, isWake = debugMode === 2 || isDark;
   const on_ = debugOn;
   // Порядок важен: чёрное снимает и ставит обратно видимость половины сцены, и
@@ -1251,8 +1374,11 @@ function setDebug(on) {
   wakeSheet.visible = isWake && !isDark;
   sepVeil.visible = sepVeil.visible && isFlow;
   balGroup.visible = isBal;
+  cfdGroup.visible = isCfd;
   document.getElementById('rigcard').hidden = !(isFlow || isWake);
   document.getElementById('balcard').hidden = !isBal;
+  document.getElementById('cfdcard').hidden = !isCfd;
+  if (isCfd) updateCfd();
 }
 
 // --- отладочные ортогональные виды --------------------------------------------

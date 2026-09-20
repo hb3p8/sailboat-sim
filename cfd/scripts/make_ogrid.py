@@ -64,11 +64,35 @@ def quality(pts):
     cosang = np.abs((sn * tn).sum(axis=2))
     nonortho = np.degrees(np.arccos(np.clip(np.sqrt(1.0 - cosang ** 2), 0, 1)))
     step = np.linalg.norm(np.diff(np.vstack([pts[0], pts[0][:1]]), axis=0), axis=1)
+    # ШАГ У НОСКА И У ТОРЦА — ПООТДЕЛЬНОСТИ, И ЭТО НЕ УКРАШЕНИЕ ВЫВОДА.
+    #
+    # `sail_section` отдаёт сечение НОСКОМ В ПЛЮС X (разворот к потоку), то
+    # есть носок стоит при x = хорда, а торец при x = 0. Догадаться об этом по
+    # числам нельзя, и я дважды прочитал контур задом наперёд: сперва при
+    # разборе выворота, потом при разборе шага по времени — и во второй раз
+    # объявил носок нехватающим точек, тогда как он самое густое место обвода,
+    # а редкое — торец. Теперь обе величины выводятся С ИМЕНАМИ, и перепутать
+    # их нельзя, не прочитав подпись.
+    wall = pts[0]
+    j_nose = int(np.argmax(wall[:, 0]))
+    j_tail = int(np.argmin(wall[:, 0]))
+    prev, nxt = wall[(j_nose - 1) % nt], wall[(j_nose + 1) % nt]
+    ab = np.linalg.norm(wall[j_nose] - prev)
+    bc = np.linalg.norm(nxt - wall[j_nose])
+    ca = np.linalg.norm(nxt - prev)
+    cross = abs((wall[j_nose, 0] - prev[0]) * (nxt[1] - prev[1])
+                - (wall[j_nose, 1] - prev[1]) * (nxt[0] - prev[0])) / 2
+    r_nose = ab * bc * ca / (4 * cross) if cross > 1e-18 else float("inf")
     return {"negative": int((area <= 0).sum()),
             "nonortho_max": float(nonortho.max()),
             "cells": (nr1 - 1) * nt,
             "wall_step_min": float(step.min()),
             "wall_step_med": float(np.median(step)),
+            "wall_step_max": float(step.max()),
+            "step_nose": float(step[j_nose]),
+            "step_tail": float(step[j_tail]),
+            "r_nose": float(r_nose),
+            "on_tail": int((np.abs(wall[:, 0] - wall[j_tail, 0]) < 2e-3).sum()),
             "first_layer": float(np.median(np.linalg.norm(pts[1] - pts[0], axis=1)))}
 
 
@@ -96,8 +120,13 @@ def main():
           % (a.camber, a.draft, a.chord, 100 * a.thickness))
     print("сетка %d × %d = %d ячеек, дальняя граница %.0f м (%.0f хорд)"
           % (a.n_theta, a.n_radial, q["cells"], a.r_far, a.r_far / a.chord))
-    print("первый слой %.3e м, шаг по обшивке %.4f…%.4f м"
-          % (q["first_layer"], q["wall_step_min"], q["wall_step_med"]))
+    print("первый слой %.1f мм, шаг по обшивке %.1f…%.1f мм (медиана %.1f)"
+          % (1e3 * q["first_layer"], 1e3 * q["wall_step_min"],
+             1e3 * q["wall_step_max"], 1e3 * q["wall_step_med"]))
+    print("  у НОСКА (x = %.2f м): шаг %.1f мм, радиус по соседям %.1f мм"
+          % (a.chord, 1e3 * q["step_nose"], 1e3 * q["r_nose"]))
+    print("  у ТОРЦА (x = 0): шаг %.1f мм, точек на грани %d из %.1f мм высоты"
+          % (1e3 * q["step_tail"], q["on_tail"], 1e3 * a.thickness * a.chord))
     print("вывернутых ячеек %d, неортогональность до %.1f°"
           % (q["negative"], q["nonortho_max"]))
     if q["negative"]:

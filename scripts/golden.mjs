@@ -80,6 +80,21 @@ const CASES = [
       b.o.draft = t > 20 ? 0.7 : 1.1;
     },
   },
+  {
+    // ГЕНАКЕР. Без него отпечаток слеп к трети модели, и это выяснилось
+    // замером: после того как у генакера переписали обвод, серпы обеих
+    // шкаторин и всё семейство профилей сечения, отпечаток совпал с прежним
+    // ПОБАЙТОВО во всех разделах. Ни один сценарий его не поднимал.
+    name: 'генакер на полном курсе',
+    setup: b => {
+      b.o.windSpeed = 6; b.o.windDir = 140 * D; b.psi = 0;
+      b.o.crewHike = -1; b.o.crewMass = 219.9; b.u = 3;
+      b.o.sheet = 70 * D; b.o.twist = 8 * D;
+      b.setGennaker(true);
+      b.o.genSheetLen = 5.5;
+    },
+    drive: (b, t) => { b.o.genSheetLen = 5.5 + 0.8 * Math.sin(t / 7); },
+  },
 ];
 
 const f = (v, n = 9) => (Number.isFinite(v) ? v.toFixed(n) : String(v));

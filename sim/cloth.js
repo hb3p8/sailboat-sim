@@ -31,7 +31,8 @@
 // 39 % (docs/gennaker-sota-plan.md, «Б3 сделан»).
 
 import { edgeFn, sailSagAt, STRIPS, NCHORD, gennakerClew,
-         gennakerSheetLen, designAt } from './aero.js';
+         gennakerSheetLen, designAt,
+         DESIGN_DRAFT, DESIGN_ENTRY, DESIGN_EXIT } from './aero.js';
 
 // Сетка ткани. Строк — как у отрисовки (SAIL_ROWS), чтобы полотно и обвод резались
 // по одним и тем же высотам; столбцов девять при трёх панелях решётки, то есть
@@ -209,6 +210,37 @@ function arcHalfAngle(k) {
 // обе идут снизу вверх, — поэтому обращается делением пополам. Нужна затем,
 // чтобы строки стояли по СТАНЦИЯМ ОБВОДА: ширина паруса объявлена на высоте, и
 // снимать её надо там же, где она объявлена.
+// Точка кромки с ОБЪЯВЛЕННЫМ СЕРПОМ на высоте z.
+//
+// Серп передней шкаторины задан в пакете двумя величинами: стрелкой
+// (`luff_round_m`) и положением плеча (`luff_round_at`), и закон у него
+// `amp · sin(π · f^pow)`, где показатель подобран так, чтобы максимум пришёлся
+// ровно на плечо. Этим же законом сборщик считает длину `luff_m`, и этим же
+// законом аэродинамика ставит провис (`sailSagAt` в `aero.js`).
+//
+// Ткань же строила кромку `arcAtZ` — ОКРУЖНОСТЬЮ, у которой горб всегда ровно
+// на середине высоты. Замер: плечо объявлено на 62 %, ткань давала 50 %. То
+// есть «плечо уехало вверх, куда §Б0.2 и просил» в крое не исполнялось, и одна
+// кромка имела две формы — одну у аэродинамики, другую у ткани.
+function roundAtZ(A, B, amp, at, n, z, out) {
+  const pow = Math.log(0.5) / Math.log(at > 0 && at < 1 ? at : 0.5);
+  const put = (f) => {
+    const d = amp * Math.sin(Math.PI * Math.pow(Math.max(0, Math.min(1, f)), pow));
+    out[0] = A[0] + (B[0] - A[0]) * f + n[0] * d;
+    out[1] = A[1] + (B[1] - A[1]) * f + n[1] * d;
+    out[2] = A[2] + (B[2] - A[2]) * f + n[2] * d;
+    return out;
+  };
+  let lo = 0, hi = 1;
+  const up = B[2] >= A[2];
+  for (let i = 0; i < 40; i++) {
+    const m = 0.5 * (lo + hi);
+    put(m);
+    if ((out[2] < z) === up) lo = m; else hi = m;
+  }
+  return put(0.5 * (lo + hi));
+}
+
 function arcAtZ(A, B, L, n, z, out) {
   let lo = 0, hi = 1;
   const up = B[2] >= A[2];
@@ -289,6 +321,109 @@ const PROF_MAX = (() => {
 
 // Длина профиля в долях хорды при данной глубине, и заодно накопленная длина по
 // шагам: по ней потом ищется точка на доле ДЛИНЫ.
+// ПАРАМЕТРИЧЕСКИЙ ПРОФИЛЬ: кубическая кривая Безье с независимыми входом,
+// выходом, пузом и местом пуза.
+//
+// ЗАЧЕМ. Семейство выше — это z(x), функция вдоль хорды, и у неё угол входа не
+// может достичь 90°: производная в носке конечна. Замер: наш вход 58° при
+// измеренных у J/80 84…90° на 1/6 и 2/6 высоты. Именно отсюда парус выглядел
+// серпом, а не мешком: у настоящего спинакера передняя часть сечения
+// ВОЗВРАЩАЕТСЯ НАЗАД относительно хорды, и Депардэ меряет там до 129°.
+// Руководства по раскрою требуют того же: у ProSail сечение составляется из
+// нескольких дуг с настраиваемыми долями длины и отношениями радиусов, потому
+// что «одна величина глубины всю форму не описывает».
+//
+// КАК. Концы кривой стоят на хорде, а касательные в них задаются углами входа и
+// выхода; длины ручек подбираются под объявленные пузо и место пуза. При входе
+// больше 90° косинус отрицателен, ручка уходит за носок, и кривая честно
+// заворачивает назад — того самого запрета, который отвергал измеренный парус,
+// здесь просто нет.
+const BEZ_N = 64;
+const BEZ_CACHE = new Map();
+
+function bezPts(a, b, fin, fex) {
+  return [0, 0,
+          a * Math.cos(fin), a * Math.sin(fin),
+          1 - b * Math.cos(fex), b * Math.sin(fex),
+          1, 0];
+}
+function bezAt(P, s, out) {
+  const u = 1 - s, w0 = u * u * u, w1 = 3 * u * u * s, w2 = 3 * u * s * s, w3 = s * s * s;
+  out[0] = w0 * P[0] + w1 * P[2] + w2 * P[4] + w3 * P[6];
+  out[1] = w0 * P[1] + w1 * P[3] + w2 * P[5] + w3 * P[7];
+  return out;
+}
+// Пузо, место пуза и длина кривой при данных ручках.
+const BEZ_TMP = [0, 0];
+function bezShape(P) {
+  let cam = 0, at = 0.5, len = 0, px = P[0], pz = P[1];
+  for (let i = 0; i <= BEZ_N; i++) {
+    bezAt(P, i / BEZ_N, BEZ_TMP);
+    const x = BEZ_TMP[0], z = BEZ_TMP[1];
+    if (z > cam) { cam = z; at = x; }
+    if (i) len += Math.hypot(x - px, z - pz);
+    px = x; pz = z;
+  }
+  return { cam, at, len };
+}
+// Подбор ручек под объявленные пузо и место пуза: вложенные деления пополам.
+// Пузо растёт с суммой ручек, место пуза уезжает назад с долей задней.
+function bezSolve(cam, at, fin, fex) {
+  const key = cam.toFixed(4) + ',' + at.toFixed(3) + ',' + fin.toFixed(3) + ',' + fex.toFixed(3);
+  const hit = BEZ_CACHE.get(key);
+  if (hit) return hit;
+  let rLo = 0.05, rHi = 0.95, P = null, sh = null;
+  for (let i = 0; i < 24; i++) {
+    const r = 0.5 * (rLo + rHi);
+    let kLo = 0.01, kHi = 6;
+    for (let j = 0; j < 24; j++) {
+      const k = 0.5 * (kLo + kHi);
+      P = bezPts(k * (1 - r), k * r, fin, fex);
+      sh = bezShape(P);
+      if (sh.cam < cam) kLo = k; else kHi = k;
+    }
+    if (sh.at < at) rLo = r; else rHi = r;
+  }
+  const out = { P: P, ratio: sh.len, cam: sh.cam, at: sh.at };
+  if (BEZ_CACHE.size > 512) BEZ_CACHE.clear();
+  BEZ_CACHE.set(key, out);
+  return out;
+}
+// Отношение длины сечения к хорде — то, чем задаётся длина строки.
+function profRatio(cam, at, fin, fex) { return bezSolve(cam, at, fin, fex).ratio; }
+
+// Точка сечения на доле `t` ЕГО ДЛИНЫ. Доля длины, а не хорды: узлы садятся
+// поровну по материалу, как и у прежнего семейства.
+const BEZ_CUM = new Float64Array(BEZ_N + 1);
+function profAtPar(A, B, n, t, sol, out) {
+  const ex = B[0] - A[0], ey = B[1] - A[1], ez = B[2] - A[2];
+  const c = Math.hypot(ex, ey, ez);
+  if (c < 1e-9) { out[0] = A[0]; out[1] = A[1]; out[2] = A[2]; return out; }
+  const P = sol.P;
+  let L = 0, px = P[0], pz = P[1];
+  BEZ_CUM[0] = 0;
+  for (let i = 1; i <= BEZ_N; i++) {
+    bezAt(P, i / BEZ_N, BEZ_TMP);
+    L += Math.hypot(BEZ_TMP[0] - px, BEZ_TMP[1] - pz);
+    BEZ_CUM[i] = L; px = BEZ_TMP[0]; pz = BEZ_TMP[1];
+  }
+  const want = t * L;
+  let sPar = t;
+  for (let i = 1; i <= BEZ_N; i++) {
+    if (BEZ_CUM[i] >= want) {
+      const lo = BEZ_CUM[i - 1], hi = BEZ_CUM[i];
+      sPar = (i - 1 + (hi > lo ? (want - lo) / (hi - lo) : 0)) / BEZ_N;
+      break;
+    }
+  }
+  bezAt(P, sPar, BEZ_TMP);
+  const x = BEZ_TMP[0], z = BEZ_TMP[1] * c;
+  out[0] = A[0] + ex * x + n[0] * z;
+  out[1] = A[1] + ey * x + n[1] * z;
+  out[2] = A[2] + ez * x + n[2] * z;
+  return out;
+}
+
 const PROF_CUM = new Float64Array(PROF_N + 1);
 function profLen(depth) {
   const k = depth / PROF_MAX;
@@ -595,6 +730,14 @@ export class Cloth {
     const midL = [0.5 * (T[0] + H[0]), 0.5 * (T[1] + H[1])];
     const midB = [0.5 * (C[0] + HA[0]), 0.5 * (C[1] + HA[1])];
     const dsg = this.sail.design || [0.2];
+    // Семейство сечения: пузо, место пуза, вход и выход. Все четыре — по
+    // станциям высоты, из одной таблицы обмера (см. `aero.js`).
+    const kind = this.sail.gennaker ? 'gennaker' : (this.sail.jib ? 'jib' : 'main');
+    const dft = DESIGN_DRAFT[kind] || DESIGN_DRAFT.main;
+    const ent = DESIGN_ENTRY[kind] || DESIGN_ENTRY.main;
+    const exi = (DESIGN_EXIT[kind] || DESIGN_EXIT.main) * Math.PI / 180;
+    const solAt = (f) => bezSolve(designAt(dsg, f), designAt(dft, f),
+                                  designAt(ent, f) * Math.PI / 180, exi);
     // ЦЕЛЬ ПОДБОРА — ОБМЕРНАЯ ШИРИНА НА ПОЛУВЫСОТЕ. Пузо теперь задаёт длину
     // строки само, поэтому развёртке серпа осталось ровно одно дело: развести
     // шкаторины так, чтобы парус вышел нужной ШИРИНЫ. Каждое измерение
@@ -608,10 +751,10 @@ export class Cloth {
       const nL = nOf(T, H, midB, bow), nB = nOf(C, HA, midL, bow);
       const z = Math.max(T[2], C[2]) +
                 0.5 * (Math.min(H[2], HA[2]) - Math.max(T[2], C[2]));
-      arcAtZ(T, H, gen.luff_m, nL, z, A);
+      roundAtZ(T, H, gen.luff_round_m, gen.luff_round_at, nL, z, A);
       arcAtZ(C, HA, gen.leech_m, nB, z, B);
       const c = Math.max(0.02, Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]));
-      return c * profLen(designAt(dsg, 0.5));
+      return c * solAt(0.5).ratio;
     };
     // Ширина растёт с углом монотонно: чем больше шкаторины врозь, тем длиннее
     // хорда и тем шире парус. Деление пополам, двадцати шагов хватает.
@@ -675,7 +818,7 @@ export class Cloth {
         // На прежнем, вдвое меньшем парусе угол вставал ниже, и это не вылезало.
         const zA = Math.max(T[2], C[2]), zB = Math.min(H[2], HA[2]);
         const z = zA + (r / (this.rows - 1)) * (zB - zA);
-        arcAtZ(T, H, gen.luff_m, nL, z, A);         // точка передней шкаторины
+        roundAtZ(T, H, gen.luff_round_m, gen.luff_round_at, nL, z, A);  // передняя: по серпу
         arcAtZ(C, HA, gen.leech_m, nB, z, B);       // точка задней
       }
       const ex = B[0] - A[0], ey = B[1] - A[1], ez = B[2] - A[2];
@@ -715,7 +858,7 @@ export class Cloth {
       // измеренного J/80, вход 5° при 61°.
       const L = r === 0 ? (gen.foot_cloth_m || gen.foot_m)
               : (r === this.rows - 1 ? gen.head_width_m
-                                     : chord * profLen(designAt(dsg, this.rowF(r))));
+                                     : chord * solAt(this.rowF(r)).ratio);
       if (edgeRow) { /* длина границы объявлена, пуза у неё нет */ }
       this.rowW[r] = L;
       // В КАКУЮ СТОРОНУ ВЫГНУТА СТРОКА. Сторону задаёт БОРТ ПОСТАНОВКИ, а не
@@ -739,9 +882,10 @@ export class Cloth {
       const nl = Math.hypot(nx, ny, nz);
       if (nl < 1e-9) { nx = 0; ny = side; } else { nx /= nl; ny /= nl; }
       const nb = r === 0 ? nF : [nx, ny, 0];
+      const sol = edgeRow ? null : solAt(this.rowF(r));
       for (let c = 0; c < this.cols; c++) {
         const t = c / (this.cols - 1), i = this.ix(r, c);
-        profAt(A, B, L, nb, t, P);
+        if (sol) profAtPar(A, B, nb, t, sol, P); else profAt(A, B, L, nb, t, P);
         this.dx[i] = P[0]; this.dy[i] = P[1]; this.dz[i] = P[2];
       }
     }

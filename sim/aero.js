@@ -1311,20 +1311,25 @@ export class Rig {
       // Строка одна — значит и число, которым она строится, обязано быть одно.
       const camRow = rf => designAt(this.sails[st.sail].design,
                                     rf / (cloth.nRows - 1)) * draftK;
+      // ПАНЕЛЬ БЕРЁТСЯ С САМОГО ПОЛОТНА, А НЕ СТРОИТСЯ ПО ЕГО КОНЦАМ.
+      //
+      // Стояло иначе: у ткани брались только КОНЦЫ хорды, а между ними
+      // ставилась парабола `4t(1−t)` с ПРОЕКТНЫМ пузом. Довод был записан —
+      // ткань давала у топа сечения с пузом 0.40…0.60, а поляра измерена до
+      // 0.18, и подавать решётке такую полноту было некуда.
+      //
+      // Довод истёк вместе с параметрическим сечением: замер даёт летящую
+      // полноту 0.11…0.30 на всех рабочих курсах (TWA 120/140/165), максимум
+      // 0.296. Разбега, ради которого парабола держалась, больше нет.
+      //
+      // Цена прежнего видна на том же замере: на TWA 120° вторая строка летит с
+      // пузом 0.11, а решётка считала её по проектным 0.28. Ткань там полотно
+      // расправляет, решётка об этом не знала.
       const putC = (arr, rf, t) => {
-        const L = cloth.sample(rf, 0, CL_A);
-        const lx = L[0], ll = L[1], lh = L[2];
-        const T = cloth.sample(rf, 1, CL_B);
-        const vx = T[0] - lx, vl = T[1] - ll, vh = T[2] - lh;
-        const cc = Math.hypot(vx, vl);
-        const bx = cc > 1e-6 ? -vl / cc : 0, bl = cc > 1e-6 ? vx / cc : 1;
-        const bow = camSign * camRow(rf) * 4 * t * (1 - t) * cc;
-        const ax = lx + t * vx + bow * bx;
-        const as = ll + t * vl + bow * bl;
-        const h = lh + t * vh;
-        arr[0] = ax;
-        arr[1] = -h * sphi + as * e2y;
-        arr[2] = h * cphi + as * e2z;
+        const P = cloth.sample(rf, t, CL_A);
+        arr[0] = P[0];
+        arr[1] = -P[2] * sphi + P[1] * e2y;
+        arr[2] = P[2] * cphi + P[1] * e2z;
       };
       const put = (arr, h, ch, xl, t, sag) => {
         const bow = camSign * cam * 4 * t * (1 - t) * ch;

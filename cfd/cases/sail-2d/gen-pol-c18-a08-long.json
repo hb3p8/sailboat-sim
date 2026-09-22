@@ -1,0 +1,84 @@
+{
+  "case_id": "gen-pol-c18-a08-long",
+  "condition": {
+    "alpha_deg": 8,
+    "camber": 0.18,
+    "speed_ms": 4.5
+  },
+  "convergence_group": "gen-pol-long",
+  "family": "sail-2d",
+  "fluid": {
+    "nu": 0.0000148,
+    "rho": 1.225
+  },
+  "geometry": {
+    "bodies": [
+      "gen-design"
+    ],
+    "files": {
+      "gen-design": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "revision": "подставляется при разворачивании"
+  },
+  "mesh": {
+    "body_box": [
+      [
+        -0.2,
+        -1.2,
+        -1000000
+      ],
+      [
+        4.1,
+        1.2,
+        1000000
+      ]
+    ],
+    "domain": {
+      "aft_l": 120,
+      "down_l": 1,
+      "fwd_l": 120,
+      "seed": [
+        60,
+        60,
+        0
+      ],
+      "side_l": 120,
+      "span_m": 0.2,
+      "up_l": 1
+    },
+    "family": "gen-ogrid-v1",
+    "grid": "gen-og-d18.p3dfmt",
+    "grid_transform": [],
+    "level": "medium",
+    "n_proc": 8
+  },
+  "notes": "ПРОДОЛЖЕНИЕ ОПОРНОГО РЯДА ПОСЛЕ ОТРИЦАТЕЛЬНОГО РЕЗУЛЬТАТА §13.35 docs/cfd-validation.md. Короткий случай gen-pol-c18-a08 считал до 14 с и усреднял 8…14 с; дрейф силы превысил порог 1.0. Здесь та же геометрия, O-сетка, домен 120 м, поток, турбулентность, шаг и численный рецепт; физическое время 40 с, усреднение 20…40 с. Отдельный case_id сохраняет короткий результат для аудита. Считать ряд 0.28 только после проверки опорного 0.18 по трём углам.",
+  "numerics": {
+    "average_from": 20,
+    "dt_s": 0.01,
+    "end_time": 40,
+    "maxCo": 1,
+    "write_interval": 4
+  },
+  "reference": {
+    "area_m2": 0.78,
+    "chord_m": 3.9,
+    "length_m": 3.9,
+    "origin_m": [
+      0.975,
+      0,
+      0
+    ],
+    "rho": 1.225,
+    "speed_ms": 4.5
+  },
+  "schema": 1,
+  "solver": {
+    "application": "pimpleFoam",
+    "image": "openfoam-app-arm64:2306@sha256:d7f74da0b7e3c777f9a09c1508c0ab8e0ed97b74ef7ba3ee4bcae36909bf8d35",
+    "name": "OpenFOAM",
+    "turbulence": "kOmegaSST",
+    "wall_treatment": "wall-function"
+  },
+  "template": "openfoam-2d-urans"
+}

@@ -580,6 +580,29 @@
 из-за недостигнутого остатка, даже когда печатаемое растяжение округляется
 почти до нуля.
 
+Следующий изолированный опыт устранил один недостаток самого тестового
+ADMM: при `--rigid-board --board-material` верхние промежуточные узлы
+вообще исключены из независимых степеней свободы и заданы линейно
+двумя концами дощечки. Теперь её геометрический остаток **ровно 0**,
+включая после проекции, а не исправлен задним числом. На той же форме,
+смещении 0.1 м и `rho` равном медианной массе процедура достигла обоих
+остатков `<1e-8` м без срыва внутреннего CG:
+
+| Сеть | Внешних итераций ADMM | Время одной статической проекции, мс | Верх / остаток жёстких связей |
+|---:|---:|---:|---:|
+| 11×9 | 2684 | ~96 | 0 мм / `<1e-8` м |
+| 11×17 | 2356 | ~167 | 0 мм / `<1e-8` м |
+| 11×33 | 2289 | ~310 | 0 мм / `<1e-8` м |
+
+При прежнем лимите 400 на 11×33 точная дощечка уже была соблюдена,
+но первичный/двойственный остатки оставались `2.37e-6/1.15e-5` м;
+проверка `--require-converged` вернула бы код 1. Таким образом, нынешняя
+выпуклая постановка может совместить дощечку и жёсткие связи, но **не
+годится для realtime по цене** и ещё не описывает мягкие связи, шкот и
+нестационарную ткань. Стоимость здесь относится к одной проекции одного
+возмущённого снимка, без аэродинамики, браузера и нескольких подшагов.
+Увеличением лимита лишь доказана достижимость, а не пригодность метода.
+
 ## Связанный опыт: отрицательный результат для штатного включения
 
 Четыре клетки прежнего аудита, TWS 6 м/с, окно 25…30 с после независимого
@@ -639,6 +662,9 @@ node tests/cloth-net-admm.mjs --cols=33 --outer=1 --perturb=0 --board-material
 node tests/cloth-net-admm.mjs --cols=33 --outer=400 --rho-factor=1 --perturb=0.1 --board-material
 node tests/cloth-net-admm.mjs --cols=33 --outer=400 --rho-factor=10 --perturb=0.1 --board-material --require-converged
 node tests/cloth-net-admm.mjs --cols=33 --outer=400 --rho-factor=100 --perturb=0.1 --board-material
+node tests/cloth-net-admm.mjs --cols=9 --outer=4000 --rho-factor=1 --perturb=0.1 --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --cols=17 --outer=4000 --rho-factor=1 --perturb=0.1 --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --cols=33 --outer=4000 --rho-factor=1 --perturb=0.1 --board-material --rigid-board --require-converged
 node tests/local-pressure-coupling.test.mjs
 node tests/local-pressure-frozen.mjs
 node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=1 --baseline

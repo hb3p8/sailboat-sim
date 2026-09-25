@@ -668,6 +668,52 @@ ADMM: при `--rigid-board --board-material` верхние промежуто�
 положительный результат по физическому генакеру или разрешение менять
 runtime.
 
+### Свободный угол и односторонний шкот в той же численной проекции
+
+К диагностической выпуклой задаче добавлен свободный шкотовый узел и
+ограничение `|x_шкот−x_обух| ≤ L_шкота`, с отдельной переменной ADMM.
+Дощечка остаётся точной, жёсткие связи `ck=1` и остановка по полной
+первичной/двойственной невязкам не меняются. При рабочей длине
+`5.218 м` исходное расстояние до обуха `5.214…5.215 м`. Смещение
+только шкотового узла на 0.1 м наружу активирует шкот: для 11×9/17/33
+получено 302/1222/479 итераций с локальным штрафом; итоговая длина
+`5.218000 м`, нулевое превышение и положительный множитель
+`0.1154/0.04968/0.02274 кг·м`. Общий штраф даёт те же координаты с
+разностью не более `0.000204 мм`, но требует 3418/3251/3467 итераций.
+При шкоте `9 м` на 11×33 длина после проекции `5.296810 м`, множитель
+**ровно ноль**. У стенда есть проверка ожидаемой ветви: правильные
+`--expect-sheet=taut/slack` дают код 0, намеренно перепутанные — код 1.
+В 60 последовательных кинематических целях `0→0.1→0 м` на 11×33
+тёплый/холодный расчёт не разошёлся по ветви ни в одном кадре:
+натянутый шкот в 57/60, максимальная разность координат `0.0007 мм`,
+все кадры доведены, превышение длины нулевое. Это не история реального
+травления шкота: менялась предсказанная координата угла, не `L_шкота`.
+
+Однако одинаковое смещение *одного узла* не является одинаковой
+физической силой при сгущении: его масса падает. Поэтому отдельно задана
+одна и та же точечная сила `20 Н`, прогноз
+`x* = x + F·Δt²/m_шкотового_узла`, остальные узлы не возмущены.
+Множитель ограничения, поделённый на `Δt²`, есть реакция в ньютонах
+именно **этого одношагового проектора**:
+
+| Δt, с | 11×9 | 11×17 | 11×33 | 11×65 |
+|---:|---:|---:|---:|---:|
+| 1/30 | 16.20 Н | 18.17 Н | 19.05 Н | 19.69 Н |
+| 1/60 | 4.81 Н | 12.69 Н | 16.18 Н | 18.75 Н |
+| 1/120 | 0 Н | 0 Н | 4.73 Н | 14.99 Н |
+
+Все эти проекции достигли прежних численных допусков без лимита CG,
+дощечка точна, длина шкота не превышена. При `1/120 с` на 11×9/17
+шкот остаётся слабым (`5.215956/5.216897 м < 5.218 м`) и множитель
+равен нулю. Это **не** проверка сходимости по времени при одном и том же
+физическом горизонте: во всех клетках сделан ровно один шаг от исходника
+с миллиметрами слабины. Она доказывает, что реакция переключается
+односторонне, и одновременно показывает, почему по ней нельзя заключить
+о натяжении в полёте. Нужна многокадровая динамика с одинаковой историей
+нагрузки/трима и измерением натяжения после выхода из начального перехода.
+Мягкие связи перекоса, изгиб, давление, движение лодки и перенос реакции
+через обух в её моменты здесь ещё отсутствуют. Штатный путь не изменён.
+
 ## Связанный опыт: отрицательный результат для штатного включения
 
 Четыре клетки прежнего аудита, TWS 6 м/с, окно 25…30 с после независимого
@@ -741,6 +787,17 @@ node tests/cloth-net-admm.mjs --cols=33 --outer=4000 --rho-factor=0.1 --rho-loca
 node tests/cloth-net-admm.mjs --cols=9 --outer=4000 --rho-factor=1 --rho-local --perturb=0.1 --board-material --rigid-board --sequence=60 --require-converged
 node tests/cloth-net-admm.mjs --cols=17 --outer=4000 --rho-factor=1 --rho-local --perturb=0.1 --board-material --rigid-board --sequence=60 --require-converged
 node tests/cloth-net-admm.mjs --cols=33 --outer=4000 --rho-factor=1 --rho-local --perturb=0.1 --board-material --rigid-board --sequence=60 --require-converged
+node tests/cloth-net-admm.mjs --cols=9 --outer=4000 --rho-factor=1 --rho-local --compare-rho --free-clew --sheet-len=5.218 --expect-sheet=taut --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --cols=17 --outer=4000 --rho-factor=1 --rho-local --compare-rho --free-clew --sheet-len=5.218 --expect-sheet=taut --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --cols=33 --outer=4000 --rho-factor=1 --rho-local --compare-rho --free-clew --sheet-len=5.218 --expect-sheet=taut --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --cols=33 --outer=4000 --rho-factor=1 --rho-local --free-clew --sheet-len=9 --expect-sheet=slack --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --cols=33 --outer=4000 --rho-factor=1 --rho-local --free-clew --sheet-len=9 --expect-sheet=taut --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --cols=33 --outer=4000 --rho-factor=1 --rho-local --free-clew --sheet-len=5.218 --board-material --rigid-board --sequence=60 --require-converged
+node tests/cloth-net-admm.mjs --cols=9 --outer=4000 --rho-factor=1 --rho-local --free-clew --sheet-len=5.218 --clew-force=20 --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --cols=17 --outer=4000 --rho-factor=1 --rho-local --free-clew --sheet-len=5.218 --clew-force=20 --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --cols=33 --outer=4000 --rho-factor=1 --rho-local --free-clew --sheet-len=5.218 --clew-force=20 --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --cols=65 --outer=4000 --rho-factor=1 --rho-local --free-clew --sheet-len=5.218 --clew-force=20 --board-material --rigid-board --require-converged
+for h in 0.03333333333333333 0.016666666666666666 0.008333333333333333; do for c in 9 17 33 65; do node tests/cloth-net-admm.mjs --cols=$c --outer=4000 --rho-factor=1 --rho-local --free-clew --sheet-len=5.218 --clew-force=20 --force-dt=$h --board-material --rigid-board --require-converged; done; done
 node tests/local-pressure-coupling.test.mjs
 node tests/local-pressure-frozen.mjs
 node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=1 --baseline

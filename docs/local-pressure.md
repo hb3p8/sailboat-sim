@@ -856,6 +856,50 @@ runtime.
 Диагностический параметр оставлен для воспроизведения; штатная
 модель не менялась.
 
+### Покоординатный двойственный разогрев: быстрее, но ещё не realtime
+
+Независимый кандидат минимизирует ту же выпуклую двойственную задачу
+**точно по одной векторной связи за раз**. Усадка импульса связи и
+массовое обновление затронутых узлов не требуют глобального линейного
+шага ADMM; направление обхода чередуется. Множители этого метода
+переносятся в масштабированные двойственные переменные ADMM, после
+чего прежний проектор доводит ту же задачу до допусков. В гибридном
+контроле 256 предварительных проходов — численный параметр, не новая
+жёсткость ткани или порог.
+
+На статическом возмущении 11×9 с натянутым шкотом самостоятельный
+покоординатный метод довёл первичный/двойственный/KKT остатки до
+`3.50e-9 м / 9.96e-9 кг·м / 3.50e-9 м` за 499 проходов и 23.4 мс.
+Контрольный ADMM на той же задаче потребовал 7792 итерации и 252.3 мс;
+максимальная разность формы `0.000634 мм`, разность множителя шкота
+`1.22e-12 кг·м`. Но **сам по себе** покоординатный метод при
+замороженном давлении не доводит первый шаг 1/30 с за 8192 прохода:
+первичная невязка на 11×9/17/33 равна
+`3.54e-7/2.40e-7/1.11e-6 м`. Поэтому самостоятельная замена ADMM —
+NO-GO; её статическая скорость не является свидетельством динамики.
+
+Гибрид с 256 предварительными проходами и локальным ADMM `×100`,
+нормировка плеча дощечки в первой степени, прежние допуски и те же
+шесть либо 24 шага под замороженной нагрузкой:
+
+| Сеть / шаг | Время проекций ADMM → гибрид | Итераций гибрида суммарно | Реакция шкота в 0.2 с ADMM → гибрид |
+|---|---:|---:|---:|
+| 11×9 / 1/30 с | 1.916 → 0.648 с | 15161 | 2.873 → 2.873 Н |
+| 11×17 / 1/30 с | 4.486 → 1.505 с | 21593 | 1.999 → 1.999 Н |
+| 11×33 / 1/30 с | 7.461 → 3.582 с | 23598 | 1.847 → 1.847 Н |
+| 11×17 / 1/120 с | 11.794 → 1.833 с | 22690 | 1.841 → 1.844 Н |
+| 11×33 / 1/120 с | 24.324 → 4.956 с | 37853 | 1.741 → 1.756 Н |
+
+Все гибридные шаги достигли прежних невязок и не нарушили жёсткие
+связи, шкот и дощечку. На 1/120 с небольшое отличие силы при одинаковом
+геометрическом допуске показывает, что точность реакции следует
+проверять отдельно; деление множителя на `Δt²` усиливает малую разницу.
+Даже лучший из этих результатов на 11×33 требует 3.582 с вычислений
+на 0.2 с физического времени при 30 Гц, а физика по-прежнему
+hard-only с замороженной аэродинамикой. Это **положительный численный
+разогрев**, не GO для реального времени или правдоподобия управления.
+Штатная ткань, поляра и пороги не менялись.
+
 ## Связанный опыт: отрицательный результат для штатного включения
 
 Четыре клетки прежнего аудита, TWS 6 м/с, окно 25…30 с после независимого
@@ -949,6 +993,10 @@ for c in 9 17 33; do node tests/cloth-net-admm.mjs --cols=$c --outer=8192 --rho-
 for c in 17 33; do node tests/cloth-net-admm.mjs --cols=$c --outer=8192 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=120 --board-material --rigid-board --require-converged; done
 for a in 1.2 1.5 1.8; do node tests/cloth-net-admm.mjs --cols=17 --outer=8192 --rho-factor=100 --rho-local --rho-board-power=1 --relax=$a --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged; done
 node tests/cloth-net-admm.mjs --cols=33 --outer=8192 --rho-factor=100 --rho-local --rho-board-power=1 --relax=1.2 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --solver=coordinate --compare-solver --cols=9 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --perturb=0.1 --board-material --rigid-board --require-converged
+for c in 9 17 33; do node tests/cloth-net-admm.mjs --solver=coordinate --cols=$c --outer=8192 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.03333333333333333 --dynamic-hz=30 --board-material --rigid-board --require-converged; done
+for c in 9 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged; done
+for c in 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=120 --board-material --rigid-board --require-converged; done
 node tests/cloth-net-admm.mjs --cols=17 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --cols=33 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --solver=dual --dual-step=power --compare-solver --cols=9 --outer=8192 --rho-factor=1 --rho-local --perturb=0.1 --board-material --rigid-board --require-converged

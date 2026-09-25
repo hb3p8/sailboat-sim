@@ -1208,7 +1208,9 @@ export class Cloth {
     return A;
   }
 
-  advance(b, h, side, env) {
+  // Та же нагрузка, что в штатном шаге, доступна экспериментальному
+  // проектору без повторной формулы давления и без перемещения узлов.
+  forcesAt(b, h, side, env) {
     const calc = b.rig.stripCalc, base = this.si * STRIPS;
     const p = this.pos, pv = this.prev, f = this.frc, N = this.n;
     // Поток берётся у средней полоски: направление давления по высоте меняется
@@ -1409,6 +1411,11 @@ export class Cloth {
         L.mx += Y * fz - (Z - cgz) * fy;
       }
     }
+  }
+
+  advance(b, h, side, env) {
+    this.forcesAt(b, h, side, env);
+    const p = this.pos, pv = this.prev, f = this.frc, N = this.n;
     const damp = Math.exp(-DAMP_HZ * h);
     for (let i = 0; i < N; i++) {
       const w = this.w[i];

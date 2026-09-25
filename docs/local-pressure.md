@@ -920,6 +920,55 @@ hard-only с замороженной аэродинамикой. Это **по�
 аэродинамикой и корпусом; дальнейшее продление такой же замороженной
 пробы не заменит связанный опыт.
 
+### Пересчёт давления на новой форме при неподвижной лодке
+
+Чтобы проверить первую половину связи «ткань → аэродинамика → ткань»
+без второй реализации нагрузки, из `Cloth.advance` выделен
+`forcesAt`: тот же расчёт понодального давления, площади, нормали,
+тяжести и аэродинамического затухания до перемещения узлов. Штатный
+`advance` вызывает его без изменения порядка действий. Побайтовый
+SHA-256 отпечатка `scripts/golden.mjs` до/после рефакторинга одинаков:
+`e96ffa88442fbd33dee87ab6c45257ed9cef15564c10915cf5be533e51e54997`;
+`tests/cloth.test.mjs` завершился «всё ок».
+
+Опытный экземпляр ткани становится геометрией решётки, но его штатный
+PBD-шаг в этом стенде выключен; узлы двигает тот же доведённый гибрид.
+Решётка и её пелена пересчитываются на каждой новой форме, лодка пока
+неподвижна. Режим `recomputed-pressure` берёт только нормальное давление;
+`full-cloth-load` добавляет из *той же* функции тяжесть ткани и
+аэродинамическое затухание. Материал по-прежнему hard-only: мягкие
+связи и изгиб ещё не перенесены в гибридную проекцию.
+
+На 0.2 с при 30 Гц все три сетки доведены с прежними допусками:
+
+| Сеть | Шкот в 0.2 с: замороженное / обновляемое давление / полная нагрузка | Полная сила в начале → конце 0.2 с, Fx/Fy/Fz |
+|---|---:|---:|
+| 11×9 | 2.873 / 2.896 / 2.721 Н | `159.340/−169.113/4.846 → 154.562/−160.175/2.654 Н` |
+| 11×17 | 1.999 / 2.015 / 1.862 Н | `159.443/−169.287/4.805 → 154.639/−160.332/2.572 Н` |
+| 11×33 | 1.847 / 1.864 / 1.688 Н | `159.281/−169.313/4.753 → 154.472/−160.308/2.532 Н` |
+
+На 11×33 игнорирование тяжести/затухания при уже обновляемом
+давлении завышает реакцию в этой точке на `0.176 Н` (`10.4 %` от
+полной). Это отрицательный результат для трактовки прежней
+«давление-only» реакции как физической силы шкота.
+
+За 1 с при полной нагрузке давление и форма продолжают взаимодействовать,
+но установления и временной независимости всё ещё нет:
+
+| Сеть / шаг | Шкот в 0.5 → 1.0 с | Средняя / RMS за 0.5…1.0 с | x середины в 1.0 с |
+|---|---:|---:|---:|
+| 11×17 / 30 Гц | 3.227 → 4.585 Н | 3.902 / 0.399 Н | 5.203983 м |
+| 11×33 / 30 Гц | 2.813 → 4.515 Н | 3.727 / 0.488 Н | 5.202973 м |
+| 11×17 / 120 Гц | 3.170 → 4.404 Н | 3.755 / 0.358 Н | 5.198137 м |
+| 11×33 / 120 Гц | 2.695 → 4.323 Н | 3.550 / 0.466 Н | 5.197654 м |
+
+На 11×33 уменьшение шага 1/30→1/120 с меняет конечную реакцию
+на `0.192 Н` и x на `5.319 мм`; сравнение 11×17→11×33 при
+120 Гц даёт `0.081 Н` и `0.483 мм`. Это измерение текущей
+независимости, не попытка подогнать порог. Пока лодка закреплена,
+невозможно проверить обратное влияние на курс, крен и скорость;
+включать модель в runtime или менять полярную тягу рано.
+
 ## Связанный опыт: отрицательный результат для штатного включения
 
 Четыре клетки прежнего аудита, TWS 6 м/с, окно 25…30 с после независимого
@@ -1018,6 +1067,8 @@ for c in 9 17 33; do node tests/cloth-net-admm.mjs --solver=coordinate --cols=$c
 for c in 9 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged; done
 for c in 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=120 --board-material --rigid-board --require-converged; done
 for h in 30 120; do for c in 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=1 --dynamic-hz=$h --board-material --rigid-board --require-converged; done; done
+for load in recomputed-pressure full-cloth-load; do for c in 9 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=$load --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged; done; done
+for h in 30 120; do for c in 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=full-cloth-load --dynamic-seconds=1 --dynamic-hz=$h --board-material --rigid-board --require-converged; done; done
 node tests/cloth-net-admm.mjs --cols=17 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --cols=33 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --solver=dual --dual-step=power --compare-solver --cols=9 --outer=8192 --rho-factor=1 --rho-local --perturb=0.1 --board-material --rigid-board --require-converged

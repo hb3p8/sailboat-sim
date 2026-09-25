@@ -23,6 +23,7 @@ const forceDt = Number(opt('force-dt', String(1 / 30)));
 const dynamicSeconds = Number(opt('dynamic-seconds', '0'));
 const dynamicHz = Number(opt('dynamic-hz', '60'));
 const dynamicLoad = opt('dynamic-load', 'clew');
+const coupledAero = ['recomputed-pressure', 'full-cloth-load'].includes(dynamicLoad);
 const dampHz = Number(opt('damp-hz', '6'));
 const sequence = Number(opt('sequence', '0'));
 const boardMaterial = process.argv.includes('--board-material');
@@ -46,7 +47,8 @@ if (!Number.isInteger(cols) || cols < 5 || cols > 65 ||
     !(clewForce >= 0 && clewForce <= 1000) || !(forceDt > 0 && forceDt <= 1) ||
     (clewForce > 0 && (!freeClew || perturb === 0)) ||
     !(dynamicSeconds >= 0 && dynamicSeconds <= 5) ||
-    ![30, 60, 120].includes(dynamicHz) || !['clew', 'frozen-pressure'].includes(dynamicLoad) ||
+    ![30, 60, 120].includes(dynamicHz) ||
+    !['clew', 'frozen-pressure', 'recomputed-pressure', 'full-cloth-load'].includes(dynamicLoad) ||
     !(dampHz >= 0 && dampHz <= 20) ||
     (dynamicSeconds > 0 && (!freeClew || !rigidBoard ||
       (dynamicLoad === 'clew' && !clewForce) || sequence || compareRho)) ||
@@ -67,14 +69,14 @@ const sheetLen = Number(opt('sheet-len', String(0.5 * (gen.sheet_min_m + gen.she
 if (!(sheetLen >= gen.sheet_min_m && sheetLen <= gen.sheet_max_m))
   throw new Error('Длина шкота вне штатного диапазона');
 b.o.genSheetLen = sheetLen;
-if (dynamicSeconds && dynamicLoad === 'frozen-pressure') {
+if (dynamicSeconds && dynamicLoad !== 'clew') {
   const D = Math.PI / 180;
   b.o.crewHike = -1; b.o.crewMass = 219.9;
   b.o.sheet = 70 * D; b.o.twist = 8 * D;
 }
 b.reset(); b.o.windSpeed = 6; b.o.windDir = 100 * Math.PI / 180; b.u = 3;
 b.psi = -40 * Math.PI / 180;
-if (dynamicSeconds && dynamicLoad === 'frozen-pressure') {
+if (dynamicSeconds && dynamicLoad !== 'clew') {
   const D = Math.PI / 180;
   const wrap = x => ((x + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
   for (let i = 0; i < 30 * 30; i++) {
@@ -799,15 +801,35 @@ if (dynamicSeconds) {
   const direction = [(p[k] - sheetLead[0]) / d0,
     (p[k + 1] - sheetLead[1]) / d0, (p[k + 2] - sheetLead[2]) / d0];
   const force = new Float64Array(3 * N), forceSum = [0, 0, 0];
-  if (dynamicLoad === 'clew') {
-    for (let j = 0; j < 3; j++) force[k + j] = clewForce * direction[j];
-  } else {
-    for (let a = 0; a < N; a++)
-      for (let j = 0; j < 3; j++)
-        force[3 * a + j] = frozenPressure[a] * frozenNormals[3 * a + j];
+  if (coupledAero) {
+    // Движение узлов считает этот стенд, но решётка пользуется ИМЕННО ими.
+    // Штатный PBD-шаг здесь отключён только у опытного экземпляра ткани.
+    b.rig.cloth = cl;
+    cl.step = () => true;
   }
-  for (let a = 0; a < N; a++)
-    for (let j = 0; j < 3; j++) forceSum[j] += force[3 * a + j];
+  const updateForce = () => {
+    force.fill(0); forceSum.fill(0);
+    if (dynamicLoad === 'clew') {
+      for (let j = 0; j < 3; j++) force[k + j] = clewForce * direction[j];
+    } else if (dynamicLoad === 'frozen-pressure') {
+      for (let a = 0; a < N; a++)
+        for (let j = 0; j < 3; j++)
+          force[3 * a + j] = frozenPressure[a] * frozenNormals[3 * a + j];
+    } else {
+      cl.pos.set(p); cl.prev.set(prev);
+      b.rig.latRebuild = true;
+      b.rig.forces(b, b.apparentWind(), h);
+      cl.forcesAt(b, h, b.rigSide, b.p.environment);
+      for (let a = 0; a < N; a++)
+        for (let j = 0; j < 3; j++)
+          force[3 * a + j] = dynamicLoad === 'recomputed-pressure'
+            ? cl.pressureForce[a] * cl.nrm[3 * a + j] : cl.frc[3 * a + j];
+    }
+    for (let a = 0; a < N; a++)
+      for (let j = 0; j < 3; j++) forceSum[j] += force[3 * a + j];
+  };
+  updateForce();
+  const initialForceSum = forceSum.slice();
   let maxAcceleration = 0, maxAccelNode = -1;
   for (let a = 0; a < N; a++) if (!fixed[a]) {
     const q = Math.hypot(force[3 * a], force[3 * a + 1], force[3 * a + 2]) / cl.mass[a];
@@ -816,9 +838,13 @@ if (dynamicSeconds) {
   const decay = Math.exp(-dampHz * h);
   let sum = 0, sum2 = 0, nWindow = 0, totalMs = 0, totalIter = 0;
   let maxBoard = 0, maxSheet = 0, maxStretch = 0, failed = 0;
+  const loadLabel = dynamicLoad === 'clew' ? `точечная ${clewForce} Н от обуха` :
+    dynamicLoad === 'frozen-pressure' ? 'замороженное давление' :
+    dynamicLoad === 'recomputed-pressure' ? 'обновляемое давление, лодка неподвижна' :
+    'полная обновляемая нагрузка ткани, лодка неподвижна';
   console.log(`Динамика: ${steps} подшагов по ${h.toFixed(6)} с, горизонт ${dynamicSeconds} с, ` +
-    `нагрузка ${dynamicLoad === 'clew' ? `точечная ${clewForce} Н от обуха` : 'замороженное давление'} ` +
-    `(сумма ${forceSum.map(x => x.toFixed(3)).join('/')} Н), затухание ${dampHz} 1/с; ` +
+    `нагрузка ${loadLabel} ` +
+    `(сумма ${initialForceSum.map(x => x.toFixed(3)).join('/')} Н), затухание ${dampHz} 1/с; ` +
     `нулевая начальная скорость, исходная проекция ${initial.used} итераций`);
   console.log(`Макс. ускорение свободного узла ${maxAcceleration.toFixed(3)} м/с² ` +
     `(строка ${Math.floor(maxAccelNode / cols)}, столбец ${maxAccelNode % cols}), ` +
@@ -850,6 +876,7 @@ if (dynamicSeconds) {
     maxSheet = Math.max(maxSheet, result.sheetExcess);
     maxStretch = Math.max(maxStretch, result.maxAbs);
     prev = p; p = result.pos; state = result.state;
+    if (coupledAero) { b.t += h; updateForce(); }
     const reaction = result.sheetMultiplier / (h * h);
     if (i > steps / 2) { sum += reaction; sum2 += reaction * reaction; nWindow++; }
     if (i === Math.round(steps / 2) || i === steps) {
@@ -869,6 +896,9 @@ if (dynamicSeconds) {
       `дощечка ${(1000 * maxBoard).toFixed(6)} мм, ` +
       `шкот +${(1000 * maxSheet).toFixed(6)} мм; ` +
       `${totalIter} итераций, ${totalMs.toFixed(1)} мс`);
+    if (coupledAero)
+      console.log(`Сила на последней форме: ${forceSum.map(x => x.toFixed(3)).join('/')} Н; ` +
+        `начало ${initialForceSum.map(x => x.toFixed(3)).join('/')} Н`);
   }
   if (failed || (requireConverged && (maxBoard > 1e-9 || maxSheet > 1e-8 || maxStretch > 1e-8)))
     process.exitCode = 1;

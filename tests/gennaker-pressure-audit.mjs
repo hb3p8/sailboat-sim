@@ -18,7 +18,9 @@ const cases = [
   { twa: 140, sheets: [8.5, 9.0] },
   { twa: 150, sheets: [8.5, 9.2] },
 ];
-const starts = [3, 3.05];
+// --one-start оставляет одну посадку для временного сравнительного прогона
+// при другом NCHORD; штатный аудит всегда проверяет две.
+const starts = process.argv.includes('--one-start') ? [3] : [3, 3.05];
 const fineCloth = process.argv.includes('--fine-cloth');
 
 function run(twa, sheet, u0) {
@@ -36,6 +38,7 @@ function run(twa, sheet, u0) {
   const sum = { n: 0, drive: 0, speed: 0, luff: 0, entry: Infinity,
                 cols: new Float64Array(fineCloth ? 17 : 9),
                 midQ: new Float64Array(NCHORD), topQ: new Float64Array(NCHORD),
+                genOn: 0, qSpread: 0,
                 abs: 0, frontAbs: 0, gamma: 0, jump: 0, ref: 1 };
   let prevDrive = null;
   for (let i = 0; i < 30 * 30; i++) {
@@ -56,6 +59,11 @@ function run(twa, sheet, u0) {
     sum.drive += gen.reduce((s, g) => s + g.drive, 0);
     sum.speed += b.telemetry.speedKn;
     sum.luff += gen.reduce((s, g) => s + g.luffFrac, 0) / gen.length;
+    for (let si = 0; si < 6; si++) {
+      sum.genOn += b.rig.latOn[12 + si];
+      const q = b.rig.stripCalc[12 + si].q;
+      sum.qSpread = Math.max(sum.qSpread, Math.max(...q) - Math.min(...q));
+    }
     for (let k = 0; k < NCHORD; k++) {
       sum.midQ[k] += b.rig.stripCalc[12 + 3].q[k];
       sum.topQ[k] += b.rig.stripCalc[12 + 5].q[k];
@@ -88,6 +96,8 @@ function run(twa, sheet, u0) {
     frontAbsShare: sum.frontAbs / (sum.abs || 1),
     midQ: Array.from(sum.midQ, v => v / sum.n),
     topQ: Array.from(sum.topQ, v => v / sum.n),
+    genOn: sum.genOn / (sum.n * 6),
+    qSpread: sum.qSpread,
     gamma: sum.gamma, jump: sum.jump / sum.ref,
     wall: (performance.now() - startWall) / 1000,
   };
@@ -98,5 +108,5 @@ for (const { twa, sheets } of cases) for (const sheet of sheets)
   for (const u0 of starts) {
     const x = run(twa, sheet, u0);
     console.log(`${twa}/${sheet.toFixed(1)}/${u0.toFixed(2)} | ${x.speed.toFixed(3)} ${x.drive.toFixed(1)} ${x.luff.toFixed(3)} ${x.entry.toFixed(1)} | ${x.signed.map(v => v.toFixed(1)).join(' ')} | Σ ${x.total.toFixed(1)}; вход/Σ ${(100 * x.frontShare).toFixed(1)} %; вход по модулю ${(100 * x.frontAbsShare).toFixed(1)} %; Γmax ${x.gamma.toFixed(1)} скачок ${(100 * x.jump).toFixed(1)} %; ${x.wall.toFixed(1)} с`);
-    console.log(`  q полоски 4/6: ${x.midQ.map(v => v.toFixed(2)).join(' ')}; полоски 6/6: ${x.topQ.map(v => v.toFixed(2)).join(' ')}`);
+    console.log(`  q полоски 4/6: ${x.midQ.map(v => v.toFixed(2)).join(' ')}; полоски 6/6: ${x.topQ.map(v => v.toFixed(2)).join(' ')}; решётка ${(100 * x.genOn).toFixed(0)} % полоско-шагов, макс. разброс q по хорде ${x.qSpread.toExponential(1)}`);
   }

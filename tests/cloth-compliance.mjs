@@ -3,6 +3,11 @@
 // Формула: Macklin, Müller, Chentanez (2016), уравнение (18).
 import { pathToFileURL } from 'node:url';
 const vec = (x, y = 0, z = 0) => [x, y, z];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1],
+  a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const sub = (a, b) => a.map((x, i) => x - b[i]);
+const point = (p, i) => Array.from(p.subarray(3 * i, 3 * i + 3));
 export const distance = (a, b, rest, alpha, unilateral = false) => ({
   alpha, unilateral, lambda: 0,
   value(p) {
@@ -34,6 +39,53 @@ export const area = (a, b, c, restCross, alpha) => ({
     return { C: ex * fy - ey * fx - restCross,
       grad: [[a, [ey - fy, fx - ex, 0]],
         [b, [fy, -fx, 0]], [c, [-ey, ex, 0]]] };
+  },
+});
+export const area3d = (a, b, c, restCross, alpha) => ({
+  alpha, unilateral: false, lambda: 0,
+  value(p) {
+    const A = point(p, a), e = sub(point(p, b), A), f = sub(point(p, c), A);
+    const n = cross(e, f), length = Math.hypot(...n);
+    if (!(length > 1e-12)) throw new Error('Вырожденная площадь треугольника');
+    const unit = n.map(x => x / length);
+    const gb = cross(f, unit), gc = cross(unit, e);
+    return { C: length - restCross,
+      grad: [[a, gb.map((x, i) => -x - gc[i])], [b, gb], [c, gc]] };
+  },
+});
+export function dihedralAngle(p, a, b, c, d) {
+  const A = point(p, a), P = point(p, b), Q = point(p, c), D = point(p, d);
+  const e = sub(Q, P), el = Math.hypot(...e);
+  const n1 = cross(sub(P, A), sub(Q, A));
+  const n2 = cross(sub(Q, D), sub(P, D));
+  if (!(el > 1e-12 && Math.hypot(...n1) > 1e-12 && Math.hypot(...n2) > 1e-12))
+    throw new Error('Вырожденный двугранный угол');
+  return Math.atan2(dot(e, cross(n1, n2)) / el, dot(n1, n2));
+}
+export const dihedral = (a, b, c, d, restAngle, alpha) => ({
+  alpha, unilateral: false, lambda: 0,
+  value(p) {
+    const angle = dihedralAngle(p, a, b, c, d);
+    const edge = Math.hypot(...sub(point(p, c), point(p, b)));
+    const eps = 1e-6 * edge;
+    const grad = [];
+    // Диагностическая центральная разность; это ещё НЕ runtime-градиент.
+    for (const i of [a, b, c, d]) {
+      const g = [];
+      for (let j = 0; j < 3; j++) {
+        const k = 3 * i + j, original = p[k];
+        p[k] = original + eps;
+        const plus = dihedralAngle(p, a, b, c, d);
+        p[k] = original - eps;
+        const minus = dihedralAngle(p, a, b, c, d);
+        p[k] = original;
+        const difference = plus - minus;
+        g.push(Math.atan2(Math.sin(difference), Math.cos(difference)) / (2 * eps));
+      }
+      grad.push([i, g]);
+    }
+    const difference = angle - restAngle;
+    return { C: Math.atan2(Math.sin(difference), Math.cos(difference)), grad };
   },
 });
 export const bend = (a, b, c, restAngle, alpha) => ({

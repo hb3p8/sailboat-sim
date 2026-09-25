@@ -4,21 +4,30 @@
 import { readFileSync } from 'node:fs';
 import { Boat } from '../sim/physics.js';
 import { Cloth } from '../sim/cloth.js';
+import { gennakerClew } from '../sim/aero.js';
 
 const pack = JSON.parse(readFileSync(new URL('../out/export/physics.json', import.meta.url), 'utf8'));
 const D = Math.PI / 180;
 const arg = (key, def) => Number(process.argv.find(s => s.startsWith(`--${key}=`))?.split('=')[1] ?? def);
 const tack = arg('tack', 1), sheet = arg('sheet', 9), iter = arg('iter', 40);
 const clothHz = arg('cloth-hz', 30);
+const loadScale = arg('load-scale', 1);
+const gravityScale = arg('gravity-scale', 1);
+const sheetRamp = arg('sheet-ramp', 0);
 const fixedLoad = process.argv.includes('--fixed-load');
 const fixedNormals = fixedLoad || process.argv.includes('--fixed-normals');
 const edgeAudit = process.argv.includes('--edges');
 const cellAudit = process.argv.includes('--cells');
 const cutNesting = process.argv.includes('--cut-nesting');
+const boardMaterial = process.argv.includes('--board-material');
+const cornerAudit = process.argv.includes('--corner-gap');
+const holdCutClew = process.argv.includes('--hold-cut-clew');
 const bend = process.argv.some(s => s.startsWith('--bend=')) ? arg('bend', 0.05) : null;
 const cols = (process.argv.find(s => s.startsWith('--cols='))?.split('=')[1] ?? '9,17,33')
   .split(',').map(Number);
-if (![1, -1].includes(tack) || !(sheet > 0) || !Number.isInteger(iter) || iter < 1 ||
+if (![1, -1].includes(tack) || !(sheet > 0) || !(loadScale >= 0 && loadScale <= 2) ||
+    !(gravityScale >= 0 && gravityScale <= 1) || !(sheetRamp >= 0 && sheetRamp <= 30) ||
+    !Number.isInteger(iter) || iter < 1 ||
     (bend != null && !(bend >= 0 && bend <= 1)) ||
     ![30, 60, 120].includes(clothHz) ||
     cols.some(x => !Number.isInteger(x) || x < 5 || x > 65))
@@ -37,6 +46,17 @@ for (let i = 0; i < 30 * 30; i++) {
   b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D,
     -(2.2 * wrap((100 - tack * 140) * D - b.psi) - 0.9 * b.r)));
   b.step(1 / 30);
+}
+
+// После опорного хода можно изолировать одни геометрические ограничения.
+// Это не режим симулятора и не физический сценарий паруса.
+b.p.environment.g *= gravityScale;
+
+// Только диагностическая амплитуда прежней силы: полоски и лодка после этого
+// не пересчитываются. Приёмочные прогоны используют ровно 1.
+for (const d of b.rig.stripState.slice(12)) {
+  d.drive *= loadScale;
+  d.side *= loadScale;
 }
 
 const reference = b.rig.cloth;
@@ -86,7 +106,7 @@ const rowLinks = (cl, row) => {
   }
   return { ratio: arc / mat, slack, excess, min, max };
 };
-console.log(`Замороженный вход после опорных 30 с при 140°/6 м/с, шкот ${sheet} м, галс ${tack}; полоски и лодка больше не шагают`);
+console.log(`Замороженный вход после опорных 30 с при 140°/6 м/с, шкот ${sheet} м, галс ${tack}; масштаб силы ${loadScale}, тяжести ${gravityScale}; ${sheetRamp ? `шкот от проектного до ${sheet} м за ${sheetRamp} с` : 'шкот постоянен'}; полоски и лодка больше не шагают`);
 console.log(`Исходный максимальный разброс q по хорде: ${qSpread.toExponential(3)}`);
 console.log(`Опорная ткань 11×9: вход ${minShape(reference).angle.toFixed(1)}°, ` +
             `пузо строки 5 ${(100 * reference.rowShape(5).camber).toFixed(1)} % хорды; ` +
@@ -94,9 +114,13 @@ console.log(`Опорная ткань 11×9: вход ${minShape(reference).ang
 console.log(`Ткань: ${iter} проходов, ${clothHz} Гц, изгиб ${bend == null ? 'штатный' : bend}, нормали ${fixedNormals ? 'зафиксированы на первом подшаге' : 'следуют за тканью'}, площадь нагрузки ${fixedLoad ? 'зафиксирована на первом подшаге' : 'следует за тканью'}`);
 console.log('столбцов | время ткани с | мин. вход °/строка | max ход назад/вывернуто % | пузо строки 5 % | Fx/Fy ткани Н');
 const priorCuts = [];
+const clewArc = b.p.rig.gennaker.clew_arc_r;
+const designSheet = 0.5 * (b.p.rig.gennaker.sheet_min_m + b.p.rig.gennaker.sheet_max_m);
 for (const n of cols) {
+  b.p.rig.gennaker.clew_arc_r = clewArc;
+  b.o.genSheetLen = sheetRamp ? designSheet : sheet;
   const cl = new Cloth(b.rig.sails[2], 2, { rows: 11, cols: n, iter,
-    ...(bend == null ? {} : { bend }) });
+    ...(bend == null ? {} : { bend }), boardMaterial });
   if (fixedNormals) {
     const follow = cl.rowNormals.bind(cl);
     let firstNormals = null;
@@ -115,6 +139,8 @@ for (const n of cols) {
   }
   let firstPressure = null;
   for (let i = 0; i < 30 * clothHz; i++) {
+    if (sheetRamp) b.o.genSheetLen = designSheet + (sheet - designSheet) *
+      Math.min(1, i / (clothHz * sheetRamp));
     if (!cl.step(b, 1 / clothHz)) throw new Error('Шаг ткани отклонён');
     if (fixedLoad) {
       const applied = JSON.stringify(cl.pressureForce);
@@ -126,6 +152,16 @@ for (const n of cols) {
       console.log(`${n} | крой/первый шаг | ${cut.angle.toFixed(1)}/${fly.angle.toFixed(1)}° | ` +
         `${(100 * cut.maxBack).toFixed(1)}/${(100 * cut.maxFlip).toFixed(1)} % по крою; ` +
         `${(100 * fly.maxBack).toFixed(1)}/${(100 * fly.maxFlip).toFixed(1)} % в полёте`);
+      if (cornerAudit) {
+        const expected = gennakerClew(b.o, b.p.rig.gennaker);
+        expected[1] = Math.abs(expected[1]) * Math.sign(b.rigSide || -1);
+        const k = cl.clew * 3;
+        const gap = Math.hypot(expected[0] - cl.pos[k], expected[1] - cl.pos[k + 1],
+                               expected[2] - cl.pos[k + 2]);
+        console.log(`${n} | шкотовый угол: крой→дуга ${gap.toFixed(4)} м, ` +
+          `крой ${[cl.pos[k], cl.pos[k + 1], cl.pos[k + 2]].map(x => x.toFixed(3)).join('/')}, ` +
+          `дуга ${expected.map(x => x.toFixed(3)).join('/')}`);
+      }
       if (cutNesting) {
         for (const prev of priorCuts) {
           if ((n - 1) % (prev.cols - 1) !== 0) continue;
@@ -142,6 +178,7 @@ for (const n of cols) {
         }
         priorCuts.push({ cols: n, dx: cl.dx.slice(), dy: cl.dy.slice(), dz: cl.dz.slice() });
       }
+      if (holdCutClew) b.p.rig.gennaker.clew_arc_r = 0;
     }
     const time = (i + 1) / clothHz;
     if (![5, 10, 20, 30, ...(edgeAudit || cellAudit ? [0.5, 1, 2, 3] : [])].includes(time)) continue;
@@ -160,3 +197,5 @@ for (const n of cols) {
   }
   if (frozenInput() !== inputBefore) throw new Error('Замороженный вход изменился при шаге ткани');
 }
+b.p.rig.gennaker.clew_arc_r = clewArc;
+b.o.genSheetLen = sheet;

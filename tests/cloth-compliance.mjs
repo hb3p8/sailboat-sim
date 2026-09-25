@@ -7,6 +7,8 @@ const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1],
   a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const sub = (a, b) => a.map((x, i) => x - b[i]);
+const add = (a, b) => a.map((x, i) => x + b[i]);
+const scale = (a, s) => a.map(x => x * s);
 const point = (p, i) => Array.from(p.subarray(3 * i, 3 * i + 3));
 export const distance = (a, b, rest, alpha, unilateral = false) => ({
   alpha, unilateral, lambda: 0,
@@ -53,38 +55,36 @@ export const area3d = (a, b, c, restCross, alpha) => ({
       grad: [[a, gb.map((x, i) => -x - gc[i])], [b, gb], [c, gc]] };
   },
 });
-export function dihedralAngle(p, a, b, c, d) {
+function dihedralFrame(p, a, b, c, d) {
   const A = point(p, a), P = point(p, b), Q = point(p, c), D = point(p, d);
   const e = sub(Q, P), el = Math.hypot(...e);
-  const n1 = cross(sub(P, A), sub(Q, A));
-  const n2 = cross(sub(Q, D), sub(P, D));
+  const u = sub(P, A), v = sub(Q, A), w = sub(Q, D), z = sub(P, D);
+  const n1 = cross(u, v), n2 = cross(w, z);
   if (!(el > 1e-12 && Math.hypot(...n1) > 1e-12 && Math.hypot(...n2) > 1e-12))
     throw new Error('Вырожденный двугранный угол');
-  return Math.atan2(dot(e, cross(n1, n2)) / el, dot(n1, n2));
+  const k = cross(n1, n2), sine = dot(e, k) / el, cosine = dot(n1, n2);
+  return { u, v, w, z, e, el, n1, n2, k, sine, cosine,
+    angle: Math.atan2(sine, cosine) };
 }
+export const dihedralAngle = (p, a, b, c, d) => dihedralFrame(p, a, b, c, d).angle;
 export const dihedral = (a, b, c, d, restAngle, alpha) => ({
   alpha, unilateral: false, lambda: 0,
   value(p) {
-    const angle = dihedralAngle(p, a, b, c, d);
-    const edge = Math.hypot(...sub(point(p, c), point(p, b)));
-    const eps = 1e-6 * edge;
-    const grad = [];
-    // Диагностическая центральная разность; это ещё НЕ runtime-градиент.
-    for (const i of [a, b, c, d]) {
-      const g = [];
-      for (let j = 0; j < 3; j++) {
-        const k = 3 * i + j, original = p[k];
-        p[k] = original + eps;
-        const plus = dihedralAngle(p, a, b, c, d);
-        p[k] = original - eps;
-        const minus = dihedralAngle(p, a, b, c, d);
-        p[k] = original;
-        const difference = plus - minus;
-        g.push(Math.atan2(Math.sin(difference), Math.cos(difference)) / (2 * eps));
-      }
-      grad.push([i, g]);
-    }
-    const difference = angle - restAngle;
+    const f = dihedralFrame(p, a, b, c, d);
+    const denominator = f.sine * f.sine + f.cosine * f.cosine;
+    if (!(denominator > 0)) throw new Error('Вырожденный градиент двугранного угла');
+    const ds = f.cosine / denominator, dc = -f.sine / denominator;
+    const adjK = scale(f.e, ds / f.el);
+    const adjE = scale(sub(f.k, scale(f.e, f.sine / f.el)), ds / f.el);
+    const adjN1 = add(scale(f.n2, dc), cross(f.n2, adjK));
+    const adjN2 = add(scale(f.n1, dc), cross(adjK, f.n1));
+    const adjU = cross(f.v, adjN1), adjV = cross(adjN1, f.u);
+    const adjW = cross(f.z, adjN2), adjZ = cross(adjN2, f.w);
+    const grad = [[a, scale(add(adjU, adjV), -1)],
+      [b, add(sub(adjU, adjE), adjZ)],
+      [c, add(add(adjE, adjV), adjW)],
+      [d, scale(add(adjW, adjZ), -1)]];
+    const difference = f.angle - restAngle;
     return { C: Math.atan2(Math.sin(difference), Math.cos(difference)), grad };
   },
 });

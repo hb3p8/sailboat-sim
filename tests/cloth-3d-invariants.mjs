@@ -60,11 +60,28 @@ for (const [i, g] of area.grad) for (let j = 0; j < 3; j++) {
   worstAreaDerivative = Math.max(worstAreaDerivative,
     Math.abs((plus - minus) / (2 * eps) - g[j]));
 }
+let worstDihedralDerivative = 0;
+const warped = p.slice();
+warped[11] = -0.30;
+for (const state of [p, moved, warped]) {
+  const hinge = D.value(state), eps = 1e-6;
+  for (const [i, g] of hinge.grad) for (let j = 0; j < 3; j++) {
+    const q = state.slice();
+    q[3 * i + j] += eps;
+    const plus = dihedralAngle(q, 0, 1, 2, 3);
+    q[3 * i + j] -= 2 * eps;
+    const minus = dihedralAngle(q, 0, 1, 2, 3);
+    const difference = Math.atan2(Math.sin(plus - minus), Math.cos(plus - minus));
+    worstDihedralDerivative = Math.max(worstDihedralDerivative,
+      Math.abs(difference / (2 * eps) - g[j]));
+  }
+}
 console.log(`Остатки: C ${worstValue.toExponential(2)}, поворот ∇C ` +
   `${worstGradient.toExponential(2)}, сумма сил ${worstForce.toExponential(2)}, ` +
   `сумма моментов ${worstTorque.toExponential(2)}, ` +
-  `градиент площади ${worstAreaDerivative.toExponential(2)}`);
+  `градиент площади ${worstAreaDerivative.toExponential(2)}, ` +
+  `градиент изгиба ${worstDihedralDerivative.toExponential(2)}`);
 console.log(`Двугранный угол ${(180 * dihedralAngle(p, 0, 1, 2, 3) / Math.PI).toFixed(5)}°`);
 if (worstValue > 1e-10 || worstGradient > 1e-6 || worstForce > 1e-6 ||
-    worstTorque > 1e-6 || worstAreaDerivative > 1e-6)
-  throw new Error('Внутренняя связь зависит от жёсткого движения');
+    worstTorque > 1e-6 || worstAreaDerivative > 1e-6 || worstDihedralDerivative > 1e-6)
+  throw new Error('Нарушен инвариант или градиент внутренней связи');

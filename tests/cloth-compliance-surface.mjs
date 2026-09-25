@@ -8,8 +8,8 @@ const n = Number(opt('n', '5'));
 const hz = Number(opt('hz', '30'));
 const passes = Number(opt('passes', '16'));
 const seconds = Number(opt('seconds', '2'));
-if (![5, 9].includes(n) || ![30, 120].includes(hz) ||
-    ![1, 4, 16, 64].includes(passes) || ![1, 2, 3].includes(seconds))
+if (![5, 9, 17].includes(n) || ![30, 120].includes(hz) ||
+    ![1, 4, 16, 64, 256, 1024].includes(passes) || ![1, 2, 3].includes(seconds))
   throw new Error('Неверные параметры стенда 3D-поверхности');
 
 const G = 50, K = 1000, B = 1, pressure = 1;

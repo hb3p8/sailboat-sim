@@ -11,6 +11,7 @@ const arg = (key, def) => Number(process.argv.find(s => s.startsWith(`--${key}=`
 const tack = arg('tack', 1), sheet = arg('sheet', 9), iter = arg('iter', 40);
 const clothHz = arg('cloth-hz', 30);
 const fixedNormals = process.argv.includes('--fixed-normals');
+const edgeAudit = process.argv.includes('--edges');
 const bend = process.argv.some(s => s.startsWith('--bend=')) ? arg('bend', 0.05) : null;
 const cols = (process.argv.find(s => s.startsWith('--cols='))?.split('=')[1] ?? '9,17,33')
   .split(',').map(Number);
@@ -45,14 +46,28 @@ const frozenInput = () => JSON.stringify({
 });
 const inputBefore = frozenInput();
 const minShape = (cl, cut = false) => {
-  let row = 1, angle = Infinity, maxBack = 0, maxFlip = 0;
+  let row = 1, angle = Infinity, maxBack = 0, maxFlip = 0, backRow = -1, flipRow = -1;
   for (let r = 1; r + 1 < cl.rows; r++) {
     const s = cl.rowShape(r, cut);
     if (s.entry < angle) { row = r; angle = s.entry; }
-    maxBack = Math.max(maxBack, s.back);
-    maxFlip = Math.max(maxFlip, s.flip);
+    if (s.back > maxBack) { maxBack = s.back; backRow = r; }
+    if (s.flip > maxFlip) { maxFlip = s.flip; flipRow = r; }
   }
-  return { row, angle: angle / D, maxBack, maxFlip };
+  return { row, angle: angle / D, maxBack, maxFlip, backRow, flipRow };
+};
+const edgeState = (cl, col) => {
+  // 99.5 % — только диагностический признак почти расправленного ребра,
+  // не порог приёмки и не оценка силы натяжения PBD-связи.
+  let arc = 0, mat = 0, taut = 0;
+  for (let r = 0; r + 1 < cl.rows; r++) {
+    const a = cl.ix(r, col), z = cl.ix(r + 1, col), i = a * 3, j = z * 3;
+    const d = Math.hypot(cl.pos[j] - cl.pos[i], cl.pos[j + 1] - cl.pos[i + 1],
+                         cl.pos[j + 2] - cl.pos[i + 2]);
+    const m = cl.matDist(a, z);
+    arc += d; mat += m;
+    if (m > 0 && d / m >= 0.995) taut++;
+  }
+  return { ratio: arc / mat, taut };
 };
 console.log(`Замороженный вход после опорных 30 с при 140°/6 м/с, шкот ${sheet} м, галс ${tack}; полоски и лодка больше не шагают`);
 console.log(`Исходный максимальный разброс q по хорде: ${qSpread.toExponential(3)}`);
@@ -80,9 +95,15 @@ for (const n of cols) {
         `${(100 * cut.maxBack).toFixed(1)}/${(100 * cut.maxFlip).toFixed(1)} % по крою; ` +
         `${(100 * fly.maxBack).toFixed(1)}/${(100 * fly.maxFlip).toFixed(1)} % в полёте`);
     }
-    if (![5, 10, 20, 30].includes((i + 1) / clothHz)) continue;
+    const time = (i + 1) / clothHz;
+    if (![5, 10, 20, 30, ...(edgeAudit ? [0.5, 1, 2, 3] : [])].includes(time)) continue;
     const s = minShape(cl), load = cl.load || {};
-    console.log(`${n} | ${((i + 1) / clothHz).toFixed(0)} | ${s.angle.toFixed(1)}/${s.row} | ${(100 * s.maxBack).toFixed(1)}/${(100 * s.maxFlip).toFixed(1)} | ${(100 * cl.rowShape(5).camber).toFixed(1)} | ${(load.fx || 0).toFixed(1)}/${(load.fy || 0).toFixed(1)}`);
+    let line = `${n} | ${time.toFixed(time < 5 ? 1 : 0)} | ${s.angle.toFixed(1)}/${s.row} | ${(100 * s.maxBack).toFixed(1)}/${(100 * s.maxFlip).toFixed(1)} | ${(100 * cl.rowShape(5).camber).toFixed(1)} | ${(load.fx || 0).toFixed(1)}/${(load.fy || 0).toFixed(1)}`;
+    if (edgeAudit) {
+      const luff = edgeState(cl, 0), leech = edgeState(cl, cl.cols - 1);
+      line += ` | кромки дуга/крой ${(100 * luff.ratio).toFixed(1)}/${(100 * leech.ratio).toFixed(1)} %; натянуто ${luff.taut}/${leech.taut} из ${cl.rows - 1}; ход назад стр. ${s.backRow}`;
+    }
+    console.log(line);
   }
   if (frozenInput() !== inputBefore) throw new Error('Замороженный вход изменился при шаге ткани');
 }

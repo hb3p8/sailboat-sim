@@ -417,6 +417,20 @@
 дугу, нельзя: надо обеспечить физически определённое натяжение
 шкаторин и проверяемую сеточно-независимую форму.
 
+Доводка числа проходов на **той же** сетке 11×33 не устранила отказ:
+
+| Галс | Проходов 40 / 80 / 160: тяга, Н | Проходов 40 / 80 / 160: вход min, ° | Проходов 40 / 80 / 160: скачок, % |
+|---|---:|---:|---:|
+| + | 257.2 / 303.3 / 310.5 | −7.5 / +8.8 / +31.4 | 4.8 / 4.8 / **5.0** |
+| − | 242.2 / 273.7 / 284.0 | +6.8 / +22.2 / +3.5 | **60.6 / 12.2 / 13.2** |
+
+В последней клетке положительного галса на 160 проходах вывод округлён
+до 5.0 %, но точное сравнение с прежним пределом даёт `NO-GO`.
+На зеркальном галсе уже 80 проходов переводят строку минимального входа
+с 1-й на 9-ю, 160 возвращают на 1-ю. Средняя сила и форма не выходят
+на один ответ по итерациям; принимать свободный угол на основании одного
+числа проходов нельзя.
+
 ### Местное давление на расправленной ветви: тоже NO-GO
 
 Последний контроль возвращает экспериментальный профиль на 32 панелях,
@@ -513,6 +527,10 @@ node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=-1 --baseline --
 node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=1 --baseline --free-clew --cols=9,17,33
 node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=-1 --baseline --free-clew --cols=9,17,33
 node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=1 --baseline --free-clew --sheet-ramp=10 --cols=33
+node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=1 --baseline --free-clew --cols=33 --iter=80
+node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=1 --baseline --free-clew --cols=33 --iter=160
+node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=-1 --baseline --free-clew --cols=33 --iter=80
+node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=-1 --baseline --free-clew --cols=33 --iter=160
 node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=1 --sheet-ramp=10 --cols=9,17,33
 node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=-1 --sheet-ramp=10 --cols=9,17,33 --gate
 node tests/gennaker-pressure-audit.mjs --one-start --local-pressure --panels=16

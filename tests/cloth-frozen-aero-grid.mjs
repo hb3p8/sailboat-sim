@@ -10,8 +10,10 @@ const D = Math.PI / 180;
 const arg = (key, def) => Number(process.argv.find(s => s.startsWith(`--${key}=`))?.split('=')[1] ?? def);
 const tack = arg('tack', 1), sheet = arg('sheet', 9), iter = arg('iter', 40);
 const clothHz = arg('cloth-hz', 30);
-const fixedNormals = process.argv.includes('--fixed-normals');
+const fixedLoad = process.argv.includes('--fixed-load');
+const fixedNormals = fixedLoad || process.argv.includes('--fixed-normals');
 const edgeAudit = process.argv.includes('--edges');
+const cellAudit = process.argv.includes('--cells');
 const bend = process.argv.some(s => s.startsWith('--bend=')) ? arg('bend', 0.05) : null;
 const cols = (process.argv.find(s => s.startsWith('--cols='))?.split('=')[1] ?? '9,17,33')
   .split(',').map(Number);
@@ -69,12 +71,26 @@ const edgeState = (cl, col) => {
   }
   return { ratio: arc / mat, taut };
 };
+const rowLinks = (cl, row) => {
+  let arc = 0, mat = 0, slack = 0, excess = 0, min = Infinity, max = 0;
+  for (let c = 0; c + 1 < cl.cols; c++) {
+    const a = cl.ix(row, c), z = cl.ix(row, c + 1), i = a * 3, j = z * 3;
+    const d = Math.hypot(cl.pos[j] - cl.pos[i], cl.pos[j + 1] - cl.pos[i + 1],
+                         cl.pos[j + 2] - cl.pos[i + 2]);
+    const m = cl.matDist(a, z), ratio = d / m;
+    arc += d; mat += m;
+    if (ratio < 0.995) slack++;
+    if (ratio > 1.01) excess++;
+    min = Math.min(min, ratio); max = Math.max(max, ratio);
+  }
+  return { ratio: arc / mat, slack, excess, min, max };
+};
 console.log(`Замороженный вход после опорных 30 с при 140°/6 м/с, шкот ${sheet} м, галс ${tack}; полоски и лодка больше не шагают`);
 console.log(`Исходный максимальный разброс q по хорде: ${qSpread.toExponential(3)}`);
 console.log(`Опорная ткань 11×9: вход ${minShape(reference).angle.toFixed(1)}°, ` +
             `пузо строки 5 ${(100 * reference.rowShape(5).camber).toFixed(1)} % хорды; ` +
             `тяга ${b.rig.stripState.slice(12).reduce((s, d) => s + d.drive, 0).toFixed(1)} Н`);
-console.log(`Ткань: ${iter} проходов, ${clothHz} Гц, изгиб ${bend == null ? 'штатный' : bend}, нормали ${fixedNormals ? 'зафиксированы на первом подшаге' : 'следуют за тканью'}`);
+console.log(`Ткань: ${iter} проходов, ${clothHz} Гц, изгиб ${bend == null ? 'штатный' : bend}, нормали ${fixedNormals ? 'зафиксированы на первом подшаге' : 'следуют за тканью'}, площадь нагрузки ${fixedLoad ? 'зафиксирована на первом подшаге' : 'следует за тканью'}`);
 console.log('столбцов | время ткани с | мин. вход °/строка | max ход назад/вывернуто % | пузо строки 5 % | Fx/Fy ткани Н');
 for (const n of cols) {
   const cl = new Cloth(b.rig.sails[2], 2, { rows: 11, cols: n, iter,
@@ -87,8 +103,22 @@ for (const n of cols) {
       else cl.nrm.set(firstNormals);
     };
   }
+  if (fixedLoad) {
+    const currentArea = cl.flyingAreas.bind(cl);
+    let firstArea = null;
+    cl.flyingAreas = () => {
+      if (!firstArea) firstArea = currentArea().slice();
+      return firstArea;
+    };
+  }
+  let firstPressure = null;
   for (let i = 0; i < 30 * clothHz; i++) {
     if (!cl.step(b, 1 / clothHz)) throw new Error('Шаг ткани отклонён');
+    if (fixedLoad) {
+      const applied = JSON.stringify(cl.pressureForce);
+      if (firstPressure == null) firstPressure = applied;
+      else if (applied !== firstPressure) throw new Error('Зафиксированная понодальная нагрузка изменилась');
+    }
     if (i === 0) {
       const cut = minShape(cl, true), fly = minShape(cl);
       console.log(`${n} | крой/первый шаг | ${cut.angle.toFixed(1)}/${fly.angle.toFixed(1)}° | ` +
@@ -96,12 +126,17 @@ for (const n of cols) {
         `${(100 * fly.maxBack).toFixed(1)}/${(100 * fly.maxFlip).toFixed(1)} % в полёте`);
     }
     const time = (i + 1) / clothHz;
-    if (![5, 10, 20, 30, ...(edgeAudit ? [0.5, 1, 2, 3] : [])].includes(time)) continue;
+    if (![5, 10, 20, 30, ...(edgeAudit || cellAudit ? [0.5, 1, 2, 3] : [])].includes(time)) continue;
     const s = minShape(cl), load = cl.load || {};
     let line = `${n} | ${time.toFixed(time < 5 ? 1 : 0)} | ${s.angle.toFixed(1)}/${s.row} | ${(100 * s.maxBack).toFixed(1)}/${(100 * s.maxFlip).toFixed(1)} | ${(100 * cl.rowShape(5).camber).toFixed(1)} | ${(load.fx || 0).toFixed(1)}/${(load.fy || 0).toFixed(1)}`;
     if (edgeAudit) {
       const luff = edgeState(cl, 0), leech = edgeState(cl, cl.cols - 1);
       line += ` | кромки дуга/крой ${(100 * luff.ratio).toFixed(1)}/${(100 * leech.ratio).toFixed(1)} %; натянуто ${luff.taut}/${leech.taut} из ${cl.rows - 1}; ход назад стр. ${s.backRow}`;
+    }
+    if (cellAudit) {
+      const r = s.backRow < 0 ? 5 : s.backRow;
+      const links = rowLinks(cl, r);
+      line += ` | строка ${r}: дуга/крой ${(100 * links.ratio).toFixed(1)} %, слабых ${links.slack}, растянутых >1 % ${links.excess} из ${cl.cols - 1}, min/max ${(100 * links.min).toFixed(1)}/${(100 * links.max).toFixed(1)} %`;
     }
     console.log(line);
   }

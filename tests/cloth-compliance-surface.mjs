@@ -8,8 +8,16 @@ const n = Number(opt('n', '5'));
 const hz = Number(opt('hz', '30'));
 const passes = Number(opt('passes', '16'));
 const seconds = Number(opt('seconds', '2'));
+const solver = opt('solver', 'dynamic');
+const staticStart = opt('start', 'rest');
+const maxInner = Number(opt('inner', '400'));
+const maxOuter = Number(opt('outer', '20'));
 if (![5, 9, 17].includes(n) || ![30, 120].includes(hz) ||
-    ![1, 4, 16, 64, 256, 1024].includes(passes) || ![1, 2, 3].includes(seconds))
+    ![1, 4, 16, 64, 256, 1024].includes(passes) || ![1, 2, 3].includes(seconds) ||
+    !['dynamic', 'static'].includes(solver) ||
+    !['rest', 'raised', 'lowered'].includes(staticStart) ||
+    ![400, 1600].includes(maxInner) ||
+    ![20, 40].includes(maxOuter))
   throw new Error('Неверные параметры стенда 3D-поверхности');
 
 const G = 50, K = 1000, B = 1, pressure = 1;
@@ -117,10 +125,11 @@ const measure = () => {
     meanDz: sumDz / moving, minDz, maxDz, work,
     rmsResidual: Math.sqrt(residualSquared / moving), maxResidual };
 };
-const show = (t, m) => console.log(`${t.toFixed(3)} с: высота середины ${m.z.toFixed(6)} м, ` +
-  `Δz ${(1000 * (m.z - initial[3 * center + 2])).toFixed(3)} мм, ` +
-  `внутренние Δz ср./мин./макс. ${(1000 * m.meanDz).toFixed(3)}/` +
-  `${(1000 * m.minDz).toFixed(3)}/${(1000 * m.maxDz).toFixed(3)} мм, ` +
+const show = (t, m) => console.log(`${typeof t === 'number' ? `${t.toFixed(3)} с` : t}: ` +
+  `высота середины ${m.z.toFixed(9)} м, ` +
+  `Δz ${(1000 * (m.z - initial[3 * center + 2])).toFixed(6)} мм, ` +
+  `внутренние Δz ср./мин./макс. ${(1000 * m.meanDz).toFixed(6)}/` +
+  `${(1000 * m.minDz).toFixed(6)}/${(1000 * m.maxDz).toFixed(6)} мм, ` +
   `работа ${m.work.toExponential(3)} Дж, ` +
   `ребро +${(1000 * m.stretch).toFixed(5)} мм, ` +
   `мин. площадь ${m.minArea.toFixed(5)}, направление ${m.minFacing.toFixed(5)}, ` +
@@ -131,30 +140,204 @@ let minFacingEver = Infinity, maxStretchEver = 0;
 const start = performance.now();
 console.log(`3D-поверхность ${n}×${n}: ${triangles.length} треугольников, ` +
   `${hard.length}/${soft.length}/${areas.length}/${hinges.length} ` +
-  `жёстких/сдвиговых/площадных/изгибных связей, ${hz} Гц, ` +
-  `${passes} проходов, ${seconds} с; общая нагрузка ` +
+  `жёстких/сдвиговых/площадных/изгибных связей, ` +
+  (solver === 'dynamic' ? `${hz} Гц, ${passes} проходов, ${seconds} с` :
+    'статический минимум') + '; общая нагрузка ' +
   `${force.filter((_, i) => i % 3 === 2).reduce((a, z) => a + z, 0).toFixed(5)} Н`);
-show(0, measure());
-for (let k = 1; k <= steps; k++) {
-  const old = p.slice();
-  for (let i = 0; i < count; i++) if (w[i])
-    for (let j = 0; j < 3; j++) {
-      const q = 3 * i + j;
-      p[q] += decay * (p[q] - prev[q]) + h * h * w[i] * force[q];
+const isOriented = state => triangles.every(([a, b, c], t) => {
+  const A = Array.from(state.subarray(3 * a, 3 * a + 3));
+  const B = Array.from(state.subarray(3 * b, 3 * b + 3));
+  const C = Array.from(state.subarray(3 * c, 3 * c + 3));
+  return dot(cross(sub(B, A), sub(C, A)), referenceNormals[t]) > 0;
+});
+const fullDot = (a, b) => a.reduce((sum, x, i) => sum + x * b[i], 0);
+const physicalEnergy = state => {
+  if (!isOriented(state)) return { energy: Infinity, gradient: null };
+  const gradient = new Float64Array(state.length);
+  let material = 0, work = 0;
+  for (let i = 0; i < count; i++) if (w[i]) for (let j = 0; j < 3; j++) {
+    const q = 3 * i + j;
+    work += force[q] * (state[q] - initial[q]);
+    gradient[q] -= force[q];
+  }
+  for (const c of [...soft, ...areas, ...hinges]) {
+    const { C, grad } = c.value(state), load = C / c.alpha;
+    material += C * load / 2;
+    for (const [i, g] of grad) if (w[i]) for (let j = 0; j < 3; j++)
+      gradient[3 * i + j] += load * g[j];
+  }
+  return { energy: material - work, material, work, gradient };
+};
+const staticEnergy = (state, multipliers, rho) => {
+  const physical = physicalEnergy(state);
+  if (!physical.gradient) return physical;
+  const gradient = physical.gradient;
+  let energy = physical.energy;
+  for (let k = 0; k < hard.length; k++) {
+    const { C, grad } = hard[k].value(state), shifted = multipliers[k] + rho * C;
+    energy += (Math.max(0, shifted) ** 2 - multipliers[k] ** 2) / (2 * rho);
+    if (shifted > 0) for (const [i, g] of grad) if (w[i])
+      for (let j = 0; j < 3; j++) gradient[3 * i + j] += shifted * g[j];
+  }
+  return { energy, gradient };
+};
+const minimize = (state, multipliers, rho) => {
+  let current = staticEnergy(state, multipliers, rho), iterations = 0;
+  const history = [];
+  for (; iterations < maxInner; iterations++) {
+    const g = current.gradient;
+    if (!g || Math.sqrt(fullDot(g, g) / ((n - 2) ** 2)) < 1e-7) break;
+    let direction = Float64Array.from(g);
+    const coefficients = [];
+    for (let k = history.length - 1; k >= 0; k--) {
+      const item = history[k], coefficient = item.inverse * fullDot(item.s, direction);
+      coefficients[k] = coefficient;
+      for (let j = 0; j < direction.length; j++) direction[j] -= coefficient * item.y[j];
     }
-  for (const c of constraints) c.lambda = 0;
-  for (let it = 0; it < passes; it++)
-    for (const c of constraints) solveConstraint(p, w, c, h);
-  prev.set(old);
-  const result = measure();
-  if (![result.z, result.stretch, result.minArea, result.minFacing,
-        result.meanDz, result.work, result.rmsResidual, result.maxResidual].every(Number.isFinite))
-    throw new Error(`Нечисловое состояние 3D-поверхности на шаге ${k}`);
-  minFacingEver = Math.min(minFacingEver, result.minFacing);
-  maxStretchEver = Math.max(maxStretchEver, result.stretch);
-  if (k === Math.round(steps / 2) || k === steps) show(k * h, result);
+    if (history.length) {
+      const last = history.at(-1);
+      const gamma = Math.max(1e-8, Math.min(1e6,
+        fullDot(last.s, last.y) / fullDot(last.y, last.y)));
+      for (let j = 0; j < direction.length; j++) direction[j] *= gamma;
+    }
+    for (let k = 0; k < history.length; k++) {
+      const item = history[k];
+      const coefficient = item.inverse * fullDot(item.y, direction);
+      for (let j = 0; j < direction.length; j++)
+        direction[j] += item.s[j] * (coefficients[k] - coefficient);
+    }
+    for (let j = 0; j < direction.length; j++) direction[j] = -direction[j];
+    let slope = fullDot(g, direction);
+    if (!(slope < -1e-20)) {
+      direction = Float64Array.from(g, x => -x);
+      slope = -fullDot(g, g);
+    }
+    let next, candidate, step = 1;
+    for (let trial = 0; trial < 50; trial++) {
+      candidate = Float64Array.from(state, (x, j) => x + step * direction[j]);
+      try { next = staticEnergy(candidate, multipliers, rho); }
+      catch { next = { energy: Infinity, gradient: null }; }
+      if (next.energy <= current.energy + 1e-4 * step * slope) break;
+      step *= 0.5;
+    }
+    if (!(next.energy <= current.energy + 1e-4 * step * slope)) break;
+    const s = Float64Array.from(state, (x, j) => candidate[j] - x);
+    const y = Float64Array.from(g, (x, j) => next.gradient[j] - x);
+    const curvature = fullDot(s, y);
+    if (curvature > 1e-18) {
+      history.push({ s, y, inverse: 1 / curvature });
+      if (history.length > 10) history.shift();
+    }
+    state.set(candidate);
+    current = next;
+  }
+  return { iterations, energy: current.energy };
+};
+const staticAudit = multipliers => {
+  const gradient = physicalEnergy(p).gradient;
+  let maxExtension = 0, complementarity = 0;
+  for (let k = 0; k < hard.length; k++) {
+    const C = hard[k].value(p).C;
+    maxExtension = Math.max(maxExtension, C);
+    complementarity = Math.max(complementarity, Math.abs(multipliers[k] * C));
+    for (const [i, g] of hard[k].value(p).grad) if (w[i])
+      for (let j = 0; j < 3; j++) gradient[3 * i + j] += multipliers[k] * g[j];
+  }
+  return { maxExtension, complementarity,
+    rmsForce: Math.sqrt(fullDot(gradient, gradient) / ((n - 2) ** 2)) };
+};
+const auditStaticGradient = () => {
+  const state = initial.slice();
+  state[3 * center] += 0.002;
+  state[3 * center + 2] += 0.004;
+  state[3 * index(1, 1) + 1] -= 0.003;
+  state[3 * index(n - 2, n - 2)] -= 0.0015;
+  state[3 * index(n - 2, n - 2) + 2] += 0.0025;
+  const multipliers = new Float64Array(hard.length), rho = 1e4;
+  const analytical = staticEnergy(state, multipliers, rho).gradient;
+  let worst = 0, worstAt = '';
+  for (const i of new Set([center, index(1, 1), index(n - 2, n - 2)]))
+    for (let j = 0; j < 3; j++) {
+      const q = 3 * i + j, eps = 1e-7;
+      state[q] += eps;
+      const plus = staticEnergy(state, multipliers, rho).energy;
+      state[q] -= 2 * eps;
+      const minus = staticEnergy(state, multipliers, rho).energy;
+      state[q] += eps;
+      const numerical = (plus - minus) / (2 * eps);
+      if (Math.abs(numerical - analytical[q]) > worst) {
+        worst = Math.abs(numerical - analytical[q]);
+        worstAt = `узел ${i}, ось ${j}, аналитика ${analytical[q].toExponential(6)} Н, ` +
+          `разность ${numerical.toExponential(6)} Н`;
+      }
+    }
+  console.log(`Градиент полной статической цели против центральной разности: ` +
+    `${worst.toExponential(3)} Н (допуск 1e-6 Н); ${worstAt}`);
+  if (!(worst <= 1e-6)) throw new Error('Неверный градиент статической цели');
+};
+if (solver === 'static') {
+  auditStaticGradient();
+  if (staticStart !== 'rest') {
+    const sign = staticStart === 'raised' ? 1 : -1;
+    for (let r = 1; r < n - 1; r++) for (let c = 1; c < n - 1; c++)
+      p[3 * index(r, c) + 2] += sign * 0.002 *
+        Math.sin(Math.PI * r / (n - 1)) * Math.sin(Math.PI * c / (n - 1));
+  }
+  const startLabel = { rest: 'опорная', raised: 'выше на 2 мм',
+    lowered: 'ниже на 2 мм' }[staticStart];
+  console.log(`Начальная форма оптимизатора: ${startLabel}`);
+  const multipliers = new Float64Array(hard.length);
+  let rho = 1e4, converged = false;
+  console.log('Статические допуски до прогона: ребро 1e-8 м, ' +
+    `RMS силы 1e-6 Н, дополнительность 1e-8 Дж; ` +
+    `лимиты ${maxOuter}×${maxInner}`);
+  for (let outer = 1; outer <= maxOuter; outer++) {
+    const inner = minimize(p, multipliers, rho);
+    for (let k = 0; k < hard.length; k++)
+      multipliers[k] = Math.max(0, multipliers[k] + rho * hard[k].value(p).C);
+    const audit = staticAudit(multipliers);
+    console.log(`Внешний шаг ${outer}: внутренние ${inner.iterations}, ` +
+      `дополненная энергия ${inner.energy.toExponential(4)} Дж, ` +
+      `ρ ${rho.toExponential(1)} Н/м, ` +
+      `ребро ${audit.maxExtension.toExponential(3)} м, ` +
+      `RMS силы ${audit.rmsForce.toExponential(3)} Н, ` +
+      `дополнительность ${audit.complementarity.toExponential(3)} Дж`);
+    if (audit.maxExtension <= 1e-8 && audit.rmsForce <= 1e-6 &&
+        audit.complementarity <= 1e-8) { converged = true; break; }
+    if (outer % 4 === 0) rho *= 4;
+  }
+  for (let k = 0; k < hard.length; k++) hard[k].lambda = -multipliers[k] * h * h;
+  show('Статический результат', measure());
+  const energy = physicalEnergy(p);
+  console.log(`Физическая энергия: материал ${energy.material.toExponential(6)} Дж, ` +
+    `работа нагрузки ${energy.work.toExponential(6)} Дж, ` +
+    `разность ${energy.energy.toExponential(6)} Дж`);
+  console.log(`Статический итог: ${converged ? 'доведён' : 'НЕ доведён'}, ` +
+    `время ${((performance.now() - start) / 1000).toFixed(3)} с`);
+  if (!converged) process.exitCode = 1;
+} else {
+  show(0, measure());
+  for (let k = 1; k <= steps; k++) {
+    const old = p.slice();
+    for (let i = 0; i < count; i++) if (w[i])
+      for (let j = 0; j < 3; j++) {
+        const q = 3 * i + j;
+        p[q] += decay * (p[q] - prev[q]) + h * h * w[i] * force[q];
+      }
+    for (const c of constraints) c.lambda = 0;
+    for (let it = 0; it < passes; it++)
+      for (const c of constraints) solveConstraint(p, w, c, h);
+    prev.set(old);
+    const result = measure();
+    if (![result.z, result.stretch, result.minArea, result.minFacing,
+          result.meanDz, result.work, result.rmsResidual, result.maxResidual].every(Number.isFinite))
+      throw new Error(`Нечисловое состояние 3D-поверхности на шаге ${k}`);
+    minFacingEver = Math.min(minFacingEver, result.minFacing);
+    maxStretchEver = Math.max(maxStretchEver, result.stretch);
+    if (k === Math.round(steps / 2) || k === steps) show(k * h, result);
+  }
+  console.log(`За всё движение: мин. направление ${minFacingEver.toFixed(5)}, ` +
+    `макс. растяжение ${(1000 * maxStretchEver).toFixed(5)} мм, ` +
+    `время ${((performance.now() - start) / 1000).toFixed(3)} с`);
+  if (minFacingEver <= 0) process.exitCode = 1;
 }
-console.log(`За всё движение: мин. направление ${minFacingEver.toFixed(5)}, ` +
-  `макс. растяжение ${(1000 * maxStretchEver).toFixed(5)} мм, ` +
-  `время ${((performance.now() - start) / 1000).toFixed(3)} с`);
-if (minFacingEver <= 0) process.exitCode = 1;

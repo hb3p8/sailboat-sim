@@ -13,6 +13,7 @@ const sheet = arg('sheet', 9), tack = arg('tack', 1), iter = arg('iter', 40);
 const panels = arg('panels', 32), hz = arg('hz', 30);
 const bend = process.argv.some(s => s.startsWith('--bend=')) ? arg('bend', 0.05) : null;
 const baseline = process.argv.includes('--baseline');
+const boardMaterial = process.argv.includes('--board-material');
 const cols = (process.argv.find(s => s.startsWith('--cols='))?.split('=')[1] ?? '9,17,33')
   .split(',').map(Number);
 if (![1, -1].includes(tack) || ![30, 60, 120].includes(hz) ||
@@ -45,6 +46,7 @@ function run(ncols) {
   b.o.localPressure = baseline ? false : { panels };
   b.o.cloth = { rows: 11, cols: ncols, iter };
   if (bend != null) b.o.cloth.bend = bend;
+  if (boardMaterial) b.o.cloth.boardMaterial = true;
   b.o.crewHike = -tack; b.o.crewMass = 219.9;
   b.wind.o.gust = 0; b.wind.o.shift = 0;
   b.setGennaker(true);
@@ -72,6 +74,19 @@ function run(ncols) {
     for (let r = 1; r + 1 < cl.rows; r++) minEntry = Math.min(minEntry, cl.rowShape(r).entry / D);
   }
   const cl = b.rig.cloth;
+  const boardFirst = cl.ix(cl.rows - 1, 0), boardBeforeLast = cl.ix(cl.rows - 1, cl.cols - 2);
+  const legacyBoardT = (cl.px[boardFirst] - cl.px[boardBeforeLast]) / cl.rowW[cl.rows - 1];
+  if (boardMaterial) {
+    const aft = cl.ix(cl.rows - 1, cl.cols - 1);
+    for (let c = 1; c + 1 < cl.cols; c++) {
+      const i = cl.ix(cl.rows - 1, c), t = c / (cl.cols - 1);
+      for (let k = 0; k < 3; k++) {
+        const expect = cl.pos[boardFirst * 3 + k] * (1 - t) + cl.pos[aft * 3 + k] * t;
+        if (Math.abs(cl.pos[i * 3 + k] - expect) > 1e-9)
+          throw new Error(`Дощечка: узел ${c}, компонента ${k} вне материального отрезка`);
+      }
+    }
+  }
   const mid = b.rig.stripCalc[12 + 3];
   cl.rowNormals(mid.d1, mid.d2);
   const area = cl.flyingAreas();
@@ -95,17 +110,17 @@ function run(ncols) {
     entry: minEntry, row, rowEntry: shape.entry / D,
     chord: shape.chord, camber: shape.camber, back: shape.back,
     flip: shape.flip, kink: shape.kink / D,
-    stretch: wholeRowStretch(cl, false), board: wholeRowStretch(cl, true),
+    stretch: wholeRowStretch(cl, false), board: wholeRowStretch(cl, true), legacyBoardT,
     fn, first: first / fn, cp,
     jump: jump / ref, wall: (performance.now() - start) / 1000 };
 }
 
-console.log(`TWA 140°, TWS 6 м/с, шкот ${sheet} м, галс ${tack}; ткань 11×N, ${iter} проходов, ${hz} Гц, излом ${bend == null ? 'штатный' : bend}, давление ${baseline ? 'штатное' : `локальное/${panels}`}; окно 25…30 с`);
+console.log(`TWA 140°, TWS 6 м/с, шкот ${sheet} м, галс ${tack}; ткань 11×N, ${iter} проходов, ${hz} Гц, излом ${bend == null ? 'штатный' : bend}, дощечка ${boardMaterial ? 'по крою' : 'штатная'}, давление ${baseline ? 'штатное' : `локальное/${panels}`}; окно 25…30 с`);
 console.log('столбцов | тяга Н | вход min/строка ° | хорда м/пузо c | ход назад/вывернуто % | залом ° | растяжение % | первые 10 %/Fn | cp/c | скачок % | с/прогон');
 let gateFailed = false;
 for (const n of cols) {
   const x = run(n);
-  console.log(`${n} | ${x.drive.toFixed(1)} | ${x.entry.toFixed(1)}/${x.rowEntry.toFixed(1)} (${x.row}) | ${x.chord.toFixed(3)}/${x.camber.toFixed(3)} | ${(100 * x.back).toFixed(1)}/${(100 * x.flip).toFixed(1)} | ${x.kink.toFixed(1)} | ${(100 * x.stretch.excess).toFixed(2)} (стр. ${x.stretch.row}; с дощечкой ${(100 * x.board.excess).toFixed(2)} %) | ${(100 * x.first).toFixed(1)} %/${x.fn.toFixed(1)} Н | ${x.cp.toFixed(3)} | ${(100 * x.jump).toFixed(1)} | ${x.wall.toFixed(1)}`);
+  console.log(`${n} | ${x.drive.toFixed(1)} | ${x.entry.toFixed(1)}/${x.rowEntry.toFixed(1)} (${x.row}) | ${x.chord.toFixed(3)}/${x.camber.toFixed(3)} | ${(100 * x.back).toFixed(1)}/${(100 * x.flip).toFixed(1)} | ${x.kink.toFixed(1)} | ${(100 * x.stretch.excess).toFixed(2)} (стр. ${x.stretch.row}; с дощечкой ${(100 * x.board.excess).toFixed(2)} %, старое t ${x.legacyBoardT.toFixed(3)}) | ${(100 * x.first).toFixed(1)} %/${x.fn.toFixed(1)} Н | ${x.cp.toFixed(3)} | ${(100 * x.jump).toFixed(1)} | ${x.wall.toFixed(1)}`);
   if (x.jump > 0.05) { gateFailed = true; console.log('  NO-GO: скачок общей тяги > 5 %'); }
 }
 if (process.argv.includes('--gate') && gateFailed) process.exitCode = 1;

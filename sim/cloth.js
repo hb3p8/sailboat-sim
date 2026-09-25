@@ -509,6 +509,7 @@ export class Cloth {
     this.iter = opts && opts.iter ? opts.iter : ITER;
     this.freeClew = opts && opts.freeClew != null ? opts.freeClew : FREE_CLEW;
     this.cut3d = opts && opts.cut3d != null ? opts.cut3d : CUT3D;
+    this.boardMaterial = opts && opts.boardMaterial === true;
     this.designSide = -1;
     this.rigRef = null;
     this.nRows = this.rows;
@@ -1451,7 +1452,13 @@ export class Cloth {
     const w = this.rowW[R];
     if (!(w > 1e-9)) return;
     for (let c = 1; c + 1 < this.cols; c++) {
-      const t = (this.px[this.ix(R, 0)] - this.px[this.ix(R, c)]) / w;
+      // Диагностический вариант: крой дощечки задаёт равные материальные
+      // доли. `px` относится к плоской проекции и на 33 столбцах даёт
+      // t=1.021 у предпоследнего узла, за задним концом дощечки. Но прямая
+      // замена без перенастройки всей связанной задачи дала 13 % размах тяги
+      // в штатной клетке, поэтому пока только явное включение в стенде.
+      const t = this.boardMaterial ? c / (this.cols - 1)
+        : (this.px[this.ix(R, 0)] - this.px[this.ix(R, c)]) / w;
       const k = this.ix(R, c) * 3;
       p[k] = p[a] + (p[z] - p[a]) * t;
       p[k + 1] = p[a + 1] + (p[z + 1] - p[a + 1]) * t;

@@ -25,6 +25,9 @@ const dynamicHz = Number(opt('dynamic-hz', '60'));
 const dynamicLoad = opt('dynamic-load', 'clew');
 const coupledAero = ['recomputed-pressure', 'full-cloth-load', 'boat-coupled'].includes(dynamicLoad);
 const boatCoupled = dynamicLoad === 'boat-coupled';
+const sheetRamp = Number(opt('sheet-ramp', '0'));
+const sheetRampStart = Number(opt('sheet-ramp-start', '0.5'));
+const sheetRampDuration = Number(opt('sheet-ramp-duration', '1'));
 const dampHz = Number(opt('damp-hz', '6'));
 const sequence = Number(opt('sequence', '0'));
 const boardMaterial = process.argv.includes('--board-material');
@@ -48,6 +51,10 @@ if (!Number.isInteger(cols) || cols < 5 || cols > 65 ||
     !(clewForce >= 0 && clewForce <= 1000) || !(forceDt > 0 && forceDt <= 1) ||
     (clewForce > 0 && (!freeClew || perturb === 0)) ||
     !(dynamicSeconds >= 0 && dynamicSeconds <= 5) ||
+    !(Math.abs(sheetRamp) <= 1) || !(sheetRampStart >= 0) ||
+    !(sheetRampDuration > 0) ||
+    (sheetRamp !== 0 && (!boatCoupled ||
+      sheetRampStart + sheetRampDuration > dynamicSeconds)) ||
     ![30, 60, 120].includes(dynamicHz) ||
     !['clew', 'frozen-pressure', 'recomputed-pressure', 'full-cloth-load',
       'boat-coupled'].includes(dynamicLoad) ||
@@ -67,8 +74,10 @@ b.o.freeWake = true; b.o.wakeForces = true;
 b.wind.o.gust = 0; b.wind.o.shift = 0;
 b.setGennaker(true);
 const gen = b.p.rig.gennaker;
-const sheetLen = Number(opt('sheet-len', String(0.5 * (gen.sheet_min_m + gen.sheet_max_m))));
-if (!(sheetLen >= gen.sheet_min_m && sheetLen <= gen.sheet_max_m))
+const initialSheetLen = Number(opt('sheet-len', String(0.5 * (gen.sheet_min_m + gen.sheet_max_m))));
+let sheetLen = initialSheetLen;
+if (!(sheetLen >= gen.sheet_min_m && sheetLen <= gen.sheet_max_m) ||
+    !(sheetLen + sheetRamp >= gen.sheet_min_m && sheetLen + sheetRamp <= gen.sheet_max_m))
   throw new Error('Длина шкота вне штатного диапазона');
 b.o.genSheetLen = sheetLen;
 if (dynamicSeconds && dynamicLoad !== 'clew') {
@@ -859,8 +868,18 @@ if (dynamicSeconds) {
   if (boatCoupled)
     console.log(`Лодка в начале: ход ${boatStart[0].toFixed(4)} м/с, ` +
       `курс ${boatStart[1].toFixed(3)}°, крен ${boatStart[2].toFixed(3)}°`);
-  console.log('время с | реакция шкота Н | зазор шкота мм | узел середины строки 5: x/y/z м | итераций');
+  if (sheetRamp)
+    console.log(`Команда шкота: ${sheetRamp > 0 ? 'травить' : 'добирать'} ` +
+      `${Math.abs(sheetRamp).toFixed(3)} м за ${sheetRampDuration.toFixed(3)} с, ` +
+      `начиная с ${sheetRampStart.toFixed(3)} с`);
+  console.log('время с | длина шкота м | реакция Н | зазор мм | узел середины строки 5: x/y/z м | итераций');
   for (let i = 1; i <= steps; i++) {
+    if (sheetRamp) {
+      const phase = Math.max(0, Math.min(1,
+        (i * h - sheetRampStart) / sheetRampDuration));
+      sheetLen = initialSheetLen + sheetRamp * phase;
+      b.o.genSheetLen = sheetLen;
+    }
     const input = p.slice();
     for (let a = 0; a < N; a++) {
       if (fixed[a]) continue;
@@ -899,7 +918,7 @@ if (dynamicSeconds) {
     if (i > steps / 2) { sum += reaction; sum2 += reaction * reaction; nWindow++; }
     if (i === Math.round(steps / 2) || i === steps) {
       const m = 3 * cl.ix(5, (cols - 1) / 2);
-      console.log(`${(i * h).toFixed(3)} | ${reaction.toFixed(3)} | ` +
+      console.log(`${(i * h).toFixed(3)} | ${sheetLen.toFixed(3)} | ${reaction.toFixed(3)} | ` +
         `${(1000 * (sheetLen - result.sheetSpan)).toFixed(4)} | ` +
         `${p[m].toFixed(6)}/${p[m + 1].toFixed(6)}/${p[m + 2].toFixed(6)} | ${result.used}`);
     }

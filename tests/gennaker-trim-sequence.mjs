@@ -19,6 +19,7 @@ const eased = Number(process.argv[4] || 6.5);
 const trimmed = Number(process.argv[5] || start);
 const freeClew = process.argv.includes('--free-clew');
 const fineMesh = process.argv.includes('--fine-mesh');
+const local = process.argv.includes('--local-pressure');
 if (!(start >= pack.rig.gennaker.sheet_min_m && start < eased &&
       eased <= pack.rig.gennaker.sheet_max_m &&
       trimmed >= start && trimmed < eased))
@@ -29,6 +30,7 @@ const mean = (a, key) => a.reduce((s, v) => s + v[key], 0) / a.length;
 function run(u0, change) {
   const b = new Boat(pack);
   b.o.freeWake = true; b.o.wakeForces = true;
+  b.o.localPressure = local;
   b.o.crewHike = -1; b.o.crewMass = 219.9;
   b.wind.o.gust = 0; b.wind.o.shift = 0;
   if (freeClew || fineMesh) b.o.cloth = {
@@ -86,6 +88,7 @@ function report(label, changed, control, lo, hi) {
 }
 
 console.log(`TWA ${twa}°, TWS 6 м/с, грот 70°, твист 8°, шаг 1/30 с; шкот ${start} → ${eased} → ${trimmed} м; шкотовый угол ${freeClew ? 'свободен (эксперимент)' : 'на дуге (штатно)'}; сетка ${fineMesh ? '21×17 / 40 проходов' : 'штатная'}`);
+console.log(`Локальное давление вне решётки: ${local ? 'эксперимент, 16 панелей' : 'выключено'}`);
 console.log('Число: опыт (разница с одновременным контролем); entry — минимальный угол входа ткани на 10…90% высоты, отрицательный = заворот.');
 console.log('Окно           ход, уз       ген-тяга, Н       общ. тяга, Н       luffFrac        entry, °        провис, м          AWA, °   отриц. рядов / полосок заполаскивания / амплитуда, м* / слабина шкота, м');
 console.log('*Амплитуда оценена формулой рендера с хордой полоски, а не строки полотна.');

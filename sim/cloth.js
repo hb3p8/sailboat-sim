@@ -33,12 +33,13 @@
 import { edgeFn, sailSagAt, STRIPS, NCHORD, gennakerClew,
          gennakerSheetLen, designAt,
          DESIGN_DRAFT, DESIGN_ENTRY, DESIGN_EXIT } from './aero.js';
+import { localPressure, pressureToNodes } from './local-pressure.js';
 
 // Сетка ткани. Строк — как у отрисовки (SAIL_ROWS), чтобы полотно и обвод резались
 // по одним и тем же высотам; столбцов девять при трёх панелях решётки, то есть
-// по три узла на панель давления. Больше не нужно: нагрузка по хорде известна с
-// точностью до трёх ступенек, и сгущать сетку значит уточнять то, чего во входе
-// нет.
+// по три узла на панель штатного давления. У экспериментального localPressure
+// своя аэродинамическая панелизация; она уточняет нагрузку на имеющейся форме,
+// но не добавляет ткани степеней свободы между этими узлами.
 // Сетка ПО УМОЛЧАНИЮ. У экземпляра она своя (`opts.rows`, `opts.cols`), и
 // вынесена наружу ровно затем же, ради чего вынесена жёсткость на излом: пока
 // статическая форма не проверена на сгущении сетки, она не свойство модели, а
@@ -1323,6 +1324,55 @@ export class Cloth {
       if (Math.abs(raw[si]) > 0.05 * absRaw[si]) kShape[si] = fn / raw[si];
       else kFlat[si] = fn / aSum[si];
     }
+    // Сохраняется именно приложенная скалярная нагрузка. Аудит читает этот
+    // буфер, а не восстанавливает её из q, обновившегося после шага ткани.
+    const pressureForce = this.pressureForce && this.pressureForce.length === N
+      ? this.pressureForce : (this.pressureForce = new Float64Array(N));
+    pressureForce.fill(0);
+    for (let r = 0; r < this.rows; r++) {
+      const si = this.stripOf(r), g = calc[base + si];
+      if (!g || !g.live || !g.q) continue;
+      for (let c = 0; c < this.cols; c++) {
+        const kp = Math.min(NCHORD - 1, Math.floor(c / (this.cols - 1) * NCHORD));
+        const i = this.ix(r, c);
+        pressureForce[i] = (kShape[si] * g.q[kp] + kFlat[si]) * area[i];
+      }
+    }
+    // Явно включаемый опыт: локальный тонкий лист с интегралом силы из поляры.
+    // Общая вихревая система от него новых вихрей не получает. В решётке
+    // действует прежняя раскладка. Неприменимость видна по причине в профиле.
+    this.localPressureProfiles = null;
+    if (this.si === 2 && b.o.localPressure) {
+      const profiles = this.localPressureProfiles = [];
+      for (let r = 0; r < this.rows; r++) {
+        const si = this.stripOf(r), g = calc[base + si];
+        if (!g?.live || !b.rig.latOn || b.rig.latOn[base + si]) {
+          profiles.push({ ok: false, reason: 'inactive-or-lattice' }); continue;
+        }
+        const a = this.ix(r, 0) * 3, z = this.ix(r, this.cols - 1) * 3;
+        const tx = p[z] - p[a], ty = p[z + 1] - p[a + 1], tz = p[z + 2] - p[a + 2];
+        const chord = Math.hypot(tx, ty, tz);
+        if (chord < 1e-8) { profiles.push({ ok: false, reason: 'degenerate-row' }); continue; }
+        const nx = this.nrm[a], ny = this.nrm[a + 1], nz = this.nrm[a + 2];
+        const points = [];
+        let rowArea = 0, target = 0, arc = 0;
+        for (let c = 0; c < this.cols; c++) {
+          const i = this.ix(r, c), k = i * 3;
+          const dx = p[k] - p[a], dy = p[k + 1] - p[a + 1], dz = p[k + 2] - p[a + 2];
+          points.push([(dx * tx + dy * ty + dz * tz) / chord, dx * nx + dy * ny + dz * nz]);
+          rowArea += area[i]; target += pressureForce[i];
+          if (c) arc += Math.hypot(points[c][0] - points[c - 1][0], points[c][1] - points[c - 1][1]);
+        }
+        if (!(rowArea > 0) || !(arc > 0)) { profiles.push({ ok: false, reason: 'degenerate-area' }); continue; }
+        const v = g.ve / Math.hypot(g.d1, g.d2);
+        const profile = localPressure({ points,
+          flow: [v * (g.d1 * tx + g.d2 * ty) / chord, v * (g.d1 * nx + g.d2 * ny)],
+          rho: this.rhoAir, span: rowArea / arc, normalForce: target,
+          panels: b.o.localPressure.panels || 16 });
+        profiles.push(profile);
+        if (profile.ok) pressureForce.set(pressureToNodes(profile, this.cols), this.ix(r, 0));
+      }
+    }
     // Приложенная нагрузка отдаётся наружу — для аудита переноса
     // (`tests/cloth.test.mjs`). Считать её потом по формуле значило бы завести
     // второй источник правды ровно там, где проверяется единственность первого.
@@ -1355,9 +1405,7 @@ export class Cloth {
           f[k] += dmp * nx; f[k + 1] += dmp * ny; f[k + 2] += dmp * nz;
         }
         if (!q) continue;
-        const u = c / (this.cols - 1);
-        const kp = Math.min(NCHORD - 1, Math.floor(u * NCHORD));
-        const pr = (kShape[si] * q[kp] + kFlat[si]) * area[i];
+        const pr = pressureForce[i];
         // Давление — вдоль нормали СТРОКИ, хотя разложена сила по средней
         // нормали ПОЛОСКИ. Несовпадение видно в аудите переноса (до 11 % по
         // силе) и выглядит как повод прикладывать тоже по средней — тогда

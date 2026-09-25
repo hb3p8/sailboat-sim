@@ -11,11 +11,13 @@ const D = Math.PI / 180;
 const arg = (key, def) => Number(process.argv.find(s => s.startsWith(`--${key}=`))?.split('=')[1] ?? def);
 const sheet = arg('sheet', 9), tack = arg('tack', 1), iter = arg('iter', 40);
 const panels = arg('panels', 32), hz = arg('hz', 30);
+const bend = process.argv.some(s => s.startsWith('--bend=')) ? arg('bend', 0.05) : null;
 const baseline = process.argv.includes('--baseline');
 const cols = (process.argv.find(s => s.startsWith('--cols='))?.split('=')[1] ?? '9,17,33')
   .split(',').map(Number);
 if (![1, -1].includes(tack) || ![30, 60, 120].includes(hz) ||
-    !(sheet > 0) || !Number.isInteger(iter) || iter < 1 ||
+    !(sheet > 0) || (bend != null && !(bend >= 0 && bend <= 1)) ||
+    !Number.isInteger(iter) || iter < 1 ||
     !Number.isInteger(panels) || panels < 4 || panels > 128 ||
     cols.some(x => !Number.isInteger(x) || x < 5 || x > 65))
   throw new Error('Неверные параметры стенда');
@@ -42,6 +44,7 @@ function run(ncols) {
   b.o.freeWake = true; b.o.wakeForces = true;
   b.o.localPressure = baseline ? false : { panels };
   b.o.cloth = { rows: 11, cols: ncols, iter };
+  if (bend != null) b.o.cloth.bend = bend;
   b.o.crewHike = -tack; b.o.crewMass = 219.9;
   b.wind.o.gust = 0; b.wind.o.shift = 0;
   b.setGennaker(true);
@@ -97,7 +100,7 @@ function run(ncols) {
     jump: jump / ref, wall: (performance.now() - start) / 1000 };
 }
 
-console.log(`TWA 140°, TWS 6 м/с, шкот ${sheet} м, галс ${tack}; ткань 11×N, ${iter} проходов, ${hz} Гц, давление ${baseline ? 'штатное' : `локальное/${panels}`}; окно 25…30 с`);
+console.log(`TWA 140°, TWS 6 м/с, шкот ${sheet} м, галс ${tack}; ткань 11×N, ${iter} проходов, ${hz} Гц, излом ${bend == null ? 'штатный' : bend}, давление ${baseline ? 'штатное' : `локальное/${panels}`}; окно 25…30 с`);
 console.log('столбцов | тяга Н | вход min/строка ° | хорда м/пузо c | ход назад/вывернуто % | залом ° | растяжение % | первые 10 %/Fn | cp/c | скачок % | с/прогон');
 let gateFailed = false;
 for (const n of cols) {

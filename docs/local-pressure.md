@@ -184,6 +184,13 @@
 называть растяжением середины полотна; однако знак входа, складки и скачок
 силы остаются самостоятельными отрицательными свидетельствами.
 
+Диагностическое отключение жёсткости на излом (`--bend=0`) при 40 проходах,
+штатном давлении, положительном галсе и 9.0 м не восстанавливает форму:
+на 17/33 столбцах минимальный вход `−17.6/−25.9°`, ход назад
+`16.3/11.5 %`, вывернутость `25.4/47.8 %`, залом `95.6/116.3°`.
+Следовательно, один только коэффициент излома не объясняет сеточную
+несходимость; его подбор вместо устранения причины не обоснован.
+
 `--gate` использует только существующий предел скачка 5 %. Для контрольных
 `--baseline --cols=33 --gate` при 9.0 м на положительном галсе получены
 21.7 % и код выхода `1` — намеренный машиночитаемый отрицательный свидетель.
@@ -239,6 +246,7 @@ node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=-1 --baseline
 node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=1
 node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=-1
 node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=1 --baseline --cols=33 --gate
+node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=1 --baseline --cols=17,33 --bend=0
 node tests/gennaker-pressure-audit.mjs --one-start --local-pressure --panels=16
 node tests/gennaker-pressure-audit.mjs --one-start --local-pressure --panels=32
 node tests/gennaker-pressure-audit.mjs --one-start --local-pressure --panels=64

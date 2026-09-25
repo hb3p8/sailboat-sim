@@ -833,6 +833,29 @@ runtime.
 полная связанная физика и сравнение сетки/шага на осмысленном
 физическом горизонте. Штатный код, поляра и пороги не менялись.
 
+### Сверхрелаксация ADMM: малого ускорения недостаточно
+
+На том же жёстком проекторе с нормировкой плеча в первой степени
+проверена сверхрелаксация на заранее выбранных `α=1.2/1.5/1.8`;
+исходное `α=1`. В обновлении связей используется
+`α(Ax)+(1−α)z_старое`; физические ограничения, нагрузка, штрафы,
+решение линейного шага и оба допуска `1e-8` не изменены. Критерий
+первичной невязки по-прежнему вычисляется по настоящему `Ax−z`, а не
+по сверхрелаксированной промежуточной переменной.
+
+При `α=1.2` на горизонте 0.2 с / 30 Гц сетки 11×17 и 11×33
+довелись: суммарные итерации сократились соответственно
+`42744→37873` и `41853→36138`. Реакция шкота в 0.2 с осталась
+`1.999/1.847 Н` с точностью вывода, середина полотна также совпала
+в пределах показанных шести знаков. Но 11×33 потребовала `7.52 с`
+вычислений против `7.46 с` при `α=1`: выигрыша в цене кадра нет.
+При `α=1.5` и `1.8` уже исходная проекция 11×17 не достигла
+двойственного допуска за 8192 итерации: `6.61e-7` и
+`7.94e-7 кг·м` при первичной невязке `1.69e-9` и `6.17e-9 м`.
+Это **NO-GO для сверхрелаксации как решения проблемы цены**.
+Диагностический параметр оставлен для воспроизведения; штатная
+модель не менялась.
+
 ## Связанный опыт: отрицательный результат для штатного включения
 
 Четыре клетки прежнего аудита, TWS 6 м/с, окно 25…30 с после независимого
@@ -924,6 +947,8 @@ node tests/cloth-net-admm.mjs --cols=17 --outer=8192 --rho-factor=100 --rho-loca
 node tests/cloth-net-admm.mjs --cols=33 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged
 for c in 9 17 33; do node tests/cloth-net-admm.mjs --cols=$c --outer=8192 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged; done
 for c in 17 33; do node tests/cloth-net-admm.mjs --cols=$c --outer=8192 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=120 --board-material --rigid-board --require-converged; done
+for a in 1.2 1.5 1.8; do node tests/cloth-net-admm.mjs --cols=17 --outer=8192 --rho-factor=100 --rho-local --rho-board-power=1 --relax=$a --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged; done
+node tests/cloth-net-admm.mjs --cols=33 --outer=8192 --rho-factor=100 --rho-local --rho-board-power=1 --relax=1.2 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --cols=17 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --cols=33 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --solver=dual --dual-step=power --compare-solver --cols=9 --outer=8192 --rho-factor=1 --rho-local --perturb=0.1 --board-material --rigid-board --require-converged

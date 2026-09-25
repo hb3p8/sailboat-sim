@@ -15,6 +15,7 @@ const compareSolver = process.argv.includes('--compare-solver');
 const trace = process.argv.includes('--trace');
 const maxOuter = Number(opt('outer', '400'));
 const rhoFactor = Number(opt('rho-factor', '100'));
+const relax = Number(opt('relax', '1'));
 const perturb = Number(opt('perturb', '0.1'));
 const clewForce = Number(opt('clew-force', '0'));
 const forceDt = Number(opt('force-dt', String(1 / 30)));
@@ -37,6 +38,8 @@ if (!Number.isInteger(cols) || cols < 5 || cols > 65 ||
     !Number.isInteger(maxOuter) || maxOuter < 1 || maxOuter > 8192 ||
     !Number.isInteger(sequence) || sequence < 0 || sequence > 120 ||
     !(rhoFactor > 0 && rhoFactor <= 1e4) || !(perturb >= 0 && perturb <= 1) ||
+    !(relax >= 1 && relax <= 1.9) ||
+    (relax !== 1 && solver !== 'admm') ||
     !(rhoBoardPower >= 0 && rhoBoardPower <= 2) ||
     !(clewForce >= 0 && clewForce <= 1000) || !(forceDt > 0 && forceDt <= 1) ||
     (clewForce > 0 && (!freeClew || perturb === 0)) ||
@@ -387,7 +390,10 @@ function project(input = target, state = null) {
     for (let k = 0; k < H; k++) {
       const a = 3 * ei[k], b = 3 * ej[k], h = 3 * k;
       const ex = p[b] - p[a], ey = p[b + 1] - p[a + 1], ez = p[b + 2] - p[a + 2];
-      const tx = ex + u[h], ty = ey + u[h + 1], tz = ez + u[h + 2];
+      const hx = relax * ex + (1 - relax) * z[h];
+      const hy = relax * ey + (1 - relax) * z[h + 1];
+      const hz = relax * ez + (1 - relax) * z[h + 2];
+      const tx = hx + u[h], ty = hy + u[h + 1], tz = hz + u[h + 2];
       const norm = Math.hypot(tx, ty, tz), scale = Math.min(1, rest[k] / norm);
       const nx = tx * scale, ny = ty * scale, nz = tz * scale;
       primal = Math.max(primal, Math.hypot(ex - nx, ey - ny, ez - nz));
@@ -404,14 +410,17 @@ function project(input = target, state = null) {
         const v = 3 * vb[k], a = cb[k];
         dualSum[v] += a * dx; dualSum[v + 1] += a * dy; dualSum[v + 2] += a * dz;
       }
-      u[h] += ex - nx; u[h + 1] += ey - ny; u[h + 2] += ez - nz;
+      u[h] += hx - nx; u[h + 1] += hy - ny; u[h + 2] += hz - nz;
       z[h] = nx; z[h + 1] = ny; z[h + 2] = nz;
     }
     if (freeClew) {
       const k = 3 * cl.clew;
       const ex = p[k] - sheetLead[0], ey = p[k + 1] - sheetLead[1],
         ez = p[k + 2] - sheetLead[2];
-      const tx = ex + sheetU[0], ty = ey + sheetU[1], tz = ez + sheetU[2];
+      const hx = relax * ex + (1 - relax) * sheetZ[0];
+      const hy = relax * ey + (1 - relax) * sheetZ[1];
+      const hz = relax * ez + (1 - relax) * sheetZ[2];
+      const tx = hx + sheetU[0], ty = hy + sheetU[1], tz = hz + sheetU[2];
       const scale = Math.min(1, sheetLen / Math.hypot(tx, ty, tz));
       const nx = tx * scale, ny = ty * scale, nz = tz * scale;
       primal = Math.max(primal, Math.hypot(ex - nx, ey - ny, ez - nz));
@@ -419,7 +428,7 @@ function project(input = target, state = null) {
       dualSum[a] += w * (nx - sheetZ[0]);
       dualSum[a + 1] += w * (ny - sheetZ[1]);
       dualSum[a + 2] += w * (nz - sheetZ[2]);
-      sheetU[0] += ex - nx; sheetU[1] += ey - ny; sheetU[2] += ez - nz;
+      sheetU[0] += hx - nx; sheetU[1] += hy - ny; sheetU[2] += hz - nz;
       sheetZ[0] = nx; sheetZ[1] = ny; sheetZ[2] = nz;
     }
     for (let i = 0; i < N; i++) if (massEff[i])
@@ -605,6 +614,7 @@ console.log(solver === 'admm'
   ? `Цель: возмущение ${perturb} м; rho ${rhoLocal ? 'по приведённой массе связи' : 'единый'}: множитель ${rhoFactor}, диапазон ${Math.min(...rhoEdge).toFixed(4)}…${Math.max(...rhoEdge).toFixed(4)} кг`
   : `Цель: возмущение ${perturb} м; ускоренный двойственный prox, без rho`);
 if (rhoBoardPower > 0) console.log(`Нормировка штрафа по плечу дощечки в степени ${rhoBoardPower}: ${boardLeverLinks} связей`);
+if (relax !== 1) console.log(`Сверхрелаксация ADMM: ${relax}`);
 if (freeClew)
   console.log(`Свободный угол: шкот ${sheetLen.toFixed(4)} м, исходное расстояние ${(sheetDistance(basePos)).toFixed(4)} м, rho шкота ${sheetPenalty.toFixed(4)} кг`);
 if (clewForce && !dynamicSeconds)

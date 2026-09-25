@@ -9,6 +9,9 @@ import { Cloth } from '../sim/cloth.js';
 const pack = JSON.parse(readFileSync(new URL('../out/export/physics.json', import.meta.url), 'utf8'));
 const opt = (name, fallback) => process.argv.find(s => s.startsWith(`--${name}=`))?.split('=')[1] ?? fallback;
 const cols = Number(opt('cols', '9'));
+let solver = opt('solver', 'admm');
+const dualStep = opt('dual-step', 'rows');
+const compareSolver = process.argv.includes('--compare-solver');
 const maxOuter = Number(opt('outer', '400'));
 const rhoFactor = Number(opt('rho-factor', '100'));
 const perturb = Number(opt('perturb', '0.1'));
@@ -27,6 +30,7 @@ const rhoLocal = process.argv.includes('--rho-local');
 const compareRho = process.argv.includes('--compare-rho');
 const requireConverged = process.argv.includes('--require-converged');
 if (!Number.isInteger(cols) || cols < 5 || cols > 65 ||
+    !['admm', 'dual'].includes(solver) || !['rows', 'power'].includes(dualStep) ||
     !Number.isInteger(maxOuter) || maxOuter < 1 || maxOuter > 8192 ||
     !Number.isInteger(sequence) || sequence < 0 || sequence > 120 ||
     !(rhoFactor > 0 && rhoFactor <= 1e4) || !(perturb >= 0 && perturb <= 1) ||
@@ -37,7 +41,9 @@ if (!Number.isInteger(cols) || cols < 5 || cols > 65 ||
     !(dampHz >= 0 && dampHz <= 20) ||
     (dynamicSeconds > 0 && (!freeClew || !rigidBoard ||
       (dynamicLoad === 'clew' && !clewForce) || sequence || compareRho)) ||
-    (rigidBoard && !boardMaterial) || (compareRho && (!rhoLocal || sequence)))
+    (rigidBoard && !boardMaterial) ||
+    (compareRho && (solver !== 'admm' || !rhoLocal || sequence)) ||
+    (compareSolver && (solver !== 'dual' || sequence || dynamicSeconds)))
   throw new Error('Неверные параметры стенда ткани');
 if (!['any', 'taut', 'slack'].includes(expectSheet) ||
     (expectSheet !== 'any' && (!freeClew || sequence || dynamicSeconds)))
@@ -219,6 +225,8 @@ function project(input = target, state = null) {
     for (let j = 0; j < 3; j++)
       edgeOffset[3 * k + j] = offset[3 * b + j] - offset[3 * a + j];
   }
+  if (solver === 'dual') return projectDual({ input, start, state, map, weight,
+    offset, massEff, rhsMass, va, vb, ca, cb, edgeOffset });
   if (!state) for (let k = 0; k < H; k++) {
     const a = 3 * ei[k], b = 3 * ej[k], h = 3 * k;
     const dx = p[b] - p[a], dy = p[b + 1] - p[a + 1], dz = p[b + 2] - p[a + 2];
@@ -361,13 +369,175 @@ function project(input = target, state = null) {
     state: { z, u, y, sheetZ, sheetU } };
 }
 
+// Независимый численный кандидат для той же выпуклой проекции. Двойственная
+// переменная — импульс каждой нерастяжимой связи. Исключение координат даёт
+// выпуклую квадратичную функцию плюс L·|λ|; её prox — векторная усадка.
+// Диагональные шаги масштабируются строгой оценкой нормы через суммы строк,
+// а не подбираются под конкретную сетку или давление.
+function projectDual({ input, start, state, map, weight, offset, massEff,
+  rhsMass, va, vb, ca, cb, edgeOffset }) {
+  const E = H + (freeClew ? 1 : 0);
+  const a = new Int32Array(E), b = new Int32Array(E);
+  const u = new Float64Array(E), v = new Float64Array(E);
+  const limit = new Float64Array(E), off = new Float64Array(3 * E);
+  for (let e = 0; e < H; e++) {
+    a[e] = va[e]; b[e] = vb[e]; u[e] = ca[e]; v[e] = cb[e];
+    limit[e] = rest[e];
+    off.set(edgeOffset.subarray(3 * e, 3 * e + 3), 3 * e);
+  }
+  if (freeClew) {
+    const e = H, k = 3 * cl.clew;
+    a[e] = map[cl.clew]; b[e] = -1; u[e] = weight[cl.clew];
+    limit[e] = sheetLen;
+    for (let j = 0; j < 3; j++) off[3 * e + j] = offset[k + j] - sheetLead[j];
+  }
+  const step = new Float64Array(E), nodeAbs = new Float64Array(N);
+  for (let e = 0; e < E; e++) {
+    const diag = (a[e] >= 0 ? u[e] ** 2 / massEff[a[e]] : 0) +
+      (b[e] >= 0 ? v[e] ** 2 / massEff[b[e]] : 0);
+    step[e] = diag > 0 ? 1 / diag : 0;
+    const w = Math.sqrt(step[e]);
+    if (a[e] >= 0) nodeAbs[a[e]] += Math.abs(u[e]) * w;
+    if (b[e] >= 0) nodeAbs[b[e]] += Math.abs(v[e]) * w;
+  }
+  let rowBound = 0;
+  for (let e = 0; e < E; e++) {
+    const bound = Math.sqrt(step[e]) *
+      ((a[e] >= 0 ? Math.abs(u[e]) * nodeAbs[a[e]] / massEff[a[e]] : 0) +
+       (b[e] >= 0 ? Math.abs(v[e]) * nodeAbs[b[e]] / massEff[b[e]] : 0));
+    rowBound = Math.max(rowBound, bound);
+  }
+  if (!(rowBound > 0)) throw new Error('Двойственная сеть не имеет свободных связей');
+  let spectral = rowBound;
+  if (dualStep === 'power') {
+    const eigenVec = new Float64Array(E), nextVec = new Float64Array(E);
+    const node = new Float64Array(N);
+    let norm = 0;
+    for (let e = 0; e < E; e++) {
+      eigenVec[e] = Math.sin(0.73 * (e + 1)) + 0.31 * Math.cos(1.17 * (e + 1));
+      norm += eigenVec[e] ** 2;
+    }
+    norm = Math.sqrt(norm);
+    for (let e = 0; e < E; e++) eigenVec[e] /= norm;
+    for (let it = 0; it < 80; it++) {
+      node.fill(0);
+      for (let e = 0; e < E; e++) {
+        const value = Math.sqrt(step[e]) * eigenVec[e];
+        if (a[e] >= 0) node[a[e]] += u[e] * value;
+        if (b[e] >= 0) node[b[e]] += v[e] * value;
+      }
+      for (let i = 0; i < N; i++) if (massEff[i]) node[i] /= massEff[i];
+      norm = 0;
+      for (let e = 0; e < E; e++) {
+        nextVec[e] = Math.sqrt(step[e]) *
+          ((a[e] >= 0 ? u[e] * node[a[e]] : 0) +
+           (b[e] >= 0 ? v[e] * node[b[e]] : 0));
+        norm += nextVec[e] ** 2;
+      }
+      norm = Math.sqrt(norm);
+      if (!(norm > 0)) throw new Error('Спектральная оценка двойственной сети вырождена');
+      for (let e = 0; e < E; e++) eigenVec[e] = nextVec[e] / norm;
+    }
+    spectral = norm;
+  }
+  for (let e = 0; e < E; e++) step[e] *= 0.9 / spectral;
+  let lambda = state?.lambda?.slice() ?? new Float64Array(3 * E);
+  if (lambda.length !== 3 * E) throw new Error('Неверное состояние двойственного решателя');
+  const extrap = lambda.slice();
+  let next = new Float64Array(3 * E);
+  const nodeSum = new Float64Array(3 * N), p = new Float64Array(3 * N);
+  const edge = new Float64Array(3 * E), trial = new Float64Array(3 * N);
+  const trialEdge = new Float64Array(3 * E), y = new Float64Array(3 * N);
+  const primalAt = (dual, pos, edges) => {
+    nodeSum.fill(0);
+    for (let e = 0; e < E; e++) {
+      const k = 3 * e;
+      if (a[e] >= 0) {
+        const i = 3 * a[e], w = u[e];
+        nodeSum[i] += w * dual[k];
+        nodeSum[i + 1] += w * dual[k + 1];
+        nodeSum[i + 2] += w * dual[k + 2];
+      }
+      if (b[e] >= 0) {
+        const i = 3 * b[e], w = v[e];
+        nodeSum[i] += w * dual[k];
+        nodeSum[i + 1] += w * dual[k + 1];
+        nodeSum[i + 2] += w * dual[k + 2];
+      }
+    }
+    for (let i = 0; i < N; i++) if (massEff[i])
+      for (let j = 0; j < 3; j++)
+        y[3 * i + j] = (rhsMass[j][i] - nodeSum[3 * i + j]) / massEff[i];
+    for (let i = 0; i < N; i++)
+      for (let j = 0; j < 3; j++)
+        pos[3 * i + j] = offset[3 * i + j] +
+          (map[i] >= 0 ? weight[i] * y[3 * map[i] + j] : 0);
+    for (let e = 0; e < E; e++)
+      for (let j = 0; j < 3; j++)
+        edges[3 * e + j] = off[3 * e + j] +
+          (a[e] >= 0 ? u[e] * y[3 * a[e] + j] : 0) +
+          (b[e] >= 0 ? v[e] * y[3 * b[e] + j] : 0);
+  };
+  const shrink = (source, edges, output) => {
+    for (let e = 0; e < E; e++) {
+      const k = 3 * e, h = step[e];
+      if (!h) { output[k] = 0; output[k + 1] = 0; output[k + 2] = 0; continue; }
+      const x = source[k] + h * edges[k],
+        z = source[k + 1] + h * edges[k + 1],
+        w = source[k + 2] + h * edges[k + 2];
+      const norm = Math.hypot(x, z, w);
+      const factor = norm > 0 ? Math.max(0, 1 - h * limit[e] / norm) : 0;
+      output[k] = factor * x; output[k + 1] = factor * z; output[k + 2] = factor * w;
+    }
+  };
+  const fixedPoint = new Float64Array(3 * E);
+  let primal = Infinity, dual = Infinity, kkt = Infinity, momentum = 1, used = 0;
+  for (let it = 0; it < maxOuter; it++) {
+    used++;
+    primalAt(extrap, trial, trialEdge);
+    shrink(extrap, trialEdge, next);
+    primalAt(next, p, edge);
+    shrink(next, edge, fixedPoint);
+    primal = 0; dual = 0; kkt = 0;
+    for (let e = 0; e < E; e++) {
+      const i = 3 * e;
+      primal = Math.max(primal, Math.max(0,
+        Math.hypot(edge[i], edge[i + 1], edge[i + 2]) - limit[e]));
+      const residual = Math.hypot(fixedPoint[i] - next[i],
+        fixedPoint[i + 1] - next[i + 1], fixedPoint[i + 2] - next[i + 2]);
+      dual = Math.max(dual, residual);
+      if (step[e]) kkt = Math.max(kkt, residual / step[e]);
+    }
+    if (primal < 1e-8 && dual < 1e-8 && kkt < 1e-8) {
+      lambda = next.slice();
+      break;
+    }
+    const newer = (1 + Math.sqrt(1 + 4 * momentum * momentum)) / 2;
+    const beta = (momentum - 1) / newer;
+    for (let i = 0; i < 3 * E; i++) extrap[i] = next[i] + beta * (next[i] - lambda[i]);
+    momentum = newer;
+    if (it + 1 === maxOuter) { lambda = next.slice(); break; }
+    const swap = lambda; lambda = next; next = swap;
+  }
+  const sheetMultiplier = freeClew
+    ? Math.hypot(lambda[3 * H], lambda[3 * H + 1], lambda[3 * H + 2]) : 0;
+  return { ...score(p, input), ms: performance.now() - start, used,
+    primal, dual, kkt, sheetMultiplier, cgMean: 0, cgCaps: 0,
+    pos: p, state: { lambda }, rowBound, spectral };
+}
+
+const converged = x => x.primal < 1e-8 && x.dual < 1e-8 && !x.cgCaps &&
+  (solver !== 'dual' || x.kkt < 1e-8);
+
 const fmt = x => `макс. растяжение ${(100 * x.maxRel).toFixed(3)} % / ${(1000 * x.maxAbs).toFixed(3)} мм; ` +
   `связей >10 нм ${x.count}; L2 остаток ${(1000 * x.total).toFixed(3)} мм; ` +
   `взвешенное смещение ${x.displacement.toFixed(3)} кг^1/2·м; ` +
   `дощечка ${(1000 * x.board).toFixed(2)} мм; ` +
   (freeClew ? `шкот ${x.sheetSpan.toFixed(6)}/${sheetLen.toFixed(6)} м, превышение ${(1000 * x.sheetExcess).toFixed(4)} мм; ` : '') +
   `${x.ms.toFixed(1)} мс`;
-console.log(`Цель: возмущение ${perturb} м; rho ${rhoLocal ? 'по приведённой массе связи' : 'единый'}: множитель ${rhoFactor}, диапазон ${Math.min(...rhoEdge).toFixed(4)}…${Math.max(...rhoEdge).toFixed(4)} кг`);
+console.log(solver === 'admm'
+  ? `Цель: возмущение ${perturb} м; rho ${rhoLocal ? 'по приведённой массе связи' : 'единый'}: множитель ${rhoFactor}, диапазон ${Math.min(...rhoEdge).toFixed(4)}…${Math.max(...rhoEdge).toFixed(4)} кг`
+  : `Цель: возмущение ${perturb} м; ускоренный двойственный prox, без rho`);
 if (freeClew)
   console.log(`Свободный угол: шкот ${sheetLen.toFixed(4)} м, исходное расстояние ${(sheetDistance(basePos)).toFixed(4)} м, rho шкота ${sheetPenalty.toFixed(4)} кг`);
 if (clewForce && !dynamicSeconds)
@@ -396,8 +566,11 @@ if (dynamicSeconds) {
   if (Math.abs(steps * h - dynamicSeconds) > 1e-9)
     throw new Error('Горизонт динамики не кратен шагу');
   const initial = project(basePos);
-  if (initial.primal >= 1e-8 || initial.dual >= 1e-8 || initial.cgCaps)
-    throw new Error('Исходная форма не доведена до запуска динамики');
+  if (!converged(initial))
+    throw new Error(`Исходная форма не доведена до запуска динамики: ` +
+      `${initial.used} итераций, ${initial.primal.toExponential(2)} м / ` +
+      `${initial.dual.toExponential(2)} кг·м` +
+      (solver === 'dual' ? `, KKT ${initial.kkt.toExponential(2)} м` : ''));
   let p = initial.pos, prev = p.slice(), state = initial.state;
   const k = 3 * cl.clew, d0 = sheetDistance(p);
   const direction = [(p[k] - sheetLead[0]) / d0,
@@ -437,11 +610,12 @@ if (dynamicSeconds) {
           h * h * force[3 * a + j] / cl.mass[a];
     }
     const result = project(input, state);
-    if (result.primal >= 1e-8 || result.dual >= 1e-8 || result.cgCaps) {
+    if (!converged(result)) {
       failed = i;
       console.log(`Остановка на шаге ${i}: остатки ${result.primal.toExponential(2)} м / ` +
         `${result.dual.toExponential(2)} кг·м, ${result.used} итераций, ` +
-        `${result.ms.toFixed(1)} мс, CG лимитных ${result.cgCaps}`);
+        `${result.ms.toFixed(1)} мс, ` +
+        (solver === 'admm' ? `CG лимитных ${result.cgCaps}` : `KKT ${result.kkt.toExponential(2)} м`));
       break;
     }
     totalMs += result.ms; totalIter += result.used;
@@ -487,8 +661,8 @@ if (dynamicSeconds) {
     warmState = warm.state;
     coldMs += cold.ms; warmMs += warm.ms;
     coldIter += cold.used; warmIter += warm.used;
-    if (cold.primal >= 1e-8 || cold.dual >= 1e-8 || cold.cgCaps) coldCaps++;
-    if (warm.primal >= 1e-8 || warm.dual >= 1e-8 || warm.cgCaps) warmCaps++;
+    if (!converged(cold)) coldCaps++;
+    if (!converged(warm)) warmCaps++;
     maxBoard = Math.max(maxBoard, cold.board, warm.board);
     maxStretch = Math.max(maxStretch, cold.maxRel, warm.maxRel);
     if (freeClew) {
@@ -515,12 +689,14 @@ if (dynamicSeconds) {
 } else {
   for (const iter of [40, 160, 640]) console.log(`ГЗ ${iter}: ${fmt(sweep(iter))}`);
   const result = project();
-  console.log(`ADMM ${rigidBoard ? 'с точной дощечкой' : 'без дощечки'} ${maxOuter}: ${fmt(result)}; итераций ${result.used}; ` +
+  console.log(`${solver === 'admm' ? 'ADMM' : 'Двойственный prox'} ${rigidBoard ? 'с точной дощечкой' : 'без дощечки'} ${maxOuter}: ${fmt(result)}; итераций ${result.used}; ` +
     `остатки ${result.primal.toExponential(2)} м / ${result.dual.toExponential(2)} кг·м; ` +
-    `CG сред. ${result.cgMean.toFixed(1)}, лимитных ${result.cgCaps}` +
+    (solver === 'admm' ? `CG сред. ${result.cgMean.toFixed(1)}, лимитных ${result.cgCaps}` :
+      `KKT ${result.kkt.toExponential(2)} м, оценка спектра ${result.spectral.toFixed(3)} ` +
+      `(строки ${result.rowBound.toFixed(3)})`) +
     (freeClew ? `; множитель шкота ${result.sheetMultiplier.toExponential(3)} кг·м` +
       (clewForce ? ` = ${(result.sheetMultiplier / forceDt ** 2).toFixed(3)} Н` : '') : ''));
-  if (requireConverged && (result.primal >= 1e-8 || result.dual >= 1e-8 || result.cgCaps))
+  if (requireConverged && !converged(result))
     process.exitCode = 1;
   if (requireConverged && ((rigidBoard && result.board > 1e-9) || result.sheetExcess > 1e-8 ||
       (freeClew && result.sheetMultiplier > 1e-8 && Math.abs(result.sheetSpan - sheetLen) > 1e-6)))
@@ -529,6 +705,20 @@ if (dynamicSeconds) {
       result.sheetMultiplier > 1e-8)) process.exitCode = 1;
   if (expectSheet === 'slack' && !(result.sheetSpan < sheetLen - 1e-6 &&
       result.sheetMultiplier < 1e-8)) process.exitCode = 1;
+  if (compareSolver) {
+    solver = 'admm';
+    const control = project();
+    const controlOk = converged(control);
+    solver = 'dual';
+    let maxDiff = 0;
+    for (let i = 0; i < 3 * N; i++)
+      maxDiff = Math.max(maxDiff, Math.abs(result.pos[i] - control.pos[i]));
+    console.log(`Контроль ADMM: ${control.used} итераций, ${control.ms.toFixed(1)} мс, ` +
+      `остатки ${control.primal.toExponential(2)} м / ${control.dual.toExponential(2)} кг·м, ` +
+      `разность координат ${(1000 * maxDiff).toFixed(6)} мм` +
+      (freeClew ? `, разность множителя шкота ${(control.sheetMultiplier - result.sheetMultiplier).toExponential(3)} кг·м` : ''));
+    if (requireConverged && !controlOk) process.exitCode = 1;
+  }
   if (compareRho) {
     const localPenalty = rhoEdge.slice();
     const localSheetPenalty = sheetPenalty;
@@ -544,7 +734,7 @@ if (dynamicSeconds) {
       `остатки ${control.primal.toExponential(2)} м / ${control.dual.toExponential(2)} кг·м; ` +
       `макс. разность координат ${(1000 * maxDiff).toFixed(6)} мм` +
       (freeClew ? `, множитель шкота ${control.sheetMultiplier.toExponential(3)} кг·м` : ''));
-    if (requireConverged && (control.primal >= 1e-8 || control.dual >= 1e-8 || control.cgCaps))
+    if (requireConverged && !converged(control))
       process.exitCode = 1;
   }
 }

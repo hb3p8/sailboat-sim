@@ -758,6 +758,40 @@ runtime.
 по-прежнему не содержит мягких связей, изгиба и обратной связи с лодкой;
 его NO-GO относится прежде всего к нынешнему численному ядру под нагрузкой.
 
+### Второй численный кандидат: ускоренный двойственный prox — NO-GO
+
+Ту же выпуклую проекцию проверили независимо от ADMM в двойственных
+импульсах связей. После исключения координат узлов двойственная задача —
+квадратичная форма плюс `Σ L_k|λ_k|`; проксимальный шаг есть векторная
+усадка. Диагональные шаги по массе и топологии ограничены нормой оператора:
+сначала строгой суммой строк, затем независимо 80 шагами степенного
+метода с коэффициентом безопасности 0.9. Остановка требует прежнего
+геометрического допуска `1e-8 м`, изменения двойственной переменной
+`1e-8 кг·м` и проксимальной KKT-невязки `1e-8 м`. Материал, сила, шкот
+и дощечка не менялись.
+
+На одном статическом возмущении 11×9 с точной дощечкой решение
+совпало с доведённым ADMM в пределах `0.000066 мм` по координате,
+но двойственный метод потребовал `4060 итераций / 100 мс` против
+`288 / 18 мс` у ADMM. Со свободным натянутым шкотом разность
+`0.000087 мм`, разность множителя `3.86e-15 кг·м`, цена
+`5129 / 127 мс` против `302 / 23.5 мс`. То есть формула и знаки
+проверены независимым решателем, но цена хуже. На 11×17 и 11×33 даже
+**статический** снимок не дошёл до допуска за 8192 итераций:
+первичная невязка `4.25e-8/6.83e-7 м`. Спектральная оценка вместо
+суммы строк меняет предел шага лишь с `57.918→55.065` и
+`112.189→105.883`: проблема не в чрезмерно осторожной оценке шага.
+
+На том же замороженном распределённом давлении и свободном шкотовом
+угле первый шаг `1/30 с` снова не доведён ни на одной из сеток
+11×9/17/33: после 8192 итераций первичная невязка
+`2.57e-8/1.23e-7/5.94e-7 м`, время одного шага
+`252/610/1056 мс`. Проксимальная KKT-невязка тоже выше `1e-8 м`.
+Таким образом, простой ускоренный двойственный метод не снимает
+вычислительный блокер и не даёт оснований анализировать сеточную или
+временную сходимость недоведённой формы. Он оставлен только в стенде как
+отрицательный контроль. Runtime и пороги не менялись.
+
 ## Связанный опыт: отрицательный результат для штатного включения
 
 Четыре клетки прежнего аудита, TWS 6 м/с, окно 25…30 с после независимого
@@ -849,6 +883,11 @@ node tests/cloth-net-admm.mjs --cols=17 --outer=8192 --rho-factor=100 --rho-loca
 node tests/cloth-net-admm.mjs --cols=33 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --cols=17 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --cols=33 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --solver=dual --dual-step=power --compare-solver --cols=9 --outer=8192 --rho-factor=1 --rho-local --perturb=0.1 --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --solver=dual --dual-step=power --compare-solver --cols=9 --outer=8192 --rho-factor=1 --rho-local --free-clew --sheet-len=5.218 --perturb=0.1 --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --solver=dual --dual-step=power --cols=17 --outer=8192 --perturb=0.1 --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --solver=dual --dual-step=power --cols=33 --outer=8192 --perturb=0.1 --board-material --rigid-board --require-converged
+for c in 9 17 33; do node tests/cloth-net-admm.mjs --solver=dual --dual-step=power --cols=$c --outer=8192 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.03333333333333333 --dynamic-hz=30 --board-material --rigid-board --require-converged; done
 node tests/local-pressure-coupling.test.mjs
 node tests/local-pressure-frozen.mjs
 node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=1 --baseline

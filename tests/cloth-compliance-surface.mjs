@@ -125,6 +125,41 @@ const measure = () => {
     meanDz: sumDz / moving, minDz, maxDz, work,
     rmsResidual: Math.sqrt(residualSquared / moving), maxResidual };
 };
+const shapeAudit = () => {
+  const displacement = i => Array.from(p.subarray(3 * i, 3 * i + 3),
+    (x, j) => x - initial[3 * i + j]);
+  const areaXY = cell * cell / 2;
+  let meanZ = 0, squaredZ = 0, squaredVector = 0, maxVector = 0;
+  for (const [a, b, c] of triangles) {
+    const u = displacement(a), v = displacement(b), q = displacement(c);
+    meanZ += areaXY * (u[2] + v[2] + q[2]) / 3;
+    squaredZ += areaXY * (u[2] ** 2 + v[2] ** 2 + q[2] ** 2 +
+      u[2] * v[2] + v[2] * q[2] + q[2] * u[2]) / 6;
+    squaredVector += areaXY * (dot(u, u) + dot(v, v) + dot(q, q) +
+      dot(u, v) + dot(v, q) + dot(q, u)) / 6;
+  }
+  for (let i = 0; i < count; i++) maxVector = Math.max(maxVector,
+    Math.hypot(...displacement(i)));
+  const stride = (n - 1) / 4;
+  const slice = [];
+  for (let r = 0; r < 5; r++) for (let c = 0; c < 5; c++)
+    slice.push(displacement(index(r * stride, c * stride))
+      .map(x => Number((1000 * x).toFixed(9))));
+  return { meanZ, rmsZ: Math.sqrt(squaredZ),
+    rmsVector: Math.sqrt(squaredVector), maxVector, slice };
+};
+const auditShapeQuadrature = () => {
+  const amplitude = 0.001;
+  for (let i = 0; i < count; i++) p[3 * i + 2] += amplitude * initial[3 * i];
+  const sample = shapeAudit();
+  p.set(initial);
+  const error = Math.max(Math.abs(sample.meanZ - amplitude / 2),
+    Math.abs(sample.rmsZ - amplitude / Math.sqrt(3)),
+    Math.abs(sample.rmsVector - amplitude / Math.sqrt(3)),
+    Math.abs(sample.maxVector - amplitude));
+  if (!(error < 1e-12)) throw new Error('Неверный интеграл линейной формы');
+};
+auditShapeQuadrature();
 const show = (t, m) => console.log(`${typeof t === 'number' ? `${t.toFixed(3)} с` : t}: ` +
   `высота середины ${m.z.toFixed(9)} м, ` +
   `Δz ${(1000 * (m.z - initial[3 * center + 2])).toFixed(6)} мм, ` +
@@ -312,6 +347,12 @@ if (solver === 'static') {
   console.log(`Физическая энергия: материал ${energy.material.toExponential(6)} Дж, ` +
     `работа нагрузки ${energy.work.toExponential(6)} Дж, ` +
     `разность ${energy.energy.toExponential(6)} Дж`);
+  const shape = shapeAudit();
+  console.log(`Форма по площади: среднее Δz ${(1000 * shape.meanZ).toFixed(9)} мм, ` +
+    `RMS Δz ${(1000 * shape.rmsZ).toFixed(9)} мм, ` +
+    `RMS |Δr| ${(1000 * shape.rmsVector).toFixed(9)} мм, ` +
+    `макс. |Δr| ${(1000 * shape.maxVector).toFixed(9)} мм`);
+  console.log(`Срез 5×5 (мм, Δx/Δy/Δz): ${JSON.stringify(shape.slice)}`);
   console.log(`Статический итог: ${converged ? 'доведён' : 'НЕ доведён'}, ` +
     `время ${((performance.now() - start) / 1000).toFixed(3)} с`);
   if (!converged) process.exitCode = 1;

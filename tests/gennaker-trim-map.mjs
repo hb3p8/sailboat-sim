@@ -62,7 +62,8 @@ function once(twa, tws, sheet, u0) {
       // Форма паруса: в отличие от рисуемого заполаскивания, это положение
       // самой ткани. Достаточно мерить её каждые пять физических шагов.
       if (i % 5 === 0) for (let k = 1; k <= 9; k++)
-        entry = Math.min(entry, b.rig.cloth.rowShape(k / 10).entry / D);
+        entry = Math.min(entry,
+          b.rig.cloth.rowShape(k * (b.rig.cloth.rows - 1) / 10).entry / D);
     }
   }
   return {

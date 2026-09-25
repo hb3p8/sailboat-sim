@@ -14,6 +14,10 @@ const rhoFactor = Number(opt('rho-factor', '100'));
 const perturb = Number(opt('perturb', '0.1'));
 const clewForce = Number(opt('clew-force', '0'));
 const forceDt = Number(opt('force-dt', String(1 / 30)));
+const dynamicSeconds = Number(opt('dynamic-seconds', '0'));
+const dynamicHz = Number(opt('dynamic-hz', '60'));
+const dynamicLoad = opt('dynamic-load', 'clew');
+const dampHz = Number(opt('damp-hz', '6'));
 const sequence = Number(opt('sequence', '0'));
 const boardMaterial = process.argv.includes('--board-material');
 const rigidBoard = process.argv.includes('--rigid-board');
@@ -28,10 +32,15 @@ if (!Number.isInteger(cols) || cols < 5 || cols > 65 ||
     !(rhoFactor > 0 && rhoFactor <= 1e4) || !(perturb >= 0 && perturb <= 1) ||
     !(clewForce >= 0 && clewForce <= 1000) || !(forceDt > 0 && forceDt <= 1) ||
     (clewForce > 0 && (!freeClew || perturb === 0)) ||
+    !(dynamicSeconds >= 0 && dynamicSeconds <= 5) ||
+    ![30, 60, 120].includes(dynamicHz) || !['clew', 'frozen-pressure'].includes(dynamicLoad) ||
+    !(dampHz >= 0 && dampHz <= 20) ||
+    (dynamicSeconds > 0 && (!freeClew || !rigidBoard ||
+      (dynamicLoad === 'clew' && !clewForce) || sequence || compareRho)) ||
     (rigidBoard && !boardMaterial) || (compareRho && (!rhoLocal || sequence)))
   throw new Error('Неверные параметры стенда ткани');
 if (!['any', 'taut', 'slack'].includes(expectSheet) ||
-    (expectSheet !== 'any' && (!freeClew || sequence)))
+    (expectSheet !== 'any' && (!freeClew || sequence || dynamicSeconds)))
   throw new Error('Неверное ожидаемое состояние шкота');
 const b = new Boat(pack);
 b.o.freeWake = true; b.o.wakeForces = true;
@@ -42,11 +51,26 @@ const sheetLen = Number(opt('sheet-len', String(0.5 * (gen.sheet_min_m + gen.she
 if (!(sheetLen >= gen.sheet_min_m && sheetLen <= gen.sheet_max_m))
   throw new Error('Длина шкота вне штатного диапазона');
 b.o.genSheetLen = sheetLen;
+if (dynamicSeconds && dynamicLoad === 'frozen-pressure') {
+  const D = Math.PI / 180;
+  b.o.crewHike = -1; b.o.crewMass = 219.9;
+  b.o.sheet = 70 * D; b.o.twist = 8 * D;
+}
 b.reset(); b.o.windSpeed = 6; b.o.windDir = 100 * Math.PI / 180; b.u = 3;
 b.psi = -40 * Math.PI / 180;
-b.step(1 / 30);
+if (dynamicSeconds && dynamicLoad === 'frozen-pressure') {
+  const D = Math.PI / 180;
+  const wrap = x => ((x + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+  for (let i = 0; i < 30 * 30; i++) {
+    b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D,
+      -(2.2 * wrap(-40 * D - b.psi) - 0.9 * b.r)));
+    b.step(1 / 30);
+  }
+} else b.step(1 / 30);
 const cl = new Cloth(b.rig.sails[2], 2, { rows: 11, cols, iter: 40, boardMaterial, freeClew });
 if (!cl.step(b, 1 / 30)) throw new Error('Исходный шаг ткани отклонён');
+const frozenNormals = cl.nrm.slice();
+const frozenPressure = cl.pressureForce.slice();
 // У начального подшага остаётся собственная невязка у фаловой дощечки;
 // доводим общий исходник ДО внесения одинакового возмущения.
 cl.iter = 640;
@@ -346,7 +370,7 @@ const fmt = x => `макс. растяжение ${(100 * x.maxRel).toFixed(3)} 
 console.log(`Цель: возмущение ${perturb} м; rho ${rhoLocal ? 'по приведённой массе связи' : 'единый'}: множитель ${rhoFactor}, диапазон ${Math.min(...rhoEdge).toFixed(4)}…${Math.max(...rhoEdge).toFixed(4)} кг`);
 if (freeClew)
   console.log(`Свободный угол: шкот ${sheetLen.toFixed(4)} м, исходное расстояние ${(sheetDistance(basePos)).toFixed(4)} м, rho шкота ${sheetPenalty.toFixed(4)} кг`);
-if (clewForce)
+if (clewForce && !dynamicSeconds)
   console.log(`Одношаговый опыт с силой у шкотового угла ${clewForce.toFixed(3)} Н, шаг ${forceDt.toFixed(6)} с, масса узла ${cl.mass[cl.clew].toFixed(6)} кг; остальные узлы не возмущены`);
 console.log(`Исходник после 640 штатных проходов: макс. растяжение ${(100 * base.maxRel).toFixed(4)} % / ${(1000 * base.maxAbs).toFixed(4)} мм`);
 if (base.worst >= 0) {
@@ -366,8 +390,88 @@ const topSpan = Math.hypot(cl.pos[h1] - cl.pos[h0], cl.pos[h1 + 1] - cl.pos[h0 +
 console.log(`Дощечка ${boardMaterial ? 'по материальным долям' : 'штатная'}: длина последовательных связей ${topMaterial.toFixed(6)} м, ` +
   `прямое ограничение ${directRest?.toFixed(6) ?? 'нет'} м, ` +
   `расстояние концов ${topSpan.toFixed(6)} м, rowW ${cl.rowW[top].toFixed(6)} м`);
-console.log(`Вход: ${fmt({ ...score(target), ms: 0 })}`);
-if (sequence) {
+if (!dynamicSeconds) console.log(`Вход: ${fmt({ ...score(target), ms: 0 })}`);
+if (dynamicSeconds) {
+  const steps = Math.round(dynamicSeconds * dynamicHz), h = 1 / dynamicHz;
+  if (Math.abs(steps * h - dynamicSeconds) > 1e-9)
+    throw new Error('Горизонт динамики не кратен шагу');
+  const initial = project(basePos);
+  if (initial.primal >= 1e-8 || initial.dual >= 1e-8 || initial.cgCaps)
+    throw new Error('Исходная форма не доведена до запуска динамики');
+  let p = initial.pos, prev = p.slice(), state = initial.state;
+  const k = 3 * cl.clew, d0 = sheetDistance(p);
+  const direction = [(p[k] - sheetLead[0]) / d0,
+    (p[k + 1] - sheetLead[1]) / d0, (p[k + 2] - sheetLead[2]) / d0];
+  const force = new Float64Array(3 * N), forceSum = [0, 0, 0];
+  if (dynamicLoad === 'clew') {
+    for (let j = 0; j < 3; j++) force[k + j] = clewForce * direction[j];
+  } else {
+    for (let a = 0; a < N; a++)
+      for (let j = 0; j < 3; j++)
+        force[3 * a + j] = frozenPressure[a] * frozenNormals[3 * a + j];
+  }
+  for (let a = 0; a < N; a++)
+    for (let j = 0; j < 3; j++) forceSum[j] += force[3 * a + j];
+  let maxAcceleration = 0, maxAccelNode = -1;
+  for (let a = 0; a < N; a++) if (!fixed[a]) {
+    const q = Math.hypot(force[3 * a], force[3 * a + 1], force[3 * a + 2]) / cl.mass[a];
+    if (q > maxAcceleration) { maxAcceleration = q; maxAccelNode = a; }
+  }
+  const decay = Math.exp(-dampHz * h);
+  let sum = 0, sum2 = 0, nWindow = 0, totalMs = 0, totalIter = 0;
+  let maxBoard = 0, maxSheet = 0, maxStretch = 0, failed = 0;
+  console.log(`Динамика: ${steps} подшагов по ${h.toFixed(6)} с, горизонт ${dynamicSeconds} с, ` +
+    `нагрузка ${dynamicLoad === 'clew' ? `точечная ${clewForce} Н от обуха` : 'замороженное давление'} ` +
+    `(сумма ${forceSum.map(x => x.toFixed(3)).join('/')} Н), затухание ${dampHz} 1/с; ` +
+    `нулевая начальная скорость, исходная проекция ${initial.used} итераций`);
+  console.log(`Макс. ускорение свободного узла ${maxAcceleration.toFixed(3)} м/с² ` +
+    `(строка ${Math.floor(maxAccelNode / cols)}, столбец ${maxAccelNode % cols}), ` +
+    `свободный прогноз за один шаг ${(1000 * h * h * maxAcceleration).toFixed(3)} мм`);
+  console.log('время с | реакция шкота Н | зазор шкота мм | узел середины строки 5: x/y/z м | итераций');
+  for (let i = 1; i <= steps; i++) {
+    const input = p.slice();
+    for (let a = 0; a < N; a++) {
+      if (fixed[a]) continue;
+      for (let j = 0; j < 3; j++)
+        input[3 * a + j] += decay * (p[3 * a + j] - prev[3 * a + j]) +
+          h * h * force[3 * a + j] / cl.mass[a];
+    }
+    const result = project(input, state);
+    if (result.primal >= 1e-8 || result.dual >= 1e-8 || result.cgCaps) {
+      failed = i;
+      console.log(`Остановка на шаге ${i}: остатки ${result.primal.toExponential(2)} м / ` +
+        `${result.dual.toExponential(2)} кг·м, ${result.used} итераций, ` +
+        `${result.ms.toFixed(1)} мс, CG лимитных ${result.cgCaps}`);
+      break;
+    }
+    totalMs += result.ms; totalIter += result.used;
+    maxBoard = Math.max(maxBoard, result.board);
+    maxSheet = Math.max(maxSheet, result.sheetExcess);
+    maxStretch = Math.max(maxStretch, result.maxAbs);
+    prev = p; p = result.pos; state = result.state;
+    const reaction = result.sheetMultiplier / (h * h);
+    if (i > steps / 2) { sum += reaction; sum2 += reaction * reaction; nWindow++; }
+    if (i === Math.round(steps / 2) || i === steps) {
+      const m = 3 * cl.ix(5, (cols - 1) / 2);
+      console.log(`${(i * h).toFixed(3)} | ${reaction.toFixed(3)} | ` +
+        `${(1000 * (sheetLen - result.sheetSpan)).toFixed(4)} | ` +
+        `${p[m].toFixed(6)}/${p[m + 1].toFixed(6)}/${p[m + 2].toFixed(6)} | ${result.used}`);
+    }
+  }
+  if (!failed) {
+    const mean = sum / nWindow, rms = Math.sqrt(Math.max(0, sum2 / nWindow - mean * mean));
+    const m = 3 * cl.ix(5, (cols - 1) / 2);
+    console.log(`Итого: средняя реакция за вторую половину ${mean.toFixed(3)} Н, ` +
+      `RMS ${rms.toFixed(3)} Н; центр строки 5 ` +
+      `${p[m].toFixed(6)}/${p[m + 1].toFixed(6)}/${p[m + 2].toFixed(6)} м; ` +
+      `макс. растяжение ${(1000 * maxStretch).toFixed(6)} мм, ` +
+      `дощечка ${(1000 * maxBoard).toFixed(6)} мм, ` +
+      `шкот +${(1000 * maxSheet).toFixed(6)} мм; ` +
+      `${totalIter} итераций, ${totalMs.toFixed(1)} мс`);
+  }
+  if (failed || (requireConverged && (maxBoard > 1e-9 || maxSheet > 1e-8 || maxStretch > 1e-8)))
+    process.exitCode = 1;
+} else if (sequence) {
   if (!rigidBoard) throw new Error('Для последовательности требуется точная дощечка');
   let warmState = null, coldMs = 0, warmMs = 0, coldIter = 0, warmIter = 0;
   let coldCaps = 0, warmCaps = 0, maxDiff = 0, maxBoard = 0, maxStretch = 0;

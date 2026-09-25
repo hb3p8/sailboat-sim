@@ -603,6 +603,26 @@ ADMM: при `--rigid-board --board-material` верхние промежуто�
 возмущённого снимка, без аэродинамики, браузера и нескольких подшагов.
 Увеличением лимита лишь доказана достижимость, а не пригодность метода.
 
+Проверен и перенос состояния ADMM между последовательными проекциями:
+одна и та же исходная сеть получает 60 заданных малых изменений формы
+`0→0.1→0` м; каждую цель решают холодным и тёплым стартом с **тем же**
+остатком `<1e-8` м и точной дощечкой. Это кинематическая проба стоимости,
+а не динамика с ветром, шкотом или инерцией.
+
+| Сеть | Внешних итераций за 60 проекций: холодный / тёплый | Время, с: холодный / тёплый | Тёплый на одну проекцию | Наибольшая разность координат двух решений |
+|---:|---:|---:|---:|---:|
+| 11×9 | 128409 / 102235 | 6.04 / 4.42 | ~74 мс | 0.0025 мм |
+| 11×17 | 104188 / 85492 | 14.24 / 8.41 | ~140 мс | 0.0045 мм |
+| 11×33 | 96089 / 77857 | 23.07 / 14.90 | ~248 мс | 0.0086 мм |
+
+Ни один из 360 холодных или тёплых кадров не упёрся в лимит 4000,
+геометрический остаток дощечки нулевой. Тёплый старт ускоряет мелкие
+шаги, но остаётся намного дороже 16.7 мс всего кадра при 60 Гц ещё
+**до** мягких связей, аэродинамики и лодки. При 20 более крупных шагах
+на 11×33 он, наоборот, занял 6.05 против 5.86 с холодного старта;
+считать перенос состояния универсальным ускорением нельзя. Это
+вычислительный NO-GO нынешнего ADMM, не физический отказ ткани.
+
 ## Связанный опыт: отрицательный результат для штатного включения
 
 Четыре клетки прежнего аудита, TWS 6 м/с, окно 25…30 с после независимого
@@ -665,6 +685,10 @@ node tests/cloth-net-admm.mjs --cols=33 --outer=400 --rho-factor=100 --perturb=0
 node tests/cloth-net-admm.mjs --cols=9 --outer=4000 --rho-factor=1 --perturb=0.1 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --cols=17 --outer=4000 --rho-factor=1 --perturb=0.1 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --cols=33 --outer=4000 --rho-factor=1 --perturb=0.1 --board-material --rigid-board --require-converged
+node tests/cloth-net-admm.mjs --cols=9 --outer=4000 --rho-factor=1 --perturb=0.1 --board-material --rigid-board --sequence=60 --require-converged
+node tests/cloth-net-admm.mjs --cols=17 --outer=4000 --rho-factor=1 --perturb=0.1 --board-material --rigid-board --sequence=60 --require-converged
+node tests/cloth-net-admm.mjs --cols=33 --outer=4000 --rho-factor=1 --perturb=0.1 --board-material --rigid-board --sequence=20 --require-converged
+node tests/cloth-net-admm.mjs --cols=33 --outer=4000 --rho-factor=1 --perturb=0.1 --board-material --rigid-board --sequence=60 --require-converged
 node tests/local-pressure-coupling.test.mjs
 node tests/local-pressure-frozen.mjs
 node tests/local-pressure-cloth-resolution.mjs --sheet=9 --tack=1 --baseline

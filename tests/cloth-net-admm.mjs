@@ -10,11 +10,13 @@ const cols = Number(opt('cols', '9'));
 const maxOuter = Number(opt('outer', '400'));
 const rhoFactor = Number(opt('rho-factor', '100'));
 const perturb = Number(opt('perturb', '0.1'));
+const sequence = Number(opt('sequence', '0'));
 const boardMaterial = process.argv.includes('--board-material');
 const rigidBoard = process.argv.includes('--rigid-board');
 const requireConverged = process.argv.includes('--require-converged');
 if (!Number.isInteger(cols) || cols < 5 || cols > 65 ||
     !Number.isInteger(maxOuter) || maxOuter < 1 || maxOuter > 8192 ||
+    !Number.isInteger(sequence) || sequence < 0 || sequence > 120 ||
     !(rhoFactor > 0 && rhoFactor <= 1e4) || !(perturb >= 0 && perturb <= 1) ||
     (rigidBoard && !boardMaterial))
   throw new Error('Неверные параметры стенда ткани');
@@ -43,22 +45,25 @@ const ei = Int32Array.from(hard.map(k => cl.ci[k]));
 const ej = Int32Array.from(hard.map(k => cl.cj[k]));
 const rest = Float64Array.from(hard.map(k => cl.rest[k]));
 const fixed = Uint8Array.from(cl.w, x => x === 0 ? 1 : 0);
-const target = cl.pos.slice();
-const base = scoreBase();
+const basePos = cl.pos.slice();
+const base = scoreBase(basePos);
+const shape = new Float64Array(3 * N);
 for (let i = 0; i < N; i++) {
   if (fixed[i]) continue;
   const r = Math.floor(i / cols), c = i % cols;
   const f = Math.sin(Math.PI * r / (cl.rows - 1)) * Math.sin(Math.PI * c / (cols - 1));
-  target[3 * i + 1] += perturb * f;
-  target[3 * i + 2] += perturb * 0.5 * f;
+  shape[3 * i + 1] = f;
+  shape[3 * i + 2] = 0.5 * f;
 }
+const makeTarget = amplitude => Float64Array.from(basePos, (x, i) => x + amplitude * shape[i]);
+const target = makeTarget(perturb);
 
-function scoreBase() {
+function scoreBase(p) {
   let maxRel = 0, maxAbs = 0, worst = -1, worstD = 0;
   for (let k = 0; k < H; k++) {
     const a = 3 * ei[k], b = 3 * ej[k];
-    const d = Math.hypot(target[b] - target[a], target[b + 1] - target[a + 1],
-      target[b + 2] - target[a + 2]);
+    const d = Math.hypot(p[b] - p[a], p[b + 1] - p[a + 1],
+      p[b + 2] - p[a + 2]);
     if (d / rest[k] - 1 > maxRel) {
       maxRel = d / rest[k] - 1; worst = k; worstD = d;
     }
@@ -67,7 +72,7 @@ function scoreBase() {
   return { maxRel, maxAbs, worst, worstD };
 }
 
-function score(p) {
+function score(p, reference = target) {
   let maxRel = 0, maxAbs = 0, count = 0, total = 0;
   for (let k = 0; k < H; k++) {
     const a = 3 * ei[k], b = 3 * ej[k];
@@ -80,8 +85,8 @@ function score(p) {
   }
   let displacement = 0;
   for (let i = 0; i < N; i++) if (!fixed[i]) {
-    const j = 3 * i, dx = p[j] - target[j], dy = p[j + 1] - target[j + 1],
-      dz = p[j + 2] - target[j + 2];
+    const j = 3 * i, dx = p[j] - reference[j], dy = p[j + 1] - reference[j + 1],
+      dz = p[j + 2] - reference[j + 2];
     displacement += cl.mass[i] * (dx * dx + dy * dy + dz * dz);
   }
   const R = cl.rows - 1, a = 3 * cl.ix(R, 0), z = 3 * cl.ix(R, cols - 1);
@@ -109,8 +114,10 @@ function sweep(iter) {
   return { ...score(obj.pos), ms: performance.now() - start };
 }
 
-function project() {
-  const p = target.slice(), z = new Float64Array(3 * H), u = new Float64Array(3 * H);
+function project(input = target, state = null) {
+  const start = performance.now();
+  const p = input.slice(), z = state?.z ?? new Float64Array(3 * H);
+  const u = state?.u ?? new Float64Array(3 * H);
   // При --rigid-board внутренние узлы верхней строки не имеют собственных
   // степеней свободы: x_c=(1-t)x_фал+t*x_задний_конец. Это точная линейная
   // кинематика дощечки, а не её посадка ПОСЛЕ проекции ткани.
@@ -119,17 +126,17 @@ function project() {
   const rhsMass = Array.from({ length: 3 }, () => new Float64Array(N));
   const top = cl.rows - 1, head = cl.ix(top, 0), aft = cl.ix(top, cols - 1);
   for (let i = 0; i < N; i++) {
-    if (fixed[i]) { map[i] = -1; offset.set(target.subarray(3 * i, 3 * i + 3), 3 * i); }
+    if (fixed[i]) { map[i] = -1; offset.set(input.subarray(3 * i, 3 * i + 3), 3 * i); }
     else if (rigidBoard && i > head && i < aft) {
       const t = (i - head) / (cols - 1);
       map[i] = aft; weight[i] = t;
-      for (let j = 0; j < 3; j++) offset[3 * i + j] = (1 - t) * target[3 * head + j];
+      for (let j = 0; j < 3; j++) offset[3 * i + j] = (1 - t) * input[3 * head + j];
     } else { map[i] = i; weight[i] = 1; }
     if (map[i] >= 0) {
       const v = map[i], a = weight[i];
       massEff[v] += cl.mass[i] * a * a;
       for (let j = 0; j < 3; j++)
-        rhsMass[j][v] += cl.mass[i] * a * (target[3 * i + j] - offset[3 * i + j]);
+        rhsMass[j][v] += cl.mass[i] * a * (input[3 * i + j] - offset[3 * i + j]);
     }
   }
   const va = new Int32Array(H), vb = new Int32Array(H);
@@ -145,15 +152,15 @@ function project() {
     for (let j = 0; j < 3; j++)
       edgeOffset[3 * k + j] = offset[3 * b + j] - offset[3 * a + j];
   }
-  for (let k = 0; k < H; k++) {
+  if (!state) for (let k = 0; k < H; k++) {
     const a = 3 * ei[k], b = 3 * ej[k], h = 3 * k;
     const dx = p[b] - p[a], dy = p[b + 1] - p[a + 1], dz = p[b + 2] - p[a + 2];
     const d = Math.hypot(dx, dy, dz), s = Math.min(1, rest[k] / d);
     z[h] = dx * s; z[h + 1] = dy * s; z[h + 2] = dz * s;
   }
-  const y = Array.from({ length: 3 }, () => new Float64Array(N));
-  for (let i = 0; i < N; i++) if (map[i] === i)
-    for (let j = 0; j < 3; j++) y[j][i] = target[3 * i + j];
+  const y = state?.y ?? Array.from({ length: 3 }, () => new Float64Array(N));
+  if (!state) for (let i = 0; i < N; i++) if (map[i] === i)
+    for (let j = 0; j < 3; j++) y[j][i] = input[3 * i + j];
   const rhs = new Float64Array(N), q = new Float64Array(N);
   const r = new Float64Array(N), d = new Float64Array(N), Ap = new Float64Array(N);
   const apply = (v, out) => {
@@ -202,7 +209,6 @@ function project() {
     cgCalls++; cgIters += used;
     if (residual > tol) cgCaps++;
   };
-  const start = performance.now();
   let primal = Infinity, dual = Infinity, used = 0;
   for (let it = 0; it < maxOuter; it++) {
     used++;
@@ -232,8 +238,8 @@ function project() {
     }
     if (primal < 1e-8 && dual < 1e-8) break;
   }
-  return { ...score(p), ms: performance.now() - start, used, primal, dual,
-    cgMean: cgIters / cgCalls, cgCaps };
+  return { ...score(p, input), ms: performance.now() - start, used, primal, dual,
+    cgMean: cgIters / cgCalls, cgCaps, pos: p, state: { z, u, y } };
 }
 
 const fmt = x => `макс. растяжение ${(100 * x.maxRel).toFixed(3)} % / ${(1000 * x.maxAbs).toFixed(3)} мм; ` +
@@ -260,10 +266,42 @@ console.log(`Дощечка ${boardMaterial ? 'по материальным д�
   `прямое ограничение ${directRest?.toFixed(6) ?? 'нет'} м, ` +
   `расстояние концов ${topSpan.toFixed(6)} м, rowW ${cl.rowW[top].toFixed(6)} м`);
 console.log(`Вход: ${fmt({ ...score(target), ms: 0 })}`);
-for (const iter of [40, 160, 640]) console.log(`ГЗ ${iter}: ${fmt(sweep(iter))}`);
-const result = project();
-console.log(`ADMM ${rigidBoard ? 'с точной дощечкой' : 'без дощечки'} ${maxOuter}: ${fmt(result)}; итераций ${result.used}; ` +
-  `остатки ${result.primal.toExponential(2)}/${result.dual.toExponential(2)} м; ` +
-  `CG сред. ${result.cgMean.toFixed(1)}, лимитных ${result.cgCaps}`);
-if (requireConverged && (result.primal >= 1e-8 || result.dual >= 1e-8 || result.cgCaps))
-  process.exitCode = 1;
+if (sequence) {
+  if (!rigidBoard) throw new Error('Для последовательности требуется точная дощечка');
+  let warmState = null, coldMs = 0, warmMs = 0, coldIter = 0, warmIter = 0;
+  let coldCaps = 0, warmCaps = 0, maxDiff = 0, maxBoard = 0, maxStretch = 0;
+  console.log(`Последовательность ${sequence} кадров: плавный выход 0→${perturb} м и возврат, одна и та же цель для холодного/тёплого решения`);
+  console.log('кадр | амплитуда м | холодный/тёплый: итераций | тёплый остаток м | расхождение координат мм');
+  for (let k = 0; k < sequence; k++) {
+    const phase = (k + 1) / sequence;
+    const amplitude = perturb * (phase <= 0.5 ? 2 * phase : 2 * (1 - phase));
+    const input = makeTarget(amplitude);
+    const cold = project(input);
+    const warm = k ? project(input, warmState) : cold;
+    warmState = warm.state;
+    coldMs += cold.ms; warmMs += warm.ms;
+    coldIter += cold.used; warmIter += warm.used;
+    if (cold.primal >= 1e-8 || cold.dual >= 1e-8 || cold.cgCaps) coldCaps++;
+    if (warm.primal >= 1e-8 || warm.dual >= 1e-8 || warm.cgCaps) warmCaps++;
+    maxBoard = Math.max(maxBoard, cold.board, warm.board);
+    maxStretch = Math.max(maxStretch, cold.maxRel, warm.maxRel);
+    let diff = 0;
+    for (let i = 0; i < 3 * N; i++) diff = Math.max(diff, Math.abs(cold.pos[i] - warm.pos[i]));
+    maxDiff = Math.max(maxDiff, diff);
+    console.log(`${k + 1} | ${amplitude.toFixed(4)} | ${cold.used}/${warm.used} | ` +
+      `${Math.max(warm.primal, warm.dual).toExponential(2)} | ${(1000 * diff).toFixed(4)}`);
+  }
+  console.log(`Итого: холодный/тёплый ${coldIter}/${warmIter} итераций, ` +
+    `${coldMs.toFixed(1)}/${warmMs.toFixed(1)} мс; недоведённых кадров ${coldCaps}/${warmCaps}; ` +
+    `макс. расхождение ${(1000 * maxDiff).toFixed(4)} мм, ` +
+    `дощечка ${(1000 * maxBoard).toFixed(4)} мм, растяжение ${(100 * maxStretch).toFixed(5)} %`);
+  if (requireConverged && (coldCaps || warmCaps)) process.exitCode = 1;
+} else {
+  for (const iter of [40, 160, 640]) console.log(`ГЗ ${iter}: ${fmt(sweep(iter))}`);
+  const result = project();
+  console.log(`ADMM ${rigidBoard ? 'с точной дощечкой' : 'без дощечки'} ${maxOuter}: ${fmt(result)}; итераций ${result.used}; ` +
+    `остатки ${result.primal.toExponential(2)}/${result.dual.toExponential(2)} м; ` +
+    `CG сред. ${result.cgMean.toFixed(1)}, лимитных ${result.cgCaps}`);
+  if (requireConverged && (result.primal >= 1e-8 || result.dual >= 1e-8 || result.cgCaps))
+    process.exitCode = 1;
+}

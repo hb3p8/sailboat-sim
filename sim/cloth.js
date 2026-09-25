@@ -33,7 +33,7 @@
 import { edgeFn, sailSagAt, STRIPS, NCHORD, gennakerClew,
          gennakerSheetLen, designAt,
          DESIGN_DRAFT, DESIGN_ENTRY, DESIGN_EXIT } from './aero.js';
-import { localPressure, pressureToNodes } from './local-pressure.js';
+import { localPressureForRow, pressureToNodes } from './local-pressure.js';
 
 // Сетка ткани. Строк — как у отрисовки (SAIL_ROWS), чтобы полотно и обвод резались
 // по одним и тем же высотам; столбцов девять при трёх панелях решётки, то есть
@@ -1349,25 +1349,8 @@ export class Cloth {
         if (!g?.live || !b.rig.latOn || b.rig.latOn[base + si]) {
           profiles.push({ ok: false, reason: 'inactive-or-lattice' }); continue;
         }
-        const a = this.ix(r, 0) * 3, z = this.ix(r, this.cols - 1) * 3;
-        const tx = p[z] - p[a], ty = p[z + 1] - p[a + 1], tz = p[z + 2] - p[a + 2];
-        const chord = Math.hypot(tx, ty, tz);
-        if (chord < 1e-8) { profiles.push({ ok: false, reason: 'degenerate-row' }); continue; }
-        const nx = this.nrm[a], ny = this.nrm[a + 1], nz = this.nrm[a + 2];
-        const points = [];
-        let rowArea = 0, target = 0, arc = 0;
-        for (let c = 0; c < this.cols; c++) {
-          const i = this.ix(r, c), k = i * 3;
-          const dx = p[k] - p[a], dy = p[k + 1] - p[a + 1], dz = p[k + 2] - p[a + 2];
-          points.push([(dx * tx + dy * ty + dz * tz) / chord, dx * nx + dy * ny + dz * nz]);
-          rowArea += area[i]; target += pressureForce[i];
-          if (c) arc += Math.hypot(points[c][0] - points[c - 1][0], points[c][1] - points[c - 1][1]);
-        }
-        if (!(rowArea > 0) || !(arc > 0)) { profiles.push({ ok: false, reason: 'degenerate-area' }); continue; }
-        const v = g.ve / Math.hypot(g.d1, g.d2);
-        const profile = localPressure({ points,
-          flow: [v * (g.d1 * tx + g.d2 * ty) / chord, v * (g.d1 * nx + g.d2 * ny)],
-          rho: this.rhoAir, span: rowArea / arc, normalForce: target,
+        const profile = localPressureForRow({ pos: p, normals: this.nrm,
+          area, pressureForce, row: r, cols: this.cols, strip: g, rho: this.rhoAir,
           panels: b.o.localPressure.panels || 16 });
         profiles.push(profile);
         if (profile.ok) pressureForce.set(pressureToNodes(profile, this.cols), this.ix(r, 0));

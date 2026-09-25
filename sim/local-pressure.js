@@ -86,15 +86,48 @@ export function localPressure({ points, flow, rho, span, normalForce, panels = 1
     residual = Math.max(residual, Math.abs(ax - rhs[i]) / Math.max(1, norm));
   }
   if (residual > 1e-8) return { ok: false, reason: 'residual', residual };
-  const pressure = [], forces = [], at = [];
+  const pressure = [], forces = [], at = [], atChord = [];
   for (let i = 0; i < panels; i++) {
     const dp = -rho * speed * speed * ut[i] * x[i] / lengths[i];
     pressure.push(dp);
     forces.push(dp * lengths[i] * chord * span * tangent[i][0]);
     at.push((u[i] + u[i + 1]) / 2);
+    atChord.push((edges[i][0] + edges[i + 1][0]) / 2);
   }
-  return { ok: true, pressure, forces, at, edges: u, residual,
+  return { ok: true, pressure, forces, at, atChord, edges: u,
+           edgesChord: edges.map(p => p[0]), residual,
            downwash: x[panels] * speed, circulation: x.slice(0, panels).reduce((s, v) => s + v, 0) * speed * chord };
+}
+
+// Та же проекция летящей строки, что использует Cloth.advance. Функция
+// отдельно вызывается на замороженном снимке без шага ткани: профиль тогда
+// зависит только от формы и уже заданной нормальной нагрузки строки.
+export function localPressureForRow({ pos, normals, area, pressureForce,
+                                      row, cols, strip, rho, panels = 16 }) {
+  const first = row * cols * 3, last = (row * cols + cols - 1) * 3;
+  const tx = pos[last] - pos[first], ty = pos[last + 1] - pos[first + 1],
+        tz = pos[last + 2] - pos[first + 2];
+  const chord = Math.hypot(tx, ty, tz);
+  if (chord < 1e-8) return { ok: false, reason: 'degenerate-row' };
+  const nx = normals[first], ny = normals[first + 1], nz = normals[first + 2];
+  const points = [];
+  let rowArea = 0, target = 0, arc = 0;
+  for (let c = 0; c < cols; c++) {
+    const i = row * cols + c, k = i * 3;
+    const dx = pos[k] - pos[first], dy = pos[k + 1] - pos[first + 1],
+          dz = pos[k + 2] - pos[first + 2];
+    points.push([(dx * tx + dy * ty + dz * tz) / chord,
+                 dx * nx + dy * ny + dz * nz]);
+    rowArea += area[i]; target += pressureForce[i];
+    if (c) arc += Math.hypot(points[c][0] - points[c - 1][0],
+                             points[c][1] - points[c - 1][1]);
+  }
+  if (!(rowArea > 0) || !(arc > 0)) return { ok: false, reason: 'degenerate-area' };
+  const v = strip.ve / Math.hypot(strip.d1, strip.d2);
+  return localPressure({ points,
+    flow: [v * (strip.d1 * tx + strip.d2 * ty) / chord,
+           v * (strip.d1 * nx + strip.d2 * ny)],
+    rho, span: rowArea / arc, normalForce: target, panels });
 }
 
 // Консервативный перенос сосредоточенных сил на материальные узлы строки:

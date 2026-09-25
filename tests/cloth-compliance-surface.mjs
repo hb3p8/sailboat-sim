@@ -96,8 +96,26 @@ const measure = () => {
     minArea = Math.min(minArea, Math.hypot(...v) / Math.hypot(...ref));
     minFacing = Math.min(minFacing, dot(v, ref) / dot(ref, ref));
   }
+  const residual = force.slice();
+  for (const c of [...soft, ...areas, ...hinges]) {
+    const { C, grad } = c.value(p), load = -C / c.alpha;
+    for (const [i, g] of grad) for (let j = 0; j < 3; j++)
+      residual[3 * i + j] += load * g[j];
+  }
+  for (const c of hard) {
+    const { grad } = c.value(p), load = c.lambda / (h * h);
+    for (const [i, g] of grad) for (let j = 0; j < 3; j++)
+      residual[3 * i + j] += load * g[j];
+  }
+  let residualSquared = 0, maxResidual = 0;
+  for (let i = 0; i < count; i++) if (w[i]) {
+    const norm = Math.hypot(...residual.subarray(3 * i, 3 * i + 3));
+    residualSquared += norm * norm;
+    maxResidual = Math.max(maxResidual, norm);
+  }
   return { z: p[3 * center + 2], stretch, minArea, minFacing,
-    meanDz: sumDz / moving, minDz, maxDz, work };
+    meanDz: sumDz / moving, minDz, maxDz, work,
+    rmsResidual: Math.sqrt(residualSquared / moving), maxResidual };
 };
 const show = (t, m) => console.log(`${t.toFixed(3)} с: высота середины ${m.z.toFixed(6)} м, ` +
   `Δz ${(1000 * (m.z - initial[3 * center + 2])).toFixed(3)} мм, ` +
@@ -105,7 +123,9 @@ const show = (t, m) => console.log(`${t.toFixed(3)} с: высота серед�
   `${(1000 * m.minDz).toFixed(3)}/${(1000 * m.maxDz).toFixed(3)} мм, ` +
   `работа ${m.work.toExponential(3)} Дж, ` +
   `ребро +${(1000 * m.stretch).toFixed(5)} мм, ` +
-  `мин. площадь ${m.minArea.toFixed(5)}, направление ${m.minFacing.toFixed(5)}`);
+  `мин. площадь ${m.minArea.toFixed(5)}, направление ${m.minFacing.toFixed(5)}, ` +
+  `невязка силы RMS/макс. ${m.rmsResidual.toExponential(3)}/` +
+  `${m.maxResidual.toExponential(3)} Н`);
 const h = 1 / hz, decay = Math.exp(-6 * h), steps = seconds * hz;
 let minFacingEver = Infinity, maxStretchEver = 0;
 const start = performance.now();
@@ -128,7 +148,7 @@ for (let k = 1; k <= steps; k++) {
   prev.set(old);
   const result = measure();
   if (![result.z, result.stretch, result.minArea, result.minFacing,
-        result.meanDz, result.work].every(Number.isFinite))
+        result.meanDz, result.work, result.rmsResidual, result.maxResidual].every(Number.isFinite))
     throw new Error(`Нечисловое состояние 3D-поверхности на шаге ${k}`);
   minFacingEver = Math.min(minFacingEver, result.minFacing);
   maxStretchEver = Math.max(maxStretchEver, result.stretch);

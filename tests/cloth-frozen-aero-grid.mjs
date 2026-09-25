@@ -14,6 +14,7 @@ const fixedLoad = process.argv.includes('--fixed-load');
 const fixedNormals = fixedLoad || process.argv.includes('--fixed-normals');
 const edgeAudit = process.argv.includes('--edges');
 const cellAudit = process.argv.includes('--cells');
+const cutNesting = process.argv.includes('--cut-nesting');
 const bend = process.argv.some(s => s.startsWith('--bend=')) ? arg('bend', 0.05) : null;
 const cols = (process.argv.find(s => s.startsWith('--cols='))?.split('=')[1] ?? '9,17,33')
   .split(',').map(Number);
@@ -92,6 +93,7 @@ console.log(`Опорная ткань 11×9: вход ${minShape(reference).ang
             `тяга ${b.rig.stripState.slice(12).reduce((s, d) => s + d.drive, 0).toFixed(1)} Н`);
 console.log(`Ткань: ${iter} проходов, ${clothHz} Гц, изгиб ${bend == null ? 'штатный' : bend}, нормали ${fixedNormals ? 'зафиксированы на первом подшаге' : 'следуют за тканью'}, площадь нагрузки ${fixedLoad ? 'зафиксирована на первом подшаге' : 'следует за тканью'}`);
 console.log('столбцов | время ткани с | мин. вход °/строка | max ход назад/вывернуто % | пузо строки 5 % | Fx/Fy ткани Н');
+const priorCuts = [];
 for (const n of cols) {
   const cl = new Cloth(b.rig.sails[2], 2, { rows: 11, cols: n, iter,
     ...(bend == null ? {} : { bend }) });
@@ -124,6 +126,22 @@ for (const n of cols) {
       console.log(`${n} | крой/первый шаг | ${cut.angle.toFixed(1)}/${fly.angle.toFixed(1)}° | ` +
         `${(100 * cut.maxBack).toFixed(1)}/${(100 * cut.maxFlip).toFixed(1)} % по крою; ` +
         `${(100 * fly.maxBack).toFixed(1)}/${(100 * fly.maxFlip).toFixed(1)} % в полёте`);
+      if (cutNesting) {
+        for (const prev of priorCuts) {
+          if ((n - 1) % (prev.cols - 1) !== 0) continue;
+          const stride = (n - 1) / (prev.cols - 1);
+          let worst = { d: 0, row: 0, col: 0 };
+          for (let r = 0; r < cl.rows; r++) for (let c = 0; c < prev.cols; c++) {
+            const a = cl.ix(r, c * stride), z = r * prev.cols + c;
+            const d = Math.hypot(cl.dx[a] - prev.dx[z], cl.dy[a] - prev.dy[z],
+                                 cl.dz[a] - prev.dz[z]);
+            if (d > worst.d) worst = { d, row: r, col: c };
+          }
+          console.log(`${n} | крой против ${prev.cols}: общий узел max ${worst.d.toExponential(3)} м, строка ${worst.row}, столбец ${worst.col}`);
+          if (worst.d > 1e-9) throw new Error('Вложенные сетки имеют разный крой в общем узле');
+        }
+        priorCuts.push({ cols: n, dx: cl.dx.slice(), dy: cl.dy.slice(), dz: cl.dz.slice() });
+      }
     }
     const time = (i + 1) / clothHz;
     if (![5, 10, 20, 30, ...(edgeAudit || cellAudit ? [0.5, 1, 2, 3] : [])].includes(time)) continue;

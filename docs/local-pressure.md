@@ -328,6 +328,15 @@
 уложение почти нерастяжимой ткани. Натяжений/реакций в существующем PBD
 нет, поэтому физический выбор ветви и сеточная сходимость остаются NO-GO.
 
+Проверка `--cut-nesting` сопоставляет трёхмерные координаты проектной
+поверхности в **общих узлах** сеток 9, 17 и 33 (все 11 строк). На обоих
+галсах максимум разности для пар 9↔17, 9↔33, 17↔33 равен ровно
+`0.000e+0 м`; тест теперь останавливается при несовпадении более `1e−9 м`.
+Разница угла входа *дискретных* сечений кроя на первом шаге поэтому
+объясняется разрешением касательной у передней кромки, а не различием
+проектной поверхности в совпадающих точках. Это снимает ещё одну простую
+причину складки, но не подтверждает сходимость динамики ткани.
+
 ## Связанный опыт: отрицательный результат для штатного включения
 
 Четыре клетки прежнего аудита, TWS 6 м/с, окно 25…30 с после независимого
@@ -385,6 +394,8 @@ node tests/cloth-frozen-aero-grid.mjs --tack=1 --sheet=9 --cols=17,33 --edges
 node tests/cloth-frozen-aero-grid.mjs --tack=-1 --sheet=9 --cols=9,17,33 --edges
 node tests/cloth-frozen-aero-grid.mjs --tack=1 --sheet=9 --cols=9,17,33 --fixed-load --cells
 node tests/cloth-frozen-aero-grid.mjs --tack=-1 --sheet=9 --cols=9,17,33 --fixed-load --cells
+node tests/cloth-frozen-aero-grid.mjs --tack=1 --sheet=9 --cols=9,17,33 --cut-nesting
+node tests/cloth-frozen-aero-grid.mjs --tack=-1 --sheet=9 --cols=9,17,33 --cut-nesting
 node tests/gennaker-pressure-audit.mjs --one-start --local-pressure --panels=16
 node tests/gennaker-pressure-audit.mjs --one-start --local-pressure --panels=32
 node tests/gennaker-pressure-audit.mjs --one-start --local-pressure --panels=64

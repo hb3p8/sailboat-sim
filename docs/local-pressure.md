@@ -792,6 +792,47 @@ runtime.
 временную сходимость недоведённой формы. Он оставлен только в стенде как
 отрицательный контроль. Runtime и пороги не менялись.
 
+### Плечо жёсткой дощечки: численная сходимость есть, физического GO нет
+
+Трассировка невязок при `rho-local ×100` показала конкретное узкое место:
+на 11×17 после 8192 итераций под замороженным давлением единственная
+растянутая более чем на 10 нм жёсткая связь идёт от галсового угла к
+первому внутреннему узлу жёсткой дощечки (`0→171`). Её плечо в
+исключённой координате дощечки — `1/16`; превышение `0.000272 мм`
+почти целиком объясняет первичную невязку `2.72e-7 м`. Двойственная
+невязка уже `5.58e-12 кг·м`. Нормировка штрафа этой связи на квадрат
+плеча меняет перекос: первичная невязка падает до `6.55e-9 м`, но
+двойственная растёт до `2.99e-6 кг·м` на лимите итераций. Это
+диагностика обусловленности, а не изменение ткани.
+
+Промежуточная нормировка на **первую** степень плеча при той же
+нагрузке, материале, дощечке, шкоте `5.218 м` и неизменных допусках
+`1e-8 м / 1e-8 кг·м` довела все шесть шагов за `0.2 с` на 11×9/17/33
+при `1/30 с` и на 11×17/33 при `1/120 с`. На первом шаге 11×17/33
+требовались `6225/8158` итераций; последняя сетка почти исчерпывает
+лимит `8192`. Для 0.2 с цена и отклик таковы:
+
+| Сеть / шаг | Итераций суммарно | Время проекций | Реакция шкота в 0.2 с | Средняя реакция 0.1…0.2 с | x середины полотна в 0.2 с |
+|---|---:|---:|---:|---:|---:|
+| 11×9 / 1/30 с | 43477 | 1.916 с | 2.873 Н | 2.998 Н | 5.146982 м |
+| 11×17 / 1/30 с | 42744 | 4.486 с | 1.999 Н | 1.840 Н | 5.146878 м |
+| 11×33 / 1/30 с | 41853 | 7.461 с | 1.847 Н | 1.783 Н | 5.145731 м |
+| 11×17 / 1/120 с | 143506 | 11.794 с | 1.841 Н | 1.756 Н | 5.145434 м |
+| 11×33 / 1/120 с | 140242 | 24.324 с | 1.741 Н | 1.724 Н | 5.144536 м |
+
+Это **положительный контроль сходимости проектора** на коротком
+горизонте, но не положительный итог для генакера. Реакция шкота на
+11×9 и 11×33 при `1/30 с` отличается на 1.026 Н; даже между
+11×17 и 11×33 при `1/120 с` — на 0.100 Н в конечной точке.
+Уменьшение шага на 11×33 меняет её на 0.106 Н. Установившегося
+режима за 0.2 с нет; внешнее давление заморожено, мягкие связи и
+изгиб отсутствуют, обратная связь с лодкой отключена. Порядка
+`0.5…1 с` вычисления на каждый шаг также несовместимо с realtime.
+Нельзя трактовать эти числа как проверенную силу шкота, тем более
+подгонять по ним полярную тягу. Нужны более эффективный решатель,
+полная связанная физика и сравнение сетки/шага на осмысленном
+физическом горизонте. Штатный код, поляра и пороги не менялись.
+
 ## Связанный опыт: отрицательный результат для штатного включения
 
 Четыре клетки прежнего аудита, TWS 6 м/с, окно 25…30 с после независимого
@@ -881,6 +922,8 @@ node tests/cloth-net-admm.mjs --cols=9 --outer=4000 --rho-factor=1 --rho-local -
 node tests/cloth-net-admm.mjs --cols=9 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --cols=17 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --cols=33 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged
+for c in 9 17 33; do node tests/cloth-net-admm.mjs --cols=$c --outer=8192 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged; done
+for c in 17 33; do node tests/cloth-net-admm.mjs --cols=$c --outer=8192 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=120 --board-material --rigid-board --require-converged; done
 node tests/cloth-net-admm.mjs --cols=17 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --cols=33 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --solver=dual --dual-step=power --compare-solver --cols=9 --outer=8192 --rho-factor=1 --rho-local --perturb=0.1 --board-material --rigid-board --require-converged

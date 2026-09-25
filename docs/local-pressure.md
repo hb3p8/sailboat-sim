@@ -900,6 +900,26 @@ hard-only с замороженной аэродинамикой. Это **по�
 разогрев**, не GO для реального времени или правдоподобия управления.
 Штатная ткань, поляра и пороги не менялись.
 
+На более длинном, но всё ещё **замороженном** аэродинамическом входе
+гибрид довёл все 30 либо 120 подшагов за 1 с на 11×17 и 11×33:
+
+| Сеть / шаг | Реакция шкота в 0.5 → 1.0 с | Средняя / RMS за 0.5…1.0 с | x середины полотна в 1.0 с | Время проекций |
+|---|---:|---:|---:|---:|
+| 11×17 / 30 Гц | 3.633 → 5.229 Н | 4.424 / 0.471 Н | 5.208317 м | 5.888 с |
+| 11×33 / 30 Гц | 3.119 → 5.132 Н | 4.216 / 0.566 Н | 5.207419 м | 17.923 с |
+| 11×17 / 120 Гц | 3.583 → 5.007 Н | 4.229 / 0.427 Н | 5.202155 м | 4.888 с |
+| 11×33 / 120 Гц | 3.058 → 4.933 Н | 3.988 / 0.538 Н | 5.201720 м | 20.602 с |
+
+Реакция за вторую половину ещё явно растёт; принимать её за
+установившуюся нельзя. При 11×33 смена 30→120 Гц меняет силу в
+конечной точке на `0.199 Н`, а x середины — на `5.70 мм`; при
+120 Гц смена 11×17→11×33 — на `0.074 Н` и `0.435 мм`. Этот
+короткий численный свидетель подтверждает, что горизонт 0.2 с был
+недостаточен для физического вывода, а независимость от временного
+шага на 1 с ещё не показана. Сила не проходит обратную связь с
+аэродинамикой и корпусом; дальнейшее продление такой же замороженной
+пробы не заменит связанный опыт.
+
 ## Связанный опыт: отрицательный результат для штатного включения
 
 Четыре клетки прежнего аудита, TWS 6 м/с, окно 25…30 с после независимого
@@ -997,6 +1017,7 @@ node tests/cloth-net-admm.mjs --solver=coordinate --compare-solver --cols=9 --ou
 for c in 9 17 33; do node tests/cloth-net-admm.mjs --solver=coordinate --cols=$c --outer=8192 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.03333333333333333 --dynamic-hz=30 --board-material --rigid-board --require-converged; done
 for c in 9 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged; done
 for c in 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.2 --dynamic-hz=120 --board-material --rigid-board --require-converged; done
+for h in 30 120; do for c in 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=1 --dynamic-hz=$h --board-material --rigid-board --require-converged; done; done
 node tests/cloth-net-admm.mjs --cols=17 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --cols=33 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --solver=dual --dual-step=power --compare-solver --cols=9 --outer=8192 --rho-factor=1 --rho-local --perturb=0.1 --board-material --rigid-board --require-converged

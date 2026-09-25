@@ -10,9 +10,12 @@ const D = Math.PI / 180;
 const arg = (key, def) => Number(process.argv.find(s => s.startsWith(`--${key}=`))?.split('=')[1] ?? def);
 const tack = arg('tack', 1), sheet = arg('sheet', 9), iter = arg('iter', 40);
 const clothHz = arg('cloth-hz', 30);
+const fixedNormals = process.argv.includes('--fixed-normals');
+const bend = process.argv.some(s => s.startsWith('--bend=')) ? arg('bend', 0.05) : null;
 const cols = (process.argv.find(s => s.startsWith('--cols='))?.split('=')[1] ?? '9,17,33')
   .split(',').map(Number);
 if (![1, -1].includes(tack) || !(sheet > 0) || !Number.isInteger(iter) || iter < 1 ||
+    (bend != null && !(bend >= 0 && bend <= 1)) ||
     ![30, 60, 120].includes(clothHz) ||
     cols.some(x => !Number.isInteger(x) || x < 5 || x > 65))
   throw new Error('Неверные параметры стенда');
@@ -56,10 +59,19 @@ console.log(`Исходный максимальный разброс q по х�
 console.log(`Опорная ткань 11×9: вход ${minShape(reference).angle.toFixed(1)}°, ` +
             `пузо строки 5 ${(100 * reference.rowShape(5).camber).toFixed(1)} % хорды; ` +
             `тяга ${b.rig.stripState.slice(12).reduce((s, d) => s + d.drive, 0).toFixed(1)} Н`);
-console.log(`Ткань: ${iter} проходов, ${clothHz} Гц`);
+console.log(`Ткань: ${iter} проходов, ${clothHz} Гц, изгиб ${bend == null ? 'штатный' : bend}, нормали ${fixedNormals ? 'зафиксированы на первом подшаге' : 'следуют за тканью'}`);
 console.log('столбцов | время ткани с | мин. вход °/строка | max ход назад/вывернуто % | пузо строки 5 % | Fx/Fy ткани Н');
 for (const n of cols) {
-  const cl = new Cloth(b.rig.sails[2], 2, { rows: 11, cols: n, iter });
+  const cl = new Cloth(b.rig.sails[2], 2, { rows: 11, cols: n, iter,
+    ...(bend == null ? {} : { bend }) });
+  if (fixedNormals) {
+    const follow = cl.rowNormals.bind(cl);
+    let firstNormals = null;
+    cl.rowNormals = (wx, wy) => {
+      if (!firstNormals) { follow(wx, wy); firstNormals = cl.nrm.slice(); }
+      else cl.nrm.set(firstNormals);
+    };
+  }
   for (let i = 0; i < 30 * clothHz; i++) {
     if (!cl.step(b, 1 / clothHz)) throw new Error('Шаг ткани отклонён');
     if (i === 0) {

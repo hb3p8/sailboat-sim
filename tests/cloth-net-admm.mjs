@@ -13,12 +13,14 @@ const perturb = Number(opt('perturb', '0.1'));
 const sequence = Number(opt('sequence', '0'));
 const boardMaterial = process.argv.includes('--board-material');
 const rigidBoard = process.argv.includes('--rigid-board');
+const rhoLocal = process.argv.includes('--rho-local');
+const compareRho = process.argv.includes('--compare-rho');
 const requireConverged = process.argv.includes('--require-converged');
 if (!Number.isInteger(cols) || cols < 5 || cols > 65 ||
     !Number.isInteger(maxOuter) || maxOuter < 1 || maxOuter > 8192 ||
     !Number.isInteger(sequence) || sequence < 0 || sequence > 120 ||
     !(rhoFactor > 0 && rhoFactor <= 1e4) || !(perturb >= 0 && perturb <= 1) ||
-    (rigidBoard && !boardMaterial))
+    (rigidBoard && !boardMaterial) || (compareRho && (!rhoLocal || sequence)))
   throw new Error('Неверные параметры стенда ткани');
 const b = new Boat(pack);
 b.o.freeWake = true; b.o.wakeForces = true;
@@ -45,6 +47,10 @@ const ei = Int32Array.from(hard.map(k => cl.ci[k]));
 const ej = Int32Array.from(hard.map(k => cl.cj[k]));
 const rest = Float64Array.from(hard.map(k => cl.rest[k]));
 const fixed = Uint8Array.from(cl.w, x => x === 0 ? 1 : 0);
+const rhoEdge = Float64Array.from(ei, (a, k) => {
+  const inverse = cl.w[a] + cl.w[ej[k]];
+  return rhoLocal && inverse > 0 ? rhoFactor * 2 / inverse : rho;
+});
 const basePos = cl.pos.slice();
 const base = scoreBase(basePos);
 const shape = new Float64Array(3 * N);
@@ -147,8 +153,8 @@ function project(input = target, state = null) {
     va[k] = map[a]; vb[k] = map[b];
     ca[k] = -weight[a]; cb[k] = weight[b];
     if (va[k] === vb[k]) { ca[k] += cb[k]; vb[k] = -1; cb[k] = 0; }
-    if (va[k] >= 0) diag[va[k]] += rho * ca[k] * ca[k];
-    if (vb[k] >= 0) diag[vb[k]] += rho * cb[k] * cb[k];
+    if (va[k] >= 0) diag[va[k]] += rhoEdge[k] * ca[k] * ca[k];
+    if (vb[k] >= 0) diag[vb[k]] += rhoEdge[k] * cb[k] * cb[k];
     for (let j = 0; j < 3; j++)
       edgeOffset[3 * k + j] = offset[3 * b + j] - offset[3 * a + j];
   }
@@ -168,8 +174,8 @@ function project(input = target, state = null) {
     for (let k = 0; k < H; k++) {
       const a = va[k], b = vb[k];
       const value = (a >= 0 ? ca[k] * v[a] : 0) + (b >= 0 ? cb[k] * v[b] : 0);
-      if (a >= 0) out[a] += rho * ca[k] * value;
-      if (b >= 0) out[b] += rho * cb[k] * value;
+      if (a >= 0) out[a] += rhoEdge[k] * ca[k] * value;
+      if (b >= 0) out[b] += rhoEdge[k] * cb[k] * value;
     }
   };
   let cgCalls = 0, cgIters = 0, cgCaps = 0;
@@ -209,6 +215,7 @@ function project(input = target, state = null) {
     cgCalls++; cgIters += used;
     if (residual > tol) cgCaps++;
   };
+  const dualSum = new Float64Array(3 * N);
   let primal = Infinity, dual = Infinity, used = 0;
   for (let it = 0; it < maxOuter; it++) {
     used++;
@@ -216,7 +223,7 @@ function project(input = target, state = null) {
       rhs.set(rhsMass[j]);
       for (let k = 0; k < H; k++) {
         const a = va[k], b = vb[k], h = 3 * k + j;
-        const value = rho * (z[h] - u[h] - edgeOffset[h]);
+        const value = rhoEdge[k] * (z[h] - u[h] - edgeOffset[h]);
         if (a >= 0) rhs[a] += ca[k] * value;
         if (b >= 0) rhs[b] += cb[k] * value;
       }
@@ -225,6 +232,7 @@ function project(input = target, state = null) {
         p[3 * i + j] = offset[3 * i + j] + (map[i] >= 0 ? weight[i] * y[j][map[i]] : 0);
     }
     primal = 0; dual = 0;
+    dualSum.fill(0);
     for (let k = 0; k < H; k++) {
       const a = 3 * ei[k], b = 3 * ej[k], h = 3 * k;
       const ex = p[b] - p[a], ey = p[b + 1] - p[a + 1], ez = p[b + 2] - p[a + 2];
@@ -232,10 +240,24 @@ function project(input = target, state = null) {
       const norm = Math.hypot(tx, ty, tz), scale = Math.min(1, rest[k] / norm);
       const nx = tx * scale, ny = ty * scale, nz = tz * scale;
       primal = Math.max(primal, Math.hypot(ex - nx, ey - ny, ez - nz));
-      dual = Math.max(dual, rho * Math.hypot(nx - z[h], ny - z[h + 1], nz - z[h + 2]));
+      // Настоящая двойственная невязка в независимых координатах:
+      // Aᵀ R (zⁿ−zⁿ⁻¹), включая исключённые степени свободы дощечки.
+      const dx = rhoEdge[k] * (nx - z[h]);
+      const dy = rhoEdge[k] * (ny - z[h + 1]);
+      const dz = rhoEdge[k] * (nz - z[h + 2]);
+      if (va[k] >= 0) {
+        const v = 3 * va[k], a = ca[k];
+        dualSum[v] += a * dx; dualSum[v + 1] += a * dy; dualSum[v + 2] += a * dz;
+      }
+      if (vb[k] >= 0) {
+        const v = 3 * vb[k], a = cb[k];
+        dualSum[v] += a * dx; dualSum[v + 1] += a * dy; dualSum[v + 2] += a * dz;
+      }
       u[h] += ex - nx; u[h + 1] += ey - ny; u[h + 2] += ez - nz;
       z[h] = nx; z[h + 1] = ny; z[h + 2] = nz;
     }
+    for (let i = 0; i < N; i++) if (massEff[i])
+      dual = Math.max(dual, Math.hypot(dualSum[3 * i], dualSum[3 * i + 1], dualSum[3 * i + 2]));
     if (primal < 1e-8 && dual < 1e-8) break;
   }
   return { ...score(p, input), ms: performance.now() - start, used, primal, dual,
@@ -246,7 +268,7 @@ const fmt = x => `макс. растяжение ${(100 * x.maxRel).toFixed(3)} 
   `связей >10 нм ${x.count}; L2 остаток ${(1000 * x.total).toFixed(3)} мм; ` +
   `взвешенное смещение ${x.displacement.toFixed(3)} кг^1/2·м; ` +
   `дощечка ${(1000 * x.board).toFixed(2)} мм; ${x.ms.toFixed(1)} мс`;
-console.log(`Цель: возмущение ${perturb} м; rho = ${rhoFactor} × медианная масса = ${rho.toFixed(3)} кг`);
+console.log(`Цель: возмущение ${perturb} м; rho ${rhoLocal ? 'по приведённой массе связи' : 'единый'}: множитель ${rhoFactor}, диапазон ${Math.min(...rhoEdge).toFixed(4)}…${Math.max(...rhoEdge).toFixed(4)} кг`);
 console.log(`Исходник после 640 штатных проходов: макс. растяжение ${(100 * base.maxRel).toFixed(4)} % / ${(1000 * base.maxAbs).toFixed(4)} мм`);
 if (base.worst >= 0) {
   const k = base.worst, a = ei[k], z = ej[k];
@@ -271,7 +293,7 @@ if (sequence) {
   let warmState = null, coldMs = 0, warmMs = 0, coldIter = 0, warmIter = 0;
   let coldCaps = 0, warmCaps = 0, maxDiff = 0, maxBoard = 0, maxStretch = 0;
   console.log(`Последовательность ${sequence} кадров: плавный выход 0→${perturb} м и возврат, одна и та же цель для холодного/тёплого решения`);
-  console.log('кадр | амплитуда м | холодный/тёплый: итераций | тёплый остаток м | расхождение координат мм');
+  console.log('кадр | амплитуда м | холодный/тёплый: итераций | тёплые остатки: м / кг·м | расхождение координат мм');
   for (let k = 0; k < sequence; k++) {
     const phase = (k + 1) / sequence;
     const amplitude = perturb * (phase <= 0.5 ? 2 * phase : 2 * (1 - phase));
@@ -289,7 +311,7 @@ if (sequence) {
     for (let i = 0; i < 3 * N; i++) diff = Math.max(diff, Math.abs(cold.pos[i] - warm.pos[i]));
     maxDiff = Math.max(maxDiff, diff);
     console.log(`${k + 1} | ${amplitude.toFixed(4)} | ${cold.used}/${warm.used} | ` +
-      `${Math.max(warm.primal, warm.dual).toExponential(2)} | ${(1000 * diff).toFixed(4)}`);
+      `${warm.primal.toExponential(2)}/${warm.dual.toExponential(2)} | ${(1000 * diff).toFixed(4)}`);
   }
   console.log(`Итого: холодный/тёплый ${coldIter}/${warmIter} итераций, ` +
     `${coldMs.toFixed(1)}/${warmMs.toFixed(1)} мс; недоведённых кадров ${coldCaps}/${warmCaps}; ` +
@@ -300,8 +322,22 @@ if (sequence) {
   for (const iter of [40, 160, 640]) console.log(`ГЗ ${iter}: ${fmt(sweep(iter))}`);
   const result = project();
   console.log(`ADMM ${rigidBoard ? 'с точной дощечкой' : 'без дощечки'} ${maxOuter}: ${fmt(result)}; итераций ${result.used}; ` +
-    `остатки ${result.primal.toExponential(2)}/${result.dual.toExponential(2)} м; ` +
+    `остатки ${result.primal.toExponential(2)} м / ${result.dual.toExponential(2)} кг·м; ` +
     `CG сред. ${result.cgMean.toFixed(1)}, лимитных ${result.cgCaps}`);
   if (requireConverged && (result.primal >= 1e-8 || result.dual >= 1e-8 || result.cgCaps))
     process.exitCode = 1;
+  if (compareRho) {
+    const localPenalty = rhoEdge.slice();
+    rhoEdge.fill(rho);
+    const control = project();
+    rhoEdge.set(localPenalty);
+    let maxDiff = 0;
+    for (let i = 0; i < 3 * N; i++)
+      maxDiff = Math.max(maxDiff, Math.abs(result.pos[i] - control.pos[i]));
+    console.log(`Единый rho: ${control.used} итераций, ${control.ms.toFixed(1)} мс, ` +
+      `остатки ${control.primal.toExponential(2)} м / ${control.dual.toExponential(2)} кг·м; ` +
+      `макс. разность координат ${(1000 * maxDiff).toFixed(6)} мм`);
+    if (requireConverged && (control.primal >= 1e-8 || control.dual >= 1e-8 || control.cgCaps))
+      process.exitCode = 1;
+  }
 }

@@ -969,6 +969,41 @@ PBD-шаг в этом стенде выключен; узлы двигает т
 невозможно проверить обратное влияние на курс, крен и скорость;
 включать модель в runtime или менять полярную тягу рано.
 
+### Первый связанный шаг с движущейся лодкой
+
+В диагностическом режиме `boat-coupled` после доведённого шага ткани
+штатный `Boat.step` получает её новую геометрию, обновляет решётку,
+пелену и корпус, затем `forcesAt` сохраняет полную нагрузку ткани для
+следующего шага. У опытного экземпляра выключено только его штатное
+PBD-перемещение; материал и гибридный проектор — те же, что выше.
+Это явное слабое сопряжение с задержкой на один шаг, без внутренней
+итерации ткани и потока. Курс удерживается тем же рулевым законом,
+которым прогревались опорные 30 с. Исходное состояние лодки:
+`2.8689 м/с`, курс `−40.756°`, крен `−9.307°`.
+
+На 0.2 с / 30 Гц сетки 11×9/17/33 проходят прежние допуски;
+конечная реакция шкота `2.723/1.863/1.689 Н` против
+`2.721/1.862/1.688 Н` при неподвижной лодке. Движение за эти
+0.2 с слишком мало для проверки управления: ход достигает лишь
+`2.8700 м/с`, курс `−40.754°`, крен `−9.308°`.
+
+За 1 с результат также доведён:
+
+| Сеть / шаг | Шкот в 0.5 → 1.0 с | Ход / курс / крен в 1.0 с | Fx/Fy всех парусов в 1.0 с |
+|---|---:|---:|---:|
+| 11×17 / 30 Гц | 3.233 → 4.614 Н | 2.8789 м/с / −40.744° / −9.335° | 303.323/−170.325 Н |
+| 11×33 / 30 Гц | 2.817 → 4.544 Н | 2.8789 м/с / −40.744° / −9.336° | 303.147/−170.024 Н |
+| 11×17 / 120 Гц | 3.175 → 4.445 Н | 2.8783 м/с / −40.745° / −9.328° | 302.394/−170.488 Н |
+| 11×33 / 120 Гц | 2.704 → 4.365 Н | 2.8783 м/с / −40.745° / −9.328° | 302.383/−170.502 Н |
+
+На 11×33 уменьшение шага меняет конечную реакцию шкота на
+`0.179 Н` и положение середины полотна на `5.337 мм`, хотя ход
+за короткую секунду различается лишь на `0.0006 м/с` из-за инерции
+корпуса. Нельзя выводить пригодность управления из малого различия
+скорости при несошедшейся тканевой реакции. Шкот в этом опыте
+постоянен: реакции на действия рулевого/шкотового пока нет.
+Сопряжение технически проходит, но физический и realtime GO не дан.
+
 ## Связанный опыт: отрицательный результат для штатного включения
 
 Четыре клетки прежнего аудита, TWS 6 м/с, окно 25…30 с после независимого
@@ -1069,6 +1104,8 @@ for c in 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --out
 for h in 30 120; do for c in 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=1 --dynamic-hz=$h --board-material --rigid-board --require-converged; done; done
 for load in recomputed-pressure full-cloth-load; do for c in 9 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=$load --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged; done; done
 for h in 30 120; do for c in 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=full-cloth-load --dynamic-seconds=1 --dynamic-hz=$h --board-material --rigid-board --require-converged; done; done
+for c in 9 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=boat-coupled --dynamic-seconds=0.2 --dynamic-hz=30 --board-material --rigid-board --require-converged; done
+for h in 30 120; do for c in 17 33; do node tests/cloth-net-admm.mjs --solver=hybrid --cols=$c --outer=8192 --hybrid-sweeps=256 --rho-factor=100 --rho-local --rho-board-power=1 --free-clew --sheet-len=5.218 --dynamic-load=boat-coupled --dynamic-seconds=1 --dynamic-hz=$h --board-material --rigid-board --require-converged; done; done
 node tests/cloth-net-admm.mjs --cols=17 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --cols=33 --outer=8192 --rho-factor=100 --rho-local --free-clew --sheet-len=5.218 --dynamic-load=frozen-pressure --dynamic-seconds=0.008333333333333333 --dynamic-hz=120 --board-material --rigid-board --require-converged
 node tests/cloth-net-admm.mjs --solver=dual --dual-step=power --compare-solver --cols=9 --outer=8192 --rho-factor=1 --rho-local --perturb=0.1 --board-material --rigid-board --require-converged

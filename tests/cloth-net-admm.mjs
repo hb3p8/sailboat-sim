@@ -23,7 +23,8 @@ const forceDt = Number(opt('force-dt', String(1 / 30)));
 const dynamicSeconds = Number(opt('dynamic-seconds', '0'));
 const dynamicHz = Number(opt('dynamic-hz', '60'));
 const dynamicLoad = opt('dynamic-load', 'clew');
-const coupledAero = ['recomputed-pressure', 'full-cloth-load'].includes(dynamicLoad);
+const coupledAero = ['recomputed-pressure', 'full-cloth-load', 'boat-coupled'].includes(dynamicLoad);
+const boatCoupled = dynamicLoad === 'boat-coupled';
 const dampHz = Number(opt('damp-hz', '6'));
 const sequence = Number(opt('sequence', '0'));
 const boardMaterial = process.argv.includes('--board-material');
@@ -48,7 +49,8 @@ if (!Number.isInteger(cols) || cols < 5 || cols > 65 ||
     (clewForce > 0 && (!freeClew || perturb === 0)) ||
     !(dynamicSeconds >= 0 && dynamicSeconds <= 5) ||
     ![30, 60, 120].includes(dynamicHz) ||
-    !['clew', 'frozen-pressure', 'recomputed-pressure', 'full-cloth-load'].includes(dynamicLoad) ||
+    !['clew', 'frozen-pressure', 'recomputed-pressure', 'full-cloth-load',
+      'boat-coupled'].includes(dynamicLoad) ||
     !(dampHz >= 0 && dampHz <= 20) ||
     (dynamicSeconds > 0 && (!freeClew || !rigidBoard ||
       (dynamicLoad === 'clew' && !clewForce) || sequence || compareRho)) ||
@@ -807,7 +809,7 @@ if (dynamicSeconds) {
     b.rig.cloth = cl;
     cl.step = () => true;
   }
-  const updateForce = () => {
+  const updateForce = (alreadySolvedAero = false) => {
     force.fill(0); forceSum.fill(0);
     if (dynamicLoad === 'clew') {
       for (let j = 0; j < 3; j++) force[k + j] = clewForce * direction[j];
@@ -817,8 +819,10 @@ if (dynamicSeconds) {
           force[3 * a + j] = frozenPressure[a] * frozenNormals[3 * a + j];
     } else {
       cl.pos.set(p); cl.prev.set(prev);
-      b.rig.latRebuild = true;
-      b.rig.forces(b, b.apparentWind(), h);
+      if (!alreadySolvedAero) {
+        b.rig.latRebuild = true;
+        b.rig.forces(b, b.apparentWind(), h);
+      }
       cl.forcesAt(b, h, b.rigSide, b.p.environment);
       for (let a = 0; a < N; a++)
         for (let j = 0; j < 3; j++)
@@ -830,6 +834,8 @@ if (dynamicSeconds) {
   };
   updateForce();
   const initialForceSum = forceSum.slice();
+  const boatStart = boatCoupled ? [b.u, b.psi * 180 / Math.PI,
+    b.phi * 180 / Math.PI] : null;
   let maxAcceleration = 0, maxAccelNode = -1;
   for (let a = 0; a < N; a++) if (!fixed[a]) {
     const q = Math.hypot(force[3 * a], force[3 * a + 1], force[3 * a + 2]) / cl.mass[a];
@@ -841,7 +847,8 @@ if (dynamicSeconds) {
   const loadLabel = dynamicLoad === 'clew' ? `точечная ${clewForce} Н от обуха` :
     dynamicLoad === 'frozen-pressure' ? 'замороженное давление' :
     dynamicLoad === 'recomputed-pressure' ? 'обновляемое давление, лодка неподвижна' :
-    'полная обновляемая нагрузка ткани, лодка неподвижна';
+    dynamicLoad === 'full-cloth-load' ? 'полная обновляемая нагрузка ткани, лодка неподвижна' :
+    'полная обновляемая нагрузка ткани и движущаяся лодка';
   console.log(`Динамика: ${steps} подшагов по ${h.toFixed(6)} с, горизонт ${dynamicSeconds} с, ` +
     `нагрузка ${loadLabel} ` +
     `(сумма ${initialForceSum.map(x => x.toFixed(3)).join('/')} Н), затухание ${dampHz} 1/с; ` +
@@ -849,6 +856,9 @@ if (dynamicSeconds) {
   console.log(`Макс. ускорение свободного узла ${maxAcceleration.toFixed(3)} м/с² ` +
     `(строка ${Math.floor(maxAccelNode / cols)}, столбец ${maxAccelNode % cols}), ` +
     `свободный прогноз за один шаг ${(1000 * h * h * maxAcceleration).toFixed(3)} мм`);
+  if (boatCoupled)
+    console.log(`Лодка в начале: ход ${boatStart[0].toFixed(4)} м/с, ` +
+      `курс ${boatStart[1].toFixed(3)}°, крен ${boatStart[2].toFixed(3)}°`);
   console.log('время с | реакция шкота Н | зазор шкота мм | узел середины строки 5: x/y/z м | итераций');
   for (let i = 1; i <= steps; i++) {
     const input = p.slice();
@@ -876,7 +886,15 @@ if (dynamicSeconds) {
     maxSheet = Math.max(maxSheet, result.sheetExcess);
     maxStretch = Math.max(maxStretch, result.maxAbs);
     prev = p; p = result.pos; state = result.state;
-    if (coupledAero) { b.t += h; updateForce(); }
+    if (boatCoupled) {
+      cl.pos.set(p); cl.prev.set(prev);
+      const D = Math.PI / 180;
+      const wrap = x => ((x + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+      b.o.rudderTarget = Math.max(-25 * D, Math.min(25 * D,
+        -(2.2 * wrap(-40 * D - b.psi) - 0.9 * b.r)));
+      b.step(h);
+      updateForce(true);
+    } else if (coupledAero) { b.t += h; updateForce(); }
     const reaction = result.sheetMultiplier / (h * h);
     if (i > steps / 2) { sum += reaction; sum2 += reaction * reaction; nWindow++; }
     if (i === Math.round(steps / 2) || i === steps) {
@@ -899,6 +917,11 @@ if (dynamicSeconds) {
     if (coupledAero)
       console.log(`Сила на последней форме: ${forceSum.map(x => x.toFixed(3)).join('/')} Н; ` +
         `начало ${initialForceSum.map(x => x.toFixed(3)).join('/')} Н`);
+    if (boatCoupled)
+      console.log(`Лодка в конце: ход ${b.u.toFixed(4)} м/с, ` +
+        `курс ${(b.psi * 180 / Math.PI).toFixed(3)}°, ` +
+        `крен ${(b.phi * 180 / Math.PI).toFixed(3)}°; ` +
+        `сила всех парусов ${b.rig.sailOut.fx.toFixed(3)}/${b.rig.sailOut.fy.toFixed(3)} Н`);
   }
   if (failed || (requireConverged && (maxBoard > 1e-9 || maxSheet > 1e-8 || maxStretch > 1e-8)))
     process.exitCode = 1;

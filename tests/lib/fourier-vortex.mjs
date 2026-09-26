@@ -9,6 +9,58 @@ function induced(vortex, x, z) {
   return [-k * dz, k * dx];
 }
 
+// Точный интеграл Био–Савара для постоянной плотности на каждом отрезке.
+function boundVelocity(state, x, z) {
+  let ux = 0, uz = 0;
+  for (let i = 0; i < state.gamma.length; i++) {
+    const a = state.edges[i], b = state.edges[i + 1];
+    const g = state.gamma[i] / PI2;
+    ux -= g * (Math.atan((b - x) / z) - Math.atan((a - x) / z));
+    uz += g / 2 * Math.log(((x - a) ** 2 + z * z) /
+      ((x - b) ** 2 + z * z));
+  }
+  return [ux, uz];
+}
+
+function advectFree(free, state, flow, dt, substeps) {
+  const velocity = (positions, i) => {
+    const p = positions[i];
+    let ux = flow[0], uz = flow[1];
+    const bound = boundVelocity(state, p.x, p.z);
+    ux += bound[0]; uz += bound[1];
+    for (let j = 0; j < positions.length; j++) {
+      if (j === i) continue;
+      const v = induced(positions[j], p.x, p.z);
+      ux += v[0]; uz += v[1];
+    }
+    return [ux, uz];
+  };
+  let start = free.map(v => ({ ...v }));
+  const h = dt / substeps;
+  for (let step = 0; step < substeps; step++) {
+    const first = start.map((_, i) => velocity(start, i));
+    const mid = start.map((v, i) => ({ ...v,
+      x: v.x + first[i][0] * h / 2,
+      z: v.z + first[i][1] * h / 2 }));
+    const second = mid.map((_, i) => velocity(mid, i));
+    const next = start.map((v, i) => ({ ...v,
+      x: v.x + second[i][0] * h,
+      z: v.z + second[i][1] * h }));
+    for (let i = 0; i < next.length; i++) {
+      if (!Number.isFinite(next[i].x) || !Number.isFinite(next[i].z))
+        return { ok: false, reason: 'vortex-nonfinite',
+          index: i, substep: step + 1 };
+      if (start[i].z * next[i].z < 0 &&
+          (start[i].x > 0 && start[i].x < 1 ||
+           next[i].x > 0 && next[i].x < 1))
+        return { ok: false, reason: 'vortex-crossed-plate',
+          index: i, substep: step + 1 };
+    }
+    start = next;
+  }
+  return { ok: true, free: start };
+}
+
 export function fourierPlate({ flow, free = [], modes = 8,
                                points = 256 }) {
   if (!Array.isArray(flow) || flow.length !== 2 ||
@@ -66,15 +118,33 @@ export function fourierPlate({ flow, free = [], modes = 8,
 
 export function fourierWakeStep({ flow, dt, state = null,
                                   modes = 32, points = 512,
-                                  shedLeadingEdge = false }) {
+                                  shedLeadingEdge = false,
+                                  advection = 'uniform',
+                                  advectionSubsteps = 1 }) {
   if (!(dt > 0) || (state && (state.points !== points ||
       state.modes !== modes ||
       state.shedLeadingEdge !== shedLeadingEdge ||
+      state.advection !== advection ||
+      state.advectionSubsteps !== advectionSubsteps ||
       !Array.isArray(state.free) ||
-      !Array.isArray(state.cumulative))))
+      (advection === 'induced' &&
+        (!Array.isArray(state.gamma) || !Array.isArray(state.edges))) ||
+      !Array.isArray(state.cumulative))) ||
+      !['uniform', 'induced'].includes(advection) ||
+      !Number.isInteger(advectionSubsteps) || advectionSubsteps < 1)
     throw new Error('След Фурье: некорректный шаг или состояние');
-  const old = state ? state.free.map(v => ({ ...v,
-    x: v.x + flow[0] * dt, z: v.z + flow[1] * dt })) : [];
+  const transferred = state && advection === 'induced' ?
+    advectFree(state.free, state, flow, dt, advectionSubsteps) : null;
+  if (transferred && !transferred.ok) return transferred;
+  const old = state ? (transferred ? transferred.free :
+    state.free.map(v => ({ ...v,
+      x: v.x + flow[0] * dt, z: v.z + flow[1] * dt }))) : [];
+  for (let i = 0; i < old.length; i++) {
+    const prev = state.free[i], now = old[i];
+    if (prev.z * now.z < 0 &&
+        (prev.x > 0 && prev.x < 1 || now.x > 0 && now.x < 1))
+      return { ok: false, reason: 'vortex-crossed-plate', index: i };
+  }
   const newLeading = { x: flow[0] * dt / 2,
     z: Math.sign(flow[1]) * flow[0] * dt / 2,
     gamma: 0, edge: 'LE' };
@@ -139,6 +209,7 @@ export function fourierWakeStep({ flow, dt, state = null,
     A0: plate.A0, residual: plate.downwashError,
     kelvin: plate.circulation + free.reduce((s, v) => s + v.gamma, 0),
     lev: shedLeadingEdge ? newLeading : null, tev: newVortex,
-    state: { points, modes, shedLeadingEdge, free, cumulative,
-      impulseMoment } };
+    state: { points, modes, shedLeadingEdge, advection, advectionSubsteps,
+      free, cumulative,
+      impulseMoment, gamma: plate.gamma, edges: plate.edges } };
 }

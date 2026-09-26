@@ -15,7 +15,7 @@ function induced(vortex, x, z) {
 
 // Интеграл Био–Савара по прямому отрезку свободной пелены с
 // постоянной циркуляцией на единицу длины, не точечная квадратура.
-export function inducedSegment(sheet, x, z) {
+export function inducedSegment(sheet, x, z, core2 = 0) {
   const [ax, az] = sheet.a, [bx, bz] = sheet.b;
   const length = Math.hypot(bx - ax, bz - az);
   if (!(length > 0)) throw new Error('Свободная пелена: нулевой отрезок');
@@ -23,15 +23,85 @@ export function inducedSegment(sheet, x, z) {
   const nx = -tz, nz = tx;
   const s = (x - ax) * tx + (z - az) * tz;
   const h = (x - ax) * nx + (z - az) * nz;
-  if (h === 0 && s > 0 && s < length)
+  if (h === 0 && s > 0 && s < length && core2 === 0)
     throw new Error('Свободная пелена: точка на вихревом слое');
   const density = sheet.gamma / length;
-  const along = -density / PI2 *
+  const hEffective = Math.sqrt(h * h + core2);
+  const along = core2 ? -density / PI2 * h / hEffective *
+    (Math.atan((length - s) / hEffective) -
+     Math.atan(-s / hEffective)) : -density / PI2 *
     (Math.atan((length - s) / h) - Math.atan(-s / h));
   const across = density / (2 * PI2) *
-    Math.log((s * s + h * h) / ((s - length) ** 2 + h * h));
+    Math.log((s * s + hEffective * hEffective) /
+      ((s - length) ** 2 + hEffective * hEffective));
   return [along * tx + across * nx,
           along * tz + across * nz];
+}
+
+// Точный интеграл регуляризованного Био–Савара для движения узлов
+// свободного слоя. Радиус ядра растёт с вязким временем жизни отрезка.
+function sheetNodeVelocity(sheets, plate, flow, reynolds, dt, x, z) {
+  const bound = boundVelocity(plate, x, z);
+  let ux = flow[0] + bound[0], uz = flow[1] + bound[1];
+  const nu = Math.hypot(...flow) / reynolds;
+  for (const sheet of sheets) {
+    const core2 = sheet.core2 ??
+      4 * nu * Math.max(sheet.age ?? 0, dt / 2);
+    const v = inducedSegment(sheet, x, z, core2);
+    ux += v[0]; uz += v[1];
+  }
+  return [ux, uz];
+}
+
+function movedSheets(sheets, velocity, h) {
+  return sheets.map((sheet, i) => ({ ...sheet,
+    a: [sheet.a[0] + velocity[i].a[0] * h,
+      sheet.a[1] + velocity[i].a[1] * h],
+    b: [sheet.b[0] + velocity[i].b[0] * h,
+      sheet.b[1] + velocity[i].b[1] * h] }));
+}
+
+function advectSheets(sheets, flow, dt, modes, points, reynolds,
+                      substeps) {
+  const nu = Math.hypot(...flow) / reynolds;
+  const aged = (items, elapsed) => items.map(sheet => ({ ...sheet,
+    age: (sheet.age ?? 0) + elapsed,
+    core2: 4 * nu * Math.max((sheet.age ?? 0) + elapsed, dt / 2) }));
+  let current = aged(sheets.map(sheet => ({ ...sheet,
+    a: [...sheet.a], b: [...sheet.b] })), 0);
+  const h = dt / substeps;
+  const velocities = (positions) => {
+    const plate = fourierPlate({ flow, sheets: positions, modes, points });
+    if (!plate.ok) return null;
+    return positions.map(sheet => ({
+      a: sheetNodeVelocity(positions, plate, flow, reynolds, dt,
+        ...sheet.a),
+      b: sheetNodeVelocity(positions, plate, flow, reynolds, dt,
+        ...sheet.b) }));
+  };
+  for (let substep = 0; substep < substeps; substep++) {
+    const first = velocities(current);
+    if (!first) return { ok: false, reason: 'advection-plate' };
+    const midpoint = aged(movedSheets(current, first, h / 2), h / 2);
+    const second = velocities(midpoint);
+    if (!second) return { ok: false, reason: 'advection-midpoint' };
+    const next = aged(movedSheets(current, second, h), h);
+    for (let index = 0; index < next.length; index++) {
+      const sheet = next[index];
+      for (const p of [sheet.a, sheet.b]) {
+        if (!p.every(Number.isFinite))
+          return { ok: false, reason: 'sheet-nonfinite',
+            index, edge: sheet.edge, substep: substep + 1 };
+        if (p[0] > 0 && p[0] < 1 &&
+            p[1] * Math.sign(flow[1] || 1) <= 0)
+          return { ok: false, reason: 'sheet-crossed-plate',
+            index, edge: sheet.edge, substep: substep + 1,
+            position: p };
+      }
+    }
+    current = next;
+  }
+  return { ok: true, sheets: current };
 }
 
 // Точный интеграл Био–Савара для постоянной плотности на каждом отрезке.
@@ -101,7 +171,7 @@ export function fourierPlate({ flow, free = [], sheets = [], modes = 8,
     atEdge[0] += v[0]; atEdge[1] += v[1];
   }
   for (const sheet of sheets) {
-    const v = inducedSegment(sheet, 0, 0);
+    const v = inducedSegment(sheet, 0, 0, sheet.core2 ?? 0);
     atEdge[0] += v[0]; atEdge[1] += v[1];
   }
   const vmag = Math.hypot(...atEdge);
@@ -116,7 +186,7 @@ export function fourierPlate({ flow, free = [], sheets = [], modes = 8,
       ux += v[0]; uz += v[1];
     }
     for (const sheet of sheets) {
-      const v = inducedSegment(sheet, xi, 0);
+      const v = inducedSegment(sheet, xi, 0, sheet.core2 ?? 0);
       ux += v[0]; uz += v[1];
     }
     theta.push(t); x.push(xi);
@@ -302,17 +372,21 @@ export function fourierWakeStep({ flow, dt, state = null,
       impulseMoment, gamma: plate.gamma, edges: plate.edges } };
 }
 
-// Первый временной контроль отрезков свободной пелены: геометрия каждого
-// нового отрезка задаётся переносом потока, без индуцированного сворачивания.
+// Изолированный временной контроль отрезков свободной пелены.
 export function fourierSheetWakeStep({ flow, dt, state = null,
                                        modes = 64, points = 512,
                                        reynolds = 1e5,
                                        releaseHeight = null,
                                        shedLeadingEdge = true,
-                                       suctionNumeratorLimit = 0 }) {
+                                       suctionNumeratorLimit = 0,
+                                       advection = 'uniform',
+                                       advectionSubsteps = 1 }) {
   if (!(dt > 0) || !Number.isFinite(reynolds) || !(reynolds > 0) ||
       !Number.isFinite(suctionNumeratorLimit) ||
       !(suctionNumeratorLimit >= 0) ||
+      !['uniform', 'induced'].includes(advection) ||
+      !Number.isInteger(advectionSubsteps) ||
+      advectionSubsteps < 1 || advectionSubsteps > 64 ||
       (releaseHeight !== null &&
         (!Number.isFinite(releaseHeight) || !(releaseHeight > 0))) ||
       (state && (state.modes !== modes || state.points !== points ||
@@ -320,20 +394,39 @@ export function fourierSheetWakeStep({ flow, dt, state = null,
         state.releaseHeight !== releaseHeight ||
         state.shedLeadingEdge !== shedLeadingEdge ||
         state.suctionNumeratorLimit !== suctionNumeratorLimit ||
+        state.advection !== advection ||
+        state.advectionSubsteps !== advectionSubsteps ||
         !Array.isArray(state.sheets) ||
         !Array.isArray(state.cumulative))))
     throw new Error('След из отрезков: некорректный шаг или состояние');
-  const old = state ? state.sheets.map(sheet => ({ ...sheet,
+  let old;
+  if (!state) old = [];
+  else if (advection === 'induced') {
+    const moved = advectSheets(state.sheets, flow, dt, modes, points,
+      reynolds, advectionSubsteps);
+    if (!moved.ok) return moved;
+    old = moved.sheets;
+  } else old = state.sheets.map(sheet => ({ ...sheet,
     a: [sheet.a[0] + flow[0] * dt, sheet.a[1] + flow[1] * dt],
-    b: [sheet.b[0] + flow[0] * dt, sheet.b[1] + flow[1] * dt] })) : [];
+    b: [sheet.b[0] + flow[0] * dt, sheet.b[1] + flow[1] * dt],
+    age: (sheet.age ?? 0) + dt }));
   const sign = flow[1] < 0 ? -1 : 1;
   const offset = sign * (releaseHeight ??
     Math.sqrt(2 * Math.hypot(...flow) * dt / reynolds));
   const rise = flow[1] * dt;
   const leading = { a: [0, offset], b: [flow[0] * dt, offset + rise],
-    gamma: 0, edge: 'LE' };
+    gamma: 0, edge: 'LE', age: 0 };
   const trailing = { a: [1, offset],
-    b: [1 + flow[0] * dt, offset + rise], gamma: 0, edge: 'TE' };
+    b: [1 + flow[0] * dt, offset + rise], gamma: 0, edge: 'TE', age: 0 };
+  if (advection === 'induced') {
+    const newbornCore2 = 2 * Math.hypot(...flow) * dt / reynolds;
+    leading.core2 = newbornCore2;
+    trailing.core2 = newbornCore2;
+    const previousLeading = [...old].reverse().find(s => s.edge === 'LE');
+    const previousTrailing = [...old].reverse().find(s => s.edge === 'TE');
+    if (previousLeading) leading.b = [...previousLeading.a];
+    if (previousTrailing) trailing.b = [...previousTrailing.a];
+  }
   const sources = shedLeadingEdge ? [...old, leading, trailing] :
     [...old, trailing];
   const baseline = fourierPlate({ flow,
@@ -383,6 +476,7 @@ export function fourierSheetWakeStep({ flow, dt, state = null,
     leadingGamma: leadingActive ? leading.gamma : 0,
     leadingActive, trailingGamma: trailing.gamma,
     state: { modes, points, reynolds, releaseHeight,
-      shedLeadingEdge, suctionNumeratorLimit, sheets,
+      shedLeadingEdge, suctionNumeratorLimit,
+      advection, advectionSubsteps, sheets,
       cumulative: pressureStep.cumulative, impulseMoment } };
 }

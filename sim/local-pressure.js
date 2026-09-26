@@ -1,4 +1,5 @@
-// Экспериментальная локальная раскладка заданной нормальной силы.
+// Экспериментальная локальная раскладка нормальной силы. При normalForce=null
+// интеграл не навязывается: это отдельный диагностический потенциальный лист.
 // Двумерный тонкий вихревой лист: непротекание в 3/4 каждой панели,
 // связанный вихрь в 1/4. Дополнительная неизвестная — равномерная поправка
 // нормального потока; дополнительное уравнение задаёт интеграл силы из поляры.
@@ -36,8 +37,10 @@ function solve(a, rhs) {
 export function localPressure({ points, flow, rho, span, normalForce, panels = 16 }) {
   if (!Number.isInteger(panels) || panels < 4 || panels > 128)
     throw new Error('Локальное давление: число панелей должно быть 4…128');
+  const forceMatched = normalForce !== null;
   if (points.length < 2 || !points.every(p => p.length === 2 && p.every(Number.isFinite)) ||
-      flow.length !== 2 || !flow.every(Number.isFinite) || !Number.isFinite(normalForce) ||
+      flow.length !== 2 || !flow.every(Number.isFinite) ||
+      (forceMatched && !Number.isFinite(normalForce)) ||
       !Number.isFinite(rho) || !Number.isFinite(span) || !(rho > 0) || !(span > 0))
     throw new Error('Локальное давление: некорректный вход');
   const chord = points.at(-1)[0] - points[0][0], speed = Math.hypot(...flow);
@@ -60,7 +63,7 @@ export function localPressure({ points, flow, rho, span, normalForce, panels = 1
     control.push([a[0] + 0.75 * dx, a[1] + 0.75 * dz]);
     tangent.push([dx / ds, dz / ds]); lengths.push(ds);
   }
-  const U = flow.map(v => v / speed), n = panels + 1;
+  const U = flow.map(v => v / speed), n = panels + Number(forceMatched);
   const a = Array.from({ length: n }, () => new Float64Array(n)), rhs = new Float64Array(n);
   const ut = tangent.map(t => U[0] * t[0] + U[1] * t[1]);
   for (let i = 0; i < panels; i++) {
@@ -71,12 +74,13 @@ export function localPressure({ points, flow, rho, span, normalForce, panels = 1
       if (r2 < 1e-20) return { ok: false, reason: 'intersecting-panels' };
       a[i][j] = (-dz * nx + dx * nz) / (2 * Math.PI * r2);
     }
-    a[i][panels] = nz;
+    if (forceMatched) a[i][panels] = nz;
     rhs[i] = -(U[0] * nx + U[1] * nz);
     // Проекция силы Бернулли на +z строки, а не сумма |давлений|.
-    a[panels][i] = -ut[i] * nz;
+    if (forceMatched) a[panels][i] = -ut[i] * nz;
   }
-  rhs[panels] = normalForce / (rho * speed * speed * chord * span);
+  if (forceMatched)
+    rhs[panels] = normalForce / (rho * speed * speed * chord * span);
   const x = solve(a, rhs);
   if (!x || !x.every(Number.isFinite)) return { ok: false, reason: 'singular' };
   let residual = 0;
@@ -96,14 +100,16 @@ export function localPressure({ points, flow, rho, span, normalForce, panels = 1
   }
   return { ok: true, pressure, forces, at, atChord, edges: u,
            edgesChord: edges.map(p => p[0]), residual,
-           downwash: x[panels] * speed, circulation: x.slice(0, panels).reduce((s, v) => s + v, 0) * speed * chord };
+           downwash: forceMatched ? x[panels] * speed : 0,
+           circulation: x.slice(0, panels).reduce((s, v) => s + v, 0) * speed * chord };
 }
 
 // Та же проекция летящей строки, что использует Cloth.advance. Функция
 // отдельно вызывается на замороженном снимке без шага ткани: профиль тогда
 // зависит только от формы и уже заданной нормальной нагрузки строки.
 export function localPressureForRow({ pos, normals, area, pressureForce,
-                                      row, cols, strip, rho, panels = 16 }) {
+                                      row, cols, strip, rho, panels = 16,
+                                      forceMatched = true }) {
   const first = row * cols * 3, last = (row * cols + cols - 1) * 3;
   const tx = pos[last] - pos[first], ty = pos[last + 1] - pos[first + 1],
         tz = pos[last + 2] - pos[first + 2];
@@ -127,7 +133,7 @@ export function localPressureForRow({ pos, normals, area, pressureForce,
   return localPressure({ points,
     flow: [v * (strip.d1 * tx + strip.d2 * ty) / chord,
            v * (strip.d1 * nx + strip.d2 * ny)],
-    rho, span: rowArea / arc, normalForce: target, panels });
+    rho, span: rowArea / arc, normalForce: forceMatched ? target : null, panels });
 }
 
 // Консервативный перенос сосредоточенных сил на материальные узлы строки:

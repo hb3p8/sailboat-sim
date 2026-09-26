@@ -7,6 +7,19 @@ import { localPressure, pressureToNodes } from '../sim/local-pressure.js';
 const sum = a => a.reduce((s, v) => s + v, 0);
 const close = (x, y, e = 1e-10) => assert.ok(Math.abs(x - y) <= e * Math.max(1, Math.abs(y)), `${x} != ${y}`);
 const base = { points: [[0, 0], [1, 0]], flow: [1, 0.1], rho: 1, span: 1, normalForce: 1 };
+// Без подгонки интеграла плоская пластина при малом угле даёт линейную
+// тонкопрофильную силу πρU·Wcb; это только проверка потенциального предела.
+for (const panels of [8, 16, 32, 64]) {
+  const free = localPressure({ ...base, normalForce: null, panels });
+  assert.ok(free.ok);
+  close(sum(free.forces), Math.PI * base.flow[0] * base.flow[1]);
+  close(free.circulation, -Math.PI * base.flow[0] * base.flow[1]);
+  close(free.downwash, 0);
+  const other = localPressure({ ...base, normalForce: null,
+    flow: [1, -0.1], panels });
+  assert.ok(other.ok);
+  free.pressure.forEach((v, i) => close(other.pressure[i], -v));
+}
 let last = Infinity;
 for (const panels of [8, 16, 32, 64]) {
   const p = localPressure({ ...base, panels });

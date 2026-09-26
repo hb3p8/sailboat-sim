@@ -3,11 +3,12 @@
 import assert from 'node:assert/strict';
 import { edgeVortexStep } from './lib/edge-vortex.mjs';
 
-function run(panels, dt, wz) {
+function run(panels, dt, wz, shedLeadingEdge = true) {
   let state = null, result;
   const steps = Math.round(0.4 / dt);
   for (let i = 0; i < steps; i++) {
-    result = edgeVortexStep({ flow: [1, wz], dt, panels, state });
+    result = edgeVortexStep({ flow: [1, wz], dt, panels, state,
+      shedLeadingEdge });
     assert.ok(result.ok);
     assert.ok(result.residual < 1e-12, `невязка ${result.residual}`);
     assert.ok(Math.abs(result.circulation) < 1e-12,
@@ -16,6 +17,20 @@ function run(panels, dt, wz) {
   }
   return result;
 }
+// Контрольная ветвь без переднекромочного схода: та же дискретизация,
+// один свободный вихрь за задней кромкой и закон Кельвина.
+for (const panels of [16, 32, 64, 96]) {
+  for (const dt of [0.01, 0.005]) {
+    const a = run(panels, dt, 0.1, false);
+    const b = run(panels, dt, -0.1, false);
+    assert.ok(a.force > 0);
+    assert.ok(Math.abs(a.force + b.force) < 1e-11);
+    console.log(`только задняя кромка: панели=${panels} dt=${dt}: F+ = ${a.force.toFixed(6)}`);
+  }
+}
+const attachedCoarse = run(64, 0.01, 0.1, false).force;
+const attachedFine = run(96, 0.005, 0.1, false).force;
+assert.ok(Math.abs(attachedFine - attachedCoarse) / attachedFine < 0.02);
 
 for (const panels of [8, 16, 32]) {
   for (const dt of [0.04, 0.02, 0.01]) {

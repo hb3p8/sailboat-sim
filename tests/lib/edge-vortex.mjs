@@ -12,12 +12,14 @@ function induced(vortex, x, z, core2) {
   return [-k * dz, k * dx];
 }
 
-export function edgeVortexStep({ flow, dt, panels = 16, state = null }) {
+export function edgeVortexStep({ flow, dt, panels = 16, state = null,
+                                 shedLeadingEdge = true }) {
   if (!Array.isArray(flow) || flow.length !== 2 || !flow.every(Number.isFinite) ||
       !(flow[0] > 0) || !(dt > 0) || !Number.isInteger(panels) ||
       panels < 4 || panels > 128)
     throw new Error('Вихрь кромки: некорректный поток, шаг или число панелей');
-  if (state && (state.panels !== panels || !Array.isArray(state.free) ||
+  if (state && (state.panels !== panels || state.shedLeadingEdge !== shedLeadingEdge ||
+                !Array.isArray(state.free) ||
                 !Array.isArray(state.bound) || state.bound.length !== panels))
     throw new Error('Вихрь кромки: несовместимое предыдущее состояние');
 
@@ -40,28 +42,30 @@ export function edgeVortexStep({ flow, dt, panels = 16, state = null }) {
   const side = Math.sign(flow[1]);
   const lev = { x: dxStep / 2, z: side * dxStep / 2, gamma: 0 };
   const tev = { x: 1 + dxStep / 2, z: 0, gamma: 0 };
-  const n = panels + 2;
+  const n = panels + 1 + Number(shedLeadingEdge);
   const matrix = Array.from({ length: n }, () => new Float64Array(n));
   const rhs = new Float64Array(n);
   for (let i = 0; i < panels; i++) {
     for (let j = 0; j < panels; j++)
       matrix[i][j] = induced({ x: boundAt[j], z: 0, gamma: 1 },
                              control[i], 0, 0)[1];
-    matrix[i][panels] = induced({ ...lev, gamma: 1 }, control[i], 0, core2)[1];
-    matrix[i][panels + 1] = induced({ ...tev, gamma: 1 }, control[i], 0, core2)[1];
+    if (shedLeadingEdge)
+      matrix[i][panels] = induced({ ...lev, gamma: 1 }, control[i], 0, core2)[1];
+    matrix[i][n - 1] = induced({ ...tev, gamma: 1 }, control[i], 0, core2)[1];
     rhs[i] = -flow[1];
     for (const vortex of free)
       rhs[i] -= induced(vortex, control[i], 0, core2)[1];
   }
   // Нулевой первый связанный вихрь — пробное условие снятия LE-сингулярности.
   // Сумма всех циркуляций остаётся нулевой, пока внешнего момента нет.
-  matrix[panels][0] = 1;
-  for (let j = 0; j < n; j++) matrix[panels + 1][j] = 1;
-  rhs[panels + 1] = -free.reduce((s, v) => s + v.gamma, 0);
+  if (shedLeadingEdge) matrix[panels][0] = 1;
+  for (let j = 0; j < n; j++) matrix[n - 1][j] = 1;
+  rhs[n - 1] = -free.reduce((s, v) => s + v.gamma, 0);
   const solution = solveLinear(matrix, rhs);
   if (!solution || !solution.every(Number.isFinite))
     return { ok: false, reason: 'singular' };
-  lev.gamma = solution[panels]; tev.gamma = solution[panels + 1];
+  lev.gamma = shedLeadingEdge ? solution[panels] : 0;
+  tev.gamma = solution[n - 1];
   let residual = 0;
   for (let i = 0; i < n; i++) {
     let value = 0, norm = Math.abs(rhs[i]);
@@ -81,8 +85,9 @@ export function edgeVortexStep({ flow, dt, panels = 16, state = null }) {
     pressure.push(-flow[0] * solution[i] / width[i] -
                   (cumulative - oldCumulative) / dt);
   }
-  const next = { panels, bound: Array.from(solution.slice(0, panels)),
-    free: [...free, lev, tev] };
+  const next = { panels, shedLeadingEdge,
+    bound: Array.from(solution.slice(0, panels)),
+    free: shedLeadingEdge ? [...free, lev, tev] : [...free, tev] };
   return { ok: true, residual, bound: next.bound, lev, tev, pressure,
     force: pressure.reduce((s, p, i) => s + p * width[i], 0),
     circulation: next.bound.reduce((s, g) => s + g, 0) +

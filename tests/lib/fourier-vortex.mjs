@@ -1,5 +1,5 @@
 // Контрольная непрерывная пелена тонкого профиля на единичной плоской пластине.
-// Только изолированный опыт: здесь нет схода, памяти и силы штатной лодки.
+// Только изолированный опыт: здесь пока плоская пластина и нет силы лодки.
 const PI2 = 2 * Math.PI;
 
 function induced(vortex, x, z) {
@@ -37,6 +37,7 @@ export function fourierPlate({ flow, free = [], modes = 8,
   }
   const average = a => a.reduce((s, v) => s + v, 0) / points;
   const A0 = average(incoming) / vmag;
+  const suctionNumerator = average(incoming);
   const An = Array.from({ length: modes }, (_, j) =>
     -2 * average(incoming.map((w, k) => w * Math.cos((j + 1) * theta[k]))) / vmag);
   const gamma = [], pressure = [], reconstructed = [];
@@ -59,36 +60,65 @@ export function fourierPlate({ flow, free = [], modes = 8,
   const circulation = -Math.PI * vmag * (A0 + An[0] / 2);
   const downwashError = Math.sqrt(average(incoming.map((w, k) =>
     (w + reconstructed[k]) ** 2)));
-  return { ok: true, A0, An, force, circulation, pressure,
+  return { ok: true, A0, suctionNumerator, An, force, circulation, pressure,
     gamma, x, edges, incoming, reconstructed, downwashError };
 }
 
 export function fourierWakeStep({ flow, dt, state = null,
-                                  modes = 32, points = 512 }) {
+                                  modes = 32, points = 512,
+                                  shedLeadingEdge = false }) {
   if (!(dt > 0) || (state && (state.points !== points ||
-      state.modes !== modes || !Array.isArray(state.free) ||
+      state.modes !== modes ||
+      state.shedLeadingEdge !== shedLeadingEdge ||
+      !Array.isArray(state.free) ||
       !Array.isArray(state.cumulative))))
     throw new Error('След Фурье: некорректный шаг или состояние');
   const old = state ? state.free.map(v => ({ ...v,
     x: v.x + flow[0] * dt, z: v.z + flow[1] * dt })) : [];
+  const newLeading = { x: flow[0] * dt / 2,
+    z: Math.sign(flow[1]) * flow[0] * dt / 2,
+    gamma: 0, edge: 'LE' };
   const newVortex = { x: 1 + flow[0] * dt / 2,
-    z: flow[1] * dt / 2, gamma: 0 };
-  const baseline = fourierPlate({ flow, free: [...old, newVortex],
+    z: flow[1] * dt / 2, gamma: 0, edge: 'TE' };
+  const sources = shedLeadingEdge ? [...old, newLeading, newVortex] :
+    [...old, newVortex];
+  const baseline = fourierPlate({ flow, free: sources,
     modes, points });
-  const unit = fourierPlate({ flow, free: [...old,
+  const unit = fourierPlate({ flow, free: [
+    ...(shedLeadingEdge ? [...old, newLeading] : old),
     { ...newVortex, gamma: 1 }], modes, points });
   if (!baseline.ok || !unit.ok) return { ok: false, reason: 'plate' };
-  const response = unit.circulation - baseline.circulation;
-  const denominator = 1 + response;
-  if (Math.abs(denominator) < 1e-10)
-    return { ok: false, reason: 'kelvin-singular' };
-  newVortex.gamma = (-old.reduce((s, v) => s + v.gamma, 0) -
-    baseline.circulation) / denominator;
-  const plate = fourierPlate({ flow, free: [...old, newVortex],
+  const oldGamma = old.reduce((s, v) => s + v.gamma, 0);
+  if (shedLeadingEdge) {
+    const leadingUnit = fourierPlate({ flow, free: [...old,
+      { ...newLeading, gamma: 1 }, newVortex], modes, points });
+    if (!leadingUnit.ok) return { ok: false, reason: 'leading-plate' };
+    const a = leadingUnit.suctionNumerator - baseline.suctionNumerator;
+    const b = unit.suctionNumerator - baseline.suctionNumerator;
+    const c = 1 + leadingUnit.circulation - baseline.circulation;
+    const d = 1 + unit.circulation - baseline.circulation;
+    const determinant = a * d - b * c;
+    if (Math.abs(determinant) < 1e-10)
+      return { ok: false, reason: 'leading-singular' };
+    const rhsA = -baseline.suctionNumerator;
+    const rhsK = -oldGamma - baseline.circulation;
+    newLeading.gamma = (rhsA * d - b * rhsK) / determinant;
+    newVortex.gamma = (a * rhsK - rhsA * c) / determinant;
+  } else {
+    const response = unit.circulation - baseline.circulation;
+    const denominator = 1 + response;
+    if (Math.abs(denominator) < 1e-10)
+      return { ok: false, reason: 'kelvin-singular' };
+    newVortex.gamma = (-oldGamma - baseline.circulation) / denominator;
+  }
+  const free = shedLeadingEdge ? [...old, newLeading, newVortex] :
+    [...old, newVortex];
+  const plate = fourierPlate({ flow, free,
     modes, points });
   if (!plate.ok) return plate;
   const cumulative = [], pressure = [];
   let running = 0, unsteadyForce = 0, force = 0;
+  let impulseMoment = free.reduce((s, v) => s + v.gamma * v.x, 0);
   for (let i = 0; i < points; i++) {
     const width = plate.edges[i + 1] - plate.edges[i];
     const half = running + plate.gamma[i] * width / 2;
@@ -99,12 +129,16 @@ export function fourierWakeStep({ flow, dt, state = null,
     force += pressure[i] * width;
     cumulative.push(half);
     running += plate.gamma[i] * width;
+    impulseMoment += plate.gamma[i] * plate.x[i] * width;
   }
-  const free = [...old, newVortex];
+  const impulseForce = (impulseMoment -
+    (state ? state.impulseMoment : 0)) / dt;
   return { ok: true, pressure, edges: plate.edges, force,
     circulatoryForce: plate.force, unsteadyForce,
+    impulseMoment, impulseForce,
     A0: plate.A0, residual: plate.downwashError,
     kelvin: plate.circulation + free.reduce((s, v) => s + v.gamma, 0),
-    tev: newVortex,
-    state: { points, modes, free, cumulative } };
+    lev: shedLeadingEdge ? newLeading : null, tev: newVortex,
+    state: { points, modes, shedLeadingEdge, free, cumulative,
+      impulseMoment } };
 }

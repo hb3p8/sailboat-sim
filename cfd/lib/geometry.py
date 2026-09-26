@@ -360,7 +360,7 @@ def extrude(loop_xy, span=0.1, z0=None):
 
 
 def sail_section(camber, draft=0.5, chord=1.0, thickness=0.015, n=200,
-                 te_thickness=None):
+                 te_thickness=None, nose_resolved=False):
     """Сечение мягкого паруса: средняя линия с заданным пузом плюс толщина.
 
     Пузо и положение горба берутся у симулятора (`membraneCamber`), а не
@@ -385,10 +385,20 @@ def sail_section(camber, draft=0.5, chord=1.0, thickness=0.015, n=200,
     условность «толщина для сеточника», но разрешимая: нос 0.7% хорды и торец
     1.5% против ячейки уровня кромок в 0.8%.
 
+    При наклонной средней линии параметр r=t/2 не является точным
+    осцулирующим радиусом в физической плоскости. В носовой асимптотике
+    R=r*cos(atan(dyc/dx)); эту разницу нужно учитывать в местной задаче.
+    `nose_resolved` меняет лишь дискретизацию НОВОГО обвода, не течение.
+
     `te_thickness` оставлен в сигнатуре для совместимости и не используется:
     торец хвоста равен толщине листа.
     """
-    beta = np.linspace(0.0, np.pi, n)
+    # Legacy sampling is deliberately retained for existing cases. A new
+    # local-edge study can opt in to resolving the analytic rounded nose
+    # before it is converted to a polygon and redistributed by the O-grid.
+    # Merely increasing n_theta on the old polygon refines its false corner.
+    source_n = max(9600, 32 * n) if nose_resolved else n
+    beta = np.linspace(0.0, np.pi, source_n)
     x = 0.5 * (1.0 - np.cos(beta))
     # Средняя линия NACA четырёхзначного вида: две параболы, сшитые в горбе.
     # При draft = 0.5 она вырождается в дугу, как у круглого паруса.
@@ -433,7 +443,11 @@ def sail_section(camber, draft=0.5, chord=1.0, thickness=0.015, n=200,
     def _resample(xs_, ys_):
         d = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(xs_),
                                                       np.diff(ys_)))])
-        u = np.linspace(0.0, d[-1], n)
+        if nose_resolved:
+            stations = np.linspace(0.0, 1.0, n)
+            u = 0.5 * (1.0 - np.cos(np.pi * stations)) * d[-1]
+        else:
+            u = np.linspace(0.0, d[-1], n)
         return np.interp(u, d, xs_), np.interp(u, d, ys_)
     xu, yu = _resample(*_trim(xu, yu))
     xl, yl = _resample(*_trim(xl, yl))

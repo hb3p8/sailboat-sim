@@ -422,7 +422,8 @@ def cmd_sail(a):
         name = parts[0]
         camber = float(parts[1])
         draft = float(parts[2]) if len(parts) > 2 else 0.5
-        up, lo = geo.sail_section(camber, draft, a.chord, a.thickness)
+        up, lo = geo.sail_section(camber, draft, a.chord, a.thickness,
+                                  nose_resolved=a.nose_resolved)
         tris = geo.extrude_section(up, lo, a.span, z0=-0.5 * a.span)
         geo.write_stl_ascii(os.path.join(dst, name + ".stl"), [(name, tris)])
         w = geo.watertight(tris)
@@ -434,6 +435,8 @@ def cmd_sail(a):
                                   "camber": camber, "draft": draft,
                                   "chord_m": a.chord,
                                   "thickness_rel": a.thickness}
+        if a.nose_resolved:
+            report["bodies"][name]["nose_sampling"] = "curvature-resolved-v1"
         made[name] = w["watertight"]
         print("  %-22s пузо %.3f, горб %.2f, хорда %.2f м, толщина %.1f%% — %s"
               % (name, camber, draft, a.chord, 100 * a.thickness,
@@ -1165,6 +1168,8 @@ def main(argv=None):
     sa.add_argument("--span", type=float, default=0.1, help="толщина слоя, м")
     sa.add_argument("--thickness", type=float, default=0.015,
                     help="толщина сечения в долях хорды")
+    sa.add_argument("--nose-resolved", action="store_true",
+                    help="новый гладко дискретизированный носок; прежние STL не менять")
     sa.add_argument("--dst", help="куда писать")
     sa.add_argument("--twa", type=float,
                     help="спросить риг о полосках генакера на этом курсе")

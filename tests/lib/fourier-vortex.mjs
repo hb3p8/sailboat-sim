@@ -1,5 +1,6 @@
 // Контрольная непрерывная пелена тонкого профиля на единичной плоской пластине.
 // Только изолированный опыт: здесь пока плоская пластина и нет силы лодки.
+import { mappedVortexVelocity } from './flat-plate-map.mjs';
 const PI2 = 2 * Math.PI;
 
 function induced(vortex, x, z) {
@@ -25,8 +26,10 @@ export function boundVelocity(state, x, z) {
   return [ux, uz];
 }
 
-function advectFree(free, state, flow, dt, substeps) {
+function advectFree(free, state, flow, dt, substeps, mapped) {
   const velocity = (positions, i) => {
+    if (mapped) return mappedVortexVelocity({ flow,
+      vortices: positions, index: i });
     const p = positions[i];
     let ux = flow[0], uz = flow[1];
     const bound = boundVelocity(state, p.x, p.z);
@@ -137,17 +140,19 @@ export function fourierWakeStep({ flow, dt, state = null,
       (advection === 'induced' &&
         (!Array.isArray(state.gamma) || !Array.isArray(state.edges))) ||
       !Array.isArray(state.cumulative))) ||
-      !['uniform', 'induced'].includes(advection) ||
+      !['uniform', 'induced', 'mapped'].includes(advection) ||
       !['half-flow', 'previous-third'].includes(placement) ||
       !(reynolds === Infinity || Number.isFinite(reynolds) && reynolds > 0) ||
+      (advection === 'mapped' && reynolds !== Infinity) ||
       !Number.isInteger(advectionSubsteps) || advectionSubsteps < 1)
     throw new Error('След Фурье: некорректный шаг или состояние');
   const aged = state ? state.free.map(v => ({ ...v,
     age: (v.age ?? 0) + dt / 2,
     coreRadius: Number.isFinite(reynolds) ?
       Math.sqrt(4 * ((v.age ?? 0) + dt / 2) / reynolds) : undefined })) : [];
-  const transferred = state && advection === 'induced' ?
-    advectFree(aged, state, flow, dt, advectionSubsteps) : null;
+  const transferred = state && advection !== 'uniform' ?
+    advectFree(aged, state, flow, dt, advectionSubsteps,
+      advection === 'mapped') : null;
   if (transferred && !transferred.ok) return transferred;
   const old = state ? (transferred ? transferred.free :
     aged.map(v => ({ ...v,

@@ -7,7 +7,7 @@
 // для общей пелены. Бернулли линеаризован по заданной касательной скорости.
 // Область применимости и отрицательные пробы: docs/local-pressure.md.
 
-function solve(a, rhs) {
+export function solveLinear(a, rhs) {
   const n = rhs.length, x = new Float64Array(rhs);
   const m = a.map(row => new Float64Array(row));
   for (let k = 0; k < n; k++) {
@@ -81,7 +81,7 @@ export function localPressure({ points, flow, rho, span, normalForce, panels = 1
   }
   if (forceMatched)
     rhs[panels] = normalForce / (rho * speed * speed * chord * span);
-  const x = solve(a, rhs);
+  const x = solveLinear(a, rhs);
   if (!x || !x.every(Number.isFinite)) return { ok: false, reason: 'singular' };
   let residual = 0;
   for (let i = 0; i < n; i++) {

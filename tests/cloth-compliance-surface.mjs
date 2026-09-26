@@ -12,15 +12,18 @@ const solver = opt('solver', 'dynamic');
 const staticStart = opt('start', 'rest');
 const maxInner = Number(opt('inner', '400'));
 const maxOuter = Number(opt('outer', '20'));
+const rhoCap = Number(opt('rho-cap', 'Infinity'));
+const pressure = Number(opt('pressure', '1'));
 if (![5, 9, 17].includes(n) || ![30, 120].includes(hz) ||
     ![1, 4, 16, 64, 256, 1024].includes(passes) || ![1, 2, 3].includes(seconds) ||
     !['dynamic', 'static'].includes(solver) ||
     !['rest', 'raised', 'lowered'].includes(staticStart) ||
     ![400, 1600].includes(maxInner) ||
-    ![20, 40].includes(maxOuter))
+    ![20, 40].includes(maxOuter) || ![160000, 640000, Infinity].includes(rhoCap) ||
+    ![0, 1, 40].includes(pressure))
   throw new Error('Неверные параметры стенда 3D-поверхности');
 
-const G = 50, K = 1000, B = 1, pressure = 1;
+const G = 50, K = 1000, B = 1;
 // G и K — модельные Н/м, B — Н·м, давление — Н/м².
 const index = (r, c) => r * n + c, count = n * n, cell = 1 / (n - 1);
 const p = new Float64Array(3 * count), prev = new Float64Array(3 * count);
@@ -177,7 +180,7 @@ console.log(`3D-поверхность ${n}×${n}: ${triangles.length} треу�
   `${hard.length}/${soft.length}/${areas.length}/${hinges.length} ` +
   `жёстких/сдвиговых/площадных/изгибных связей, ` +
   (solver === 'dynamic' ? `${hz} Гц, ${passes} проходов, ${seconds} с` :
-    'статический минимум') + '; общая нагрузка ' +
+    'статический минимум') + `, давление ${pressure} Н/м²; общая нагрузка ` +
   `${force.filter((_, i) => i % 3 === 2).reduce((a, z) => a + z, 0).toFixed(5)} Н`);
 const isOriented = state => triangles.every(([a, b, c], t) => {
   const A = Array.from(state.subarray(3 * a, 3 * a + 3));
@@ -266,7 +269,8 @@ const minimize = (state, multipliers, rho) => {
     state.set(candidate);
     current = next;
   }
-  return { iterations, energy: current.energy };
+  return { iterations, energy: current.energy,
+    rmsGradient: Math.sqrt(fullDot(current.gradient, current.gradient) / ((n - 2) ** 2)) };
 };
 const staticAudit = multipliers => {
   const gradient = physicalEnergy(p).gradient;
@@ -323,9 +327,10 @@ if (solver === 'static') {
   console.log(`Начальная форма оптимизатора: ${startLabel}`);
   const multipliers = new Float64Array(hard.length);
   let rho = 1e4, converged = false;
+  const capLabel = Number.isFinite(rhoCap) ? `${rhoCap.toExponential(1)} Н/м` : 'нет';
   console.log('Статические допуски до прогона: ребро 1e-8 м, ' +
     `RMS силы 1e-6 Н, дополнительность 1e-8 Дж; ` +
-    `лимиты ${maxOuter}×${maxInner}`);
+    `лимиты ${maxOuter}×${maxInner}, потолок ρ: ${capLabel}`);
   for (let outer = 1; outer <= maxOuter; outer++) {
     const inner = minimize(p, multipliers, rho);
     for (let k = 0; k < hard.length; k++)
@@ -334,12 +339,13 @@ if (solver === 'static') {
     console.log(`Внешний шаг ${outer}: внутренние ${inner.iterations}, ` +
       `дополненная энергия ${inner.energy.toExponential(4)} Дж, ` +
       `ρ ${rho.toExponential(1)} Н/м, ` +
+      `RMS внутреннего градиента ${inner.rmsGradient.toExponential(3)} Н, ` +
       `ребро ${audit.maxExtension.toExponential(3)} м, ` +
       `RMS силы ${audit.rmsForce.toExponential(3)} Н, ` +
       `дополнительность ${audit.complementarity.toExponential(3)} Дж`);
     if (audit.maxExtension <= 1e-8 && audit.rmsForce <= 1e-6 &&
         audit.complementarity <= 1e-8) { converged = true; break; }
-    if (outer % 4 === 0) rho *= 4;
+    if (outer % 4 === 0) rho = Math.min(rho * 4, rhoCap);
   }
   for (let k = 0; k < hard.length; k++) hard[k].lambda = -multipliers[k] * h * h;
   show('Статический результат', measure());

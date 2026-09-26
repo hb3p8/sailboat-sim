@@ -26,6 +26,7 @@ if (unforced) {
              { twa: 140, sheet: 8.5, tack: -1, source: 0 },
              { twa: 150, sheet: 9.2, tack: 1, source: 0 },
              { twa: 150, sheet: 9.2, tack: -1, source: 0 });
+  if (process.argv.includes('--one')) cases.length = 1;
 }
 const sum = a => a.reduce((s, v) => s + v, 0);
 function baselineLoads(b, cloth, area) {
@@ -111,11 +112,26 @@ for (const c of cases) {
   const area = cloth.flyingAreas();
   const pressureForce = baselineLoads(b, cloth, area);
   if (unforced) {
-    const net = { fx: 0, fy: 0, fz: 0, accepted: 0, reasons: {} };
+    const net = { fx: 0, fy: 0, fz: 0, accepted: 0, reasons: {},
+                  firstCell: [], crossingSteps: [], convectiveStep: [] };
     for (let r = 0; r < cloth.rows; r++) {
-      const si = cloth.stripOf(r), profile = localPressureForRow({
+      const si = cloth.stripOf(r), strip = b.rig.stripCalc[12 + si];
+      const a = cloth.ix(r, 0) * 3, first = cloth.ix(r, 1) * 3,
+            end = cloth.ix(r, cloth.cols - 1) * 3;
+      const chord = Math.hypot(cloth.pos[end] - cloth.pos[a],
+                               cloth.pos[end + 1] - cloth.pos[a + 1],
+                               cloth.pos[end + 2] - cloth.pos[a + 2]);
+      const edge = Math.hypot(cloth.pos[first] - cloth.pos[a],
+                              cloth.pos[first + 1] - cloth.pos[a + 1],
+                              cloth.pos[first + 2] - cloth.pos[a + 2]);
+      net.firstCell.push(edge / chord);
+      net.crossingSteps.push(0.1 * chord * 30 / strip.ve);
+      net.convectiveStep.push(strip.ve / (30 * chord));
+      if (process.argv.includes('--resolution-detail'))
+        console.log(`    строка ${r}: хорда ${chord.toFixed(3)} м, поток ${strip.ve.toFixed(3)} м/с, первое ребро ${(100 * edge / chord).toFixed(1)} % c, первые 10 % за ${(0.1 * chord * 30 / strip.ve).toFixed(2)} шага`);
+      const profile = localPressureForRow({
         pos: cloth.pos, normals: cloth.nrm, area, pressureForce,
-        row: r, cols: cloth.cols, strip: b.rig.stripCalc[12 + si],
+        row: r, cols: cloth.cols, strip,
         rho: cloth.rhoAir, panels: 32, forceMatched: false,
       });
       if (!profile.ok) {
@@ -124,15 +140,20 @@ for (const c of cases) {
       }
       net.accepted++;
       const nodes = pressureToNodes(profile, cloth.cols);
+      let rowFx = 0;
       for (let c = 0; c < cloth.cols; c++) {
         const k = cloth.ix(r, c) * 3, f = nodes[c];
-        net.fx += f * cloth.nrm[k];
+        rowFx += f * cloth.nrm[k];
         net.fy += f * cloth.nrm[k + 1];
         net.fz += f * cloth.nrm[k + 2];
       }
+      net.fx += rowFx;
+      if (process.argv.includes('--resolution-detail'))
+        console.log(`      свободная нормальная сила ${sum(profile.forces).toFixed(2)} Н; продольная ${rowFx.toFixed(2)} Н`);
     }
     const gen = b.rig.stripState.slice(12), drive = sum(gen.map(g => g.drive));
     console.log(`  независимый интеграл всех строк ${c.tack}/${c.twa}/${c.sheet}: Fx/Fy/Fz=${net.fx.toFixed(1)}/${net.fy.toFixed(1)}/${net.fz.toFixed(1)} Н; прежняя тяга генакера ${drive.toFixed(1)} Н; принято ${net.accepted}/${cloth.rows}, отказы ${JSON.stringify(net.reasons)}`);
+    console.log(`  первые 10% хорды: первое ребро ткани ${(100 * Math.min(...net.firstCell)).toFixed(1)}…${(100 * Math.max(...net.firstCell)).toFixed(1)}% c; пересечение потоком ${Math.min(...net.crossingSteps).toFixed(1)}…${Math.max(...net.crossingSteps).toFixed(1)} шага по 1/30 с; конвективный шаг ${(100 * Math.min(...net.convectiveStep)).toFixed(1)}…${(100 * Math.max(...net.convectiveStep)).toFixed(1)}% c`);
   }
   let row = 1, entry = Infinity;
   for (let r = 1; r + 1 < cloth.rows; r++) {

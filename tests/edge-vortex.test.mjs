@@ -4,12 +4,13 @@ import assert from 'node:assert/strict';
 import { edgeVortexStep } from './lib/edge-vortex.mjs';
 
 function run(panels, dt, wz, shedLeadingEdge = true,
-             localConvection = false) {
+             localConvection = false, advectionSubsteps = 1,
+             reynolds = null) {
   let state = null, result;
   const steps = Math.round(0.4 / dt);
   for (let i = 0; i < steps; i++) {
     result = edgeVortexStep({ flow: [1, wz], dt, panels, state,
-      shedLeadingEdge, localConvection });
+      shedLeadingEdge, localConvection, advectionSubsteps, reynolds });
     assert.ok(result.ok);
     assert.ok(result.residual < 1e-12, `невязка ${result.residual}`);
     assert.ok(Math.abs(result.circulation) < 1e-12,
@@ -59,6 +60,21 @@ for (const [panels, dt] of [[16, 0.02], [32, 0.01], [32, 0.005], [64, 0.005]]) {
   assert.ok(Math.abs(a.lesp) < 1e-12);
   assert.ok(Math.abs(a.force + b.force) < 1e-9);
   console.log(`местная конвекция LE/TE: панели=${panels} dt=${dt}: F=${a.force.toFixed(6)}, пересечений ткани=${a.crossedLeading}`);
+}
+for (const panels of [32, 64]) {
+  for (const substeps of [1, 4, 16, 32, 64]) {
+    const r = run(panels, 0.005, 0.1, true, true, substeps);
+    console.log(`подшаг переноса: панели=${panels} n=${substeps}: F=${r.force.toFixed(6)}, пересечений=${r.crossedLeading}`);
+  }
+}
+for (const panels of [32, 64]) {
+  for (const reynolds of [1e5, 1e6]) {
+    for (const substeps of [1, 16]) {
+      const r = run(panels, 0.005, 0.1, true, true,
+        substeps, reynolds);
+      console.log(`вязкое ядро: панели=${panels} Re=${reynolds} n=${substeps}: F=${r.force.toFixed(6)}, пересечений=${r.crossedLeading}`);
+    }
+  }
 }
 if (process.argv.includes('--wall-gate')) {
   const result = run(32, 0.005, 0.1, true, true);

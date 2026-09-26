@@ -8,7 +8,8 @@ const PI2 = 2 * Math.PI;
 
 function induced(vortex, x, z, core2) {
   const dx = x - vortex.x, dz = z - vortex.z;
-  const k = vortex.gamma / (PI2 * (dx * dx + dz * dz + core2));
+  const k = vortex.gamma / (PI2 * (dx * dx + dz * dz +
+    (vortex.core2 ?? core2)));
   return [-k * dz, k * dx];
 }
 
@@ -43,13 +44,20 @@ function meanNormal(vortex, core2) {
 
 export function edgeVortexStep({ flow, dt, panels = 16, state = null,
                                  shedLeadingEdge = true,
-                                 localConvection = false }) {
+                                 localConvection = false,
+                                 advectionSubsteps = 1,
+                                 reynolds = null }) {
   if (!Array.isArray(flow) || flow.length !== 2 || !flow.every(Number.isFinite) ||
       !(flow[0] > 0) || !(dt > 0) || !Number.isInteger(panels) ||
-      panels < 4 || panels > 128)
+      panels < 4 || panels > 128 ||
+      !Number.isInteger(advectionSubsteps) ||
+      advectionSubsteps < 1 || advectionSubsteps > 64 ||
+      (reynolds !== null && !(reynolds > 0)))
     throw new Error('Вихрь кромки: некорректный поток, шаг или число панелей');
   if (state && (state.panels !== panels || state.shedLeadingEdge !== shedLeadingEdge ||
                 state.localConvection !== localConvection ||
+                state.advectionSubsteps !== advectionSubsteps ||
+                state.reynolds !== reynolds ||
                 !Array.isArray(state.free) ||
                 !Array.isArray(state.bound) || state.bound.length !== panels))
     throw new Error('Вихрь кромки: несовместимое предыдущее состояние');
@@ -67,27 +75,37 @@ export function edgeVortexStep({ flow, dt, panels = 16, state = null,
   // Радиус ядра — численная регуляризация, привязанная к первой панели.
   // Его зависимость от сетки и шага — отдельные обязательные испытания.
   const core2 = (width[0] / 2) ** 2;
-  const free = state ? state.free.map((v, index) => {
-    let vx = flow[0], vz = flow[1];
-    if (localConvection) {
-      for (let j = 0; j < panels; j++) {
-        const inducedAt = induced({ x: boundAt[j], z: 0,
-          gamma: state.bound[j] }, v.x, v.z, core2);
-        vx += inducedAt[0]; vz += inducedAt[1];
+  let free = state ? state.free.map(v => ({ ...v })) : [];
+  const steps = localConvection ? advectionSubsteps : 1;
+  for (let substep = 0; substep < steps; substep++) {
+    const h = dt / steps;
+    free = free.map((v, index) => {
+      let vx = flow[0], vz = flow[1];
+      if (localConvection) {
+        for (let j = 0; j < panels; j++) {
+          const inducedAt = induced({ x: boundAt[j], z: 0,
+            gamma: state.bound[j] }, v.x, v.z, core2);
+          vx += inducedAt[0]; vz += inducedAt[1];
+        }
+        for (let j = 0; j < free.length; j++) {
+          if (j === index) continue;
+          const inducedAt = induced(free[j], v.x, v.z, core2);
+          vx += inducedAt[0]; vz += inducedAt[1];
+        }
       }
-      for (let j = 0; j < state.free.length; j++) {
-        if (j === index) continue;
-        const inducedAt = induced(state.free[j], v.x, v.z, core2);
-        vx += inducedAt[0]; vz += inducedAt[1];
-      }
-    }
-    return { x: v.x + vx * dt, z: v.z + vz * dt,
-      gamma: v.gamma, edge: v.edge };
-  }) : [];
+      return { x: v.x + vx * h, z: v.z + vz * h,
+        gamma: v.gamma, edge: v.edge,
+        ...(reynolds === null ? {} : {
+          age: v.age + h, core2: 4 * (v.age + h) / reynolds,
+        }) };
+    });
+  }
   const side = Math.sign(flow[1]);
   const lev = { x: dxStep / 2, z: side * dxStep / 2,
-    gamma: 0, edge: 'LE' };
-  const tev = { x: 1 + dxStep / 2, z: 0, gamma: 0, edge: 'TE' };
+    gamma: 0, edge: 'LE',
+    ...(reynolds === null ? {} : { age: dt / 2, core2: 2 * dt / reynolds }) };
+  const tev = { x: 1 + dxStep / 2, z: 0, gamma: 0, edge: 'TE',
+    ...(reynolds === null ? {} : { age: dt / 2, core2: 2 * dt / reynolds }) };
   const n = panels + 1 + Number(shedLeadingEdge);
   const matrix = Array.from({ length: n }, () => new Float64Array(n));
   const rhs = new Float64Array(n);
@@ -145,6 +163,7 @@ export function edgeVortexStep({ flow, dt, panels = 16, state = null,
     unsteadyForce += unsteady * width[i];
   }
   const next = { panels, shedLeadingEdge, localConvection,
+    advectionSubsteps, reynolds,
     bound: Array.from(solution.slice(0, panels)),
     free: shedLeadingEdge ? [...free, lev, tev] : [...free, tev] };
   return { ok: true, residual, bound: next.bound, lev, tev, pressure,

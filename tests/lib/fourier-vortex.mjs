@@ -13,7 +13,7 @@ function induced(vortex, x, z) {
 }
 
 // Точный интеграл Био–Савара для постоянной плотности на каждом отрезке.
-function boundVelocity(state, x, z) {
+export function boundVelocity(state, x, z) {
   let ux = 0, uz = 0;
   for (let i = 0; i < state.gamma.length; i++) {
     const a = state.edges[i], b = state.edges[i + 1];

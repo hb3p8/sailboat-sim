@@ -4,8 +4,11 @@ const PI2 = 2 * Math.PI;
 
 function induced(vortex, x, z) {
   const dx = x - vortex.x, dz = z - vortex.z;
-  const k = vortex.gamma / (PI2 *
-    (dx * dx + dz * dz + (vortex.core2 ?? 0)));
+  const r2 = dx * dx + dz * dz;
+  const denominator = vortex.coreRadius ?
+    Math.sqrt(r2 * r2 + vortex.coreRadius ** 4) :
+    r2 + (vortex.core2 ?? 0);
+  const k = vortex.gamma / (PI2 * denominator);
   return [-k * dz, k * dx];
 }
 
@@ -120,24 +123,34 @@ export function fourierWakeStep({ flow, dt, state = null,
                                   modes = 32, points = 512,
                                   shedLeadingEdge = false,
                                   advection = 'uniform',
-                                  advectionSubsteps = 1 }) {
+                                  advectionSubsteps = 1,
+                                  placement = 'half-flow',
+                                  reynolds = Infinity }) {
   if (!(dt > 0) || (state && (state.points !== points ||
       state.modes !== modes ||
       state.shedLeadingEdge !== shedLeadingEdge ||
       state.advection !== advection ||
       state.advectionSubsteps !== advectionSubsteps ||
+      state.placement !== placement ||
+      state.reynolds !== reynolds ||
       !Array.isArray(state.free) ||
       (advection === 'induced' &&
         (!Array.isArray(state.gamma) || !Array.isArray(state.edges))) ||
       !Array.isArray(state.cumulative))) ||
       !['uniform', 'induced'].includes(advection) ||
+      !['half-flow', 'previous-third'].includes(placement) ||
+      !(reynolds === Infinity || Number.isFinite(reynolds) && reynolds > 0) ||
       !Number.isInteger(advectionSubsteps) || advectionSubsteps < 1)
     throw new Error('След Фурье: некорректный шаг или состояние');
+  const aged = state ? state.free.map(v => ({ ...v,
+    age: (v.age ?? 0) + dt / 2,
+    coreRadius: Number.isFinite(reynolds) ?
+      Math.sqrt(4 * ((v.age ?? 0) + dt / 2) / reynolds) : undefined })) : [];
   const transferred = state && advection === 'induced' ?
-    advectFree(state.free, state, flow, dt, advectionSubsteps) : null;
+    advectFree(aged, state, flow, dt, advectionSubsteps) : null;
   if (transferred && !transferred.ok) return transferred;
   const old = state ? (transferred ? transferred.free :
-    state.free.map(v => ({ ...v,
+    aged.map(v => ({ ...v,
       x: v.x + flow[0] * dt, z: v.z + flow[1] * dt }))) : [];
   for (let i = 0; i < old.length; i++) {
     const prev = state.free[i], now = old[i];
@@ -145,11 +158,34 @@ export function fourierWakeStep({ flow, dt, state = null,
         (prev.x > 0 && prev.x < 1 || now.x > 0 && now.x < 1))
       return { ok: false, reason: 'vortex-crossed-plate', index: i };
   }
+  if (Number.isFinite(reynolds))
+    for (const v of old) {
+      v.age += dt / 2;
+      v.coreRadius = Math.sqrt(4 * v.age / reynolds);
+    }
   const newLeading = { x: flow[0] * dt / 2,
     z: Math.sign(flow[1]) * flow[0] * dt / 2,
     gamma: 0, edge: 'LE' };
   const newVortex = { x: 1 + flow[0] * dt / 2,
     z: flow[1] * dt / 2, gamma: 0, edge: 'TE' };
+  if (Number.isFinite(reynolds)) {
+    newLeading.age = dt / 2;
+    newVortex.age = dt / 2;
+    newLeading.coreRadius = Math.sqrt(2 * dt / reynolds);
+    newVortex.coreRadius = Math.sqrt(2 * dt / reynolds);
+  }
+  if (placement === 'previous-third') {
+    const priorLeading = [...old].reverse().find(v => v.edge === 'LE');
+    if (priorLeading) {
+      newLeading.x = priorLeading.x / 3;
+      newLeading.z = priorLeading.z / 3;
+    }
+    const priorTrailing = [...old].reverse().find(v => v.edge === 'TE');
+    if (priorTrailing) {
+      newVortex.x = 1 + (priorTrailing.x - 1) / 3;
+      newVortex.z = priorTrailing.z / 3;
+    }
+  }
   const sources = shedLeadingEdge ? [...old, newLeading, newVortex] :
     [...old, newVortex];
   const baseline = fourierPlate({ flow, free: sources,
@@ -210,6 +246,8 @@ export function fourierWakeStep({ flow, dt, state = null,
     kelvin: plate.circulation + free.reduce((s, v) => s + v.gamma, 0),
     lev: shedLeadingEdge ? newLeading : null, tev: newVortex,
     state: { points, modes, shedLeadingEdge, advection, advectionSubsteps,
+      placement,
+      reynolds,
       free, cumulative,
       impulseMoment, gamma: plate.gamma, edges: plate.edges } };
 }

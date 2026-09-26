@@ -68,7 +68,7 @@ assert.ok(leading.ok && leading.force < 0 &&
   leading.impulseForce > 0);
 assert.ok(tangent.ok && tangent.force < 0 &&
   tangent.impulseForce > 0);
-assert.equal(edgeRelease.reason, 'advection-midpoint');
+assert.equal(edgeRelease.reason, 'sheet-crossed-plate');
 assert.equal(thinRelease.reason, 'sheet-crossed-plate');
 let refined = null;
 if (process.argv.includes('--full')) {

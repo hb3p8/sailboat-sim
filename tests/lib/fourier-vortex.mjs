@@ -106,6 +106,17 @@ function advectSheets(sheets, flow, dt, modes, points, reynolds,
 
 // Точный интеграл Био–Савара для постоянной плотности на каждом отрезке.
 export function boundVelocity(state, x, z) {
+  // В крайних точках кусочно-постоянная квадратура даёт ложную
+  // логарифмическую особенность. Предел ряда Фурье при A0=0 на LE
+  // и всегда на TE интегрируется точно по каждой синусной моде.
+  if (z === 0 && (x === 0 || x === 1) &&
+      Number.isFinite(state.edgeSpeed) && Array.isArray(state.An)) {
+    if (x === 0 && Math.abs(state.A0) > 1e-8)
+      return [0, NaN]; // Настоящий сингулярный LE-предел.
+    const modes = state.An.reduce((sum, coefficient, i) =>
+      sum + coefficient * (x === 0 ? 1 : (-1) ** (i + 1)), 0);
+    return [0, state.edgeSpeed * (modes - (x === 1 ? state.A0 : 0))];
+  }
   let ux = 0, uz = 0;
   for (let i = 0; i < state.gamma.length; i++) {
     const a = state.edges[i], b = state.edges[i + 1];
@@ -217,7 +228,8 @@ export function fourierPlate({ flow, free = [], sheets = [], modes = 8,
   const circulation = -Math.PI * vmag * (A0 + An[0] / 2);
   const downwashError = Math.sqrt(average(incoming.map((w, k) =>
     (w + reconstructed[k]) ** 2)));
-  return { ok: true, A0, suctionNumerator, An, force, circulation, pressure,
+  return { ok: true, A0, suctionNumerator, An, edgeSpeed: vmag,
+    force, circulation, pressure,
     gamma, x, edges, incoming, reconstructed, downwashError };
 }
 

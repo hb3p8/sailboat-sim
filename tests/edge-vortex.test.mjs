@@ -3,12 +3,13 @@
 import assert from 'node:assert/strict';
 import { edgeVortexStep } from './lib/edge-vortex.mjs';
 
-function run(panels, dt, wz, shedLeadingEdge = true) {
+function run(panels, dt, wz, shedLeadingEdge = true,
+             localConvection = false) {
   let state = null, result;
   const steps = Math.round(0.4 / dt);
   for (let i = 0; i < steps; i++) {
     result = edgeVortexStep({ flow: [1, wz], dt, panels, state,
-      shedLeadingEdge });
+      shedLeadingEdge, localConvection });
     assert.ok(result.ok);
     assert.ok(result.residual < 1e-12, `невязка ${result.residual}`);
     assert.ok(Math.abs(result.circulation) < 1e-12,
@@ -52,6 +53,13 @@ for (const panels of [8, 16, 32]) {
 const sharp = run(64, 0.005, 0.1);
 assert.ok(Math.abs(sharp.lesp) < 1e-12);
 console.log(`острая передняя кромка: A0=${sharp.lesp.toExponential(2)}, F=${sharp.force.toFixed(6)}, циркуляционный=${sharp.circulatoryForce.toFixed(6)}, нестационарный=${sharp.unsteadyForce.toFixed(6)}`);
+for (const [panels, dt] of [[16, 0.02], [32, 0.01], [32, 0.005], [64, 0.005]]) {
+  const a = run(panels, dt, 0.1, true, true);
+  const b = run(panels, dt, -0.1, true, true);
+  assert.ok(Math.abs(a.lesp) < 1e-12);
+  assert.ok(Math.abs(a.force + b.force) < 1e-9);
+  console.log(`местная конвекция LE/TE: панели=${panels} dt=${dt}: F=${a.force.toFixed(6)}`);
+}
 // Положительный угол входа на пластине должен давать положительную нормальную
 // нагрузку. Пока схема этого не выполняет, её нельзя переносить на генакер.
 if (process.argv.includes('--gate')) {

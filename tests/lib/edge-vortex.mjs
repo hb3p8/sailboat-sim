@@ -1,5 +1,5 @@
 // Изолированный численный опыт двумерного схода с острой передней кромки.
-// Не подключён к лодке: здесь пока плоская пластина, кинематический снос
+// Не подключён к лодке: здесь пока плоская пластина, пробные варианты сноса
 // свободных вихрей и линейный нестационарный Бернулли. Назначение — проверить
 // непротекание, Кельвина, отражение и цену шага до переноса на летящую ткань.
 import { solveLinear } from '../../sim/local-pressure.js';
@@ -42,12 +42,14 @@ function meanNormal(vortex, core2) {
 }
 
 export function edgeVortexStep({ flow, dt, panels = 16, state = null,
-                                 shedLeadingEdge = true }) {
+                                 shedLeadingEdge = true,
+                                 localConvection = false }) {
   if (!Array.isArray(flow) || flow.length !== 2 || !flow.every(Number.isFinite) ||
       !(flow[0] > 0) || !(dt > 0) || !Number.isInteger(panels) ||
       panels < 4 || panels > 128)
     throw new Error('Вихрь кромки: некорректный поток, шаг или число панелей');
   if (state && (state.panels !== panels || state.shedLeadingEdge !== shedLeadingEdge ||
+                state.localConvection !== localConvection ||
                 !Array.isArray(state.free) ||
                 !Array.isArray(state.bound) || state.bound.length !== panels))
     throw new Error('Вихрь кромки: несовместимое предыдущее состояние');
@@ -65,9 +67,22 @@ export function edgeVortexStep({ flow, dt, panels = 16, state = null,
   // Радиус ядра — численная регуляризация, привязанная к первой панели.
   // Его зависимость от сетки и шага — отдельные обязательные испытания.
   const core2 = (width[0] / 2) ** 2;
-  const free = state ? state.free.map(v => ({
-    x: v.x + flow[0] * dt, z: v.z + flow[1] * dt, gamma: v.gamma,
-  })) : [];
+  const free = state ? state.free.map((v, index) => {
+    let vx = flow[0], vz = flow[1];
+    if (localConvection) {
+      for (let j = 0; j < panels; j++) {
+        const inducedAt = induced({ x: boundAt[j], z: 0,
+          gamma: state.bound[j] }, v.x, v.z, core2);
+        vx += inducedAt[0]; vz += inducedAt[1];
+      }
+      for (let j = 0; j < state.free.length; j++) {
+        if (j === index) continue;
+        const inducedAt = induced(state.free[j], v.x, v.z, core2);
+        vx += inducedAt[0]; vz += inducedAt[1];
+      }
+    }
+    return { x: v.x + vx * dt, z: v.z + vz * dt, gamma: v.gamma };
+  }) : [];
   const side = Math.sign(flow[1]);
   const lev = { x: dxStep / 2, z: side * dxStep / 2, gamma: 0 };
   const tev = { x: 1 + dxStep / 2, z: 0, gamma: 0 };
@@ -127,7 +142,7 @@ export function edgeVortexStep({ flow, dt, panels = 16, state = null,
     circulatoryForce += circulatory * width[i];
     unsteadyForce += unsteady * width[i];
   }
-  const next = { panels, shedLeadingEdge,
+  const next = { panels, shedLeadingEdge, localConvection,
     bound: Array.from(solution.slice(0, panels)),
     free: shedLeadingEdge ? [...free, lev, tev] : [...free, tev] };
   return { ok: true, residual, bound: next.bound, lev, tev, pressure,

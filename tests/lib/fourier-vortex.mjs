@@ -167,14 +167,15 @@ function unsteadyPressure(plate, previous, dt) {
   return { cumulative, pressure, force, unsteadyForce };
 }
 
-function solveEdgeStrengths(baseline, leadingUnit, trailingUnit, oldGamma) {
+function solveEdgeStrengths(baseline, leadingUnit, trailingUnit, oldGamma,
+                            suctionNumeratorTarget = 0) {
   const a = leadingUnit.suctionNumerator - baseline.suctionNumerator;
   const b = trailingUnit.suctionNumerator - baseline.suctionNumerator;
   const c = 1 + leadingUnit.circulation - baseline.circulation;
   const d = 1 + trailingUnit.circulation - baseline.circulation;
   const determinant = a * d - b * c;
   if (Math.abs(determinant) < 1e-10) return null;
-  const rhsA = -baseline.suctionNumerator;
+  const rhsA = suctionNumeratorTarget - baseline.suctionNumerator;
   const rhsK = -oldGamma - baseline.circulation;
   return [(rhsA * d - b * rhsK) / determinant,
           (a * rhsK - rhsA * c) / determinant];
@@ -307,14 +308,18 @@ export function fourierSheetWakeStep({ flow, dt, state = null,
                                        modes = 64, points = 512,
                                        reynolds = 1e5,
                                        releaseHeight = null,
-                                       shedLeadingEdge = true }) {
+                                       shedLeadingEdge = true,
+                                       suctionNumeratorLimit = 0 }) {
   if (!(dt > 0) || !Number.isFinite(reynolds) || !(reynolds > 0) ||
+      !Number.isFinite(suctionNumeratorLimit) ||
+      !(suctionNumeratorLimit >= 0) ||
       (releaseHeight !== null &&
         (!Number.isFinite(releaseHeight) || !(releaseHeight > 0))) ||
       (state && (state.modes !== modes || state.points !== points ||
         state.reynolds !== reynolds ||
         state.releaseHeight !== releaseHeight ||
         state.shedLeadingEdge !== shedLeadingEdge ||
+        state.suctionNumeratorLimit !== suctionNumeratorLimit ||
         !Array.isArray(state.sheets) ||
         !Array.isArray(state.cumulative))))
     throw new Error('След из отрезков: некорректный шаг или состояние');
@@ -343,9 +348,12 @@ export function fourierSheetWakeStep({ flow, dt, state = null,
   if (!baseline.ok || (leadingUnit && !leadingUnit.ok) || !trailingUnit.ok)
     return { ok: false, reason: 'plate' };
   const oldGamma = old.reduce((s, sheet) => s + sheet.gamma, 0);
-  if (shedLeadingEdge) {
+  const leadingActive = shedLeadingEdge &&
+    Math.abs(baseline.suctionNumerator) > suctionNumeratorLimit;
+  if (leadingActive) {
     const strengths = solveEdgeStrengths(baseline, leadingUnit,
-      trailingUnit, oldGamma);
+      trailingUnit, oldGamma,
+      Math.sign(baseline.suctionNumerator) * suctionNumeratorLimit);
     if (!strengths) return { ok: false, reason: 'edge-singular' };
     [leading.gamma, trailing.gamma] = strengths;
   } else {
@@ -354,7 +362,7 @@ export function fourierSheetWakeStep({ flow, dt, state = null,
       return { ok: false, reason: 'kelvin-singular' };
     trailing.gamma = (-oldGamma - baseline.circulation) / response;
   }
-  const sheets = shedLeadingEdge ? [...old, leading, trailing] :
+  const sheets = leadingActive ? [...old, leading, trailing] :
     [...old, trailing];
   const plate = fourierPlate({ flow, sheets, modes, points });
   if (!plate.ok) return plate;
@@ -372,8 +380,9 @@ export function fourierSheetWakeStep({ flow, dt, state = null,
     residual: plate.downwashError,
     kelvin: plate.circulation +
       sheets.reduce((s, sheet) => s + sheet.gamma, 0),
-    leadingGamma: leading.gamma, trailingGamma: trailing.gamma,
+    leadingGamma: leadingActive ? leading.gamma : 0,
+    leadingActive, trailingGamma: trailing.gamma,
     state: { modes, points, reynolds, releaseHeight,
-      shedLeadingEdge, sheets,
+      shedLeadingEdge, suctionNumeratorLimit, sheets,
       cumulative: pressureStep.cumulative, impulseMoment } };
 }

@@ -1,5 +1,5 @@
 // Численный свидетель изолированной вихревой пробы. Штатный симулятор её не вызывает.
-// node tests/edge-vortex.test.mjs [--gate]
+// node tests/edge-vortex.test.mjs [--gate|--wall-gate]
 import assert from 'node:assert/strict';
 import { edgeVortexStep } from './lib/edge-vortex.mjs';
 
@@ -58,7 +58,12 @@ for (const [panels, dt] of [[16, 0.02], [32, 0.01], [32, 0.005], [64, 0.005]]) {
   const b = run(panels, dt, -0.1, true, true);
   assert.ok(Math.abs(a.lesp) < 1e-12);
   assert.ok(Math.abs(a.force + b.force) < 1e-9);
-  console.log(`местная конвекция LE/TE: панели=${panels} dt=${dt}: F=${a.force.toFixed(6)}`);
+  console.log(`местная конвекция LE/TE: панели=${panels} dt=${dt}: F=${a.force.toFixed(6)}, пересечений ткани=${a.crossedLeading}`);
+}
+if (process.argv.includes('--wall-gate')) {
+  const result = run(32, 0.005, 0.1, true, true);
+  assert.equal(result.crossedLeading, 0,
+    `NO-GO: ${result.crossedLeading} вихрей передней кромки прошли сквозь пластину`);
 }
 // Положительный угол входа на пластине должен давать положительную нормальную
 // нагрузку. Пока схема этого не выполняет, её нельзя переносить на генакер.

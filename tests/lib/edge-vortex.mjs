@@ -81,11 +81,13 @@ export function edgeVortexStep({ flow, dt, panels = 16, state = null,
         vx += inducedAt[0]; vz += inducedAt[1];
       }
     }
-    return { x: v.x + vx * dt, z: v.z + vz * dt, gamma: v.gamma };
+    return { x: v.x + vx * dt, z: v.z + vz * dt,
+      gamma: v.gamma, edge: v.edge };
   }) : [];
   const side = Math.sign(flow[1]);
-  const lev = { x: dxStep / 2, z: side * dxStep / 2, gamma: 0 };
-  const tev = { x: 1 + dxStep / 2, z: 0, gamma: 0 };
+  const lev = { x: dxStep / 2, z: side * dxStep / 2,
+    gamma: 0, edge: 'LE' };
+  const tev = { x: 1 + dxStep / 2, z: 0, gamma: 0, edge: 'TE' };
   const n = panels + 1 + Number(shedLeadingEdge);
   const matrix = Array.from({ length: n }, () => new Float64Array(n));
   const rhs = new Float64Array(n);
@@ -153,6 +155,8 @@ export function edgeVortexStep({ flow, dt, panels = 16, state = null,
     // Это только проверка сеточной инвариантности признака входного всасывания.
     suctionProxy: -solution[0] / (speed * Math.sqrt(width[0])),
     circulatoryForce, unsteadyForce,
+    crossedLeading: next.free.filter(v => v.edge === 'LE' &&
+      v.x > 0 && v.x < 1 && v.z * side < 0).length,
     force: pressure.reduce((s, p, i) => s + p * width[i], 0),
     circulation: next.bound.reduce((s, g) => s + g, 0) +
       next.free.reduce((s, v) => s + v.gamma, 0), state: next };

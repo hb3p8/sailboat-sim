@@ -380,15 +380,17 @@ export function fourierSheetWakeStep({ flow, dt, state = null,
                                        shedLeadingEdge = true,
                                        suctionNumeratorLimit = 0,
                                        advection = 'uniform',
-                                       advectionSubsteps = 1 }) {
+                                       advectionSubsteps = 1,
+                                       leadingFormation = 'flow' }) {
   if (!(dt > 0) || !Number.isFinite(reynolds) || !(reynolds > 0) ||
       !Number.isFinite(suctionNumeratorLimit) ||
       !(suctionNumeratorLimit >= 0) ||
       !['uniform', 'induced'].includes(advection) ||
+      !['flow', 'tangent'].includes(leadingFormation) ||
       !Number.isInteger(advectionSubsteps) ||
       advectionSubsteps < 1 || advectionSubsteps > 64 ||
       (releaseHeight !== null &&
-        (!Number.isFinite(releaseHeight) || !(releaseHeight > 0))) ||
+        (!Number.isFinite(releaseHeight) || releaseHeight < 0)) ||
       (state && (state.modes !== modes || state.points !== points ||
         state.reynolds !== reynolds ||
         state.releaseHeight !== releaseHeight ||
@@ -396,6 +398,7 @@ export function fourierSheetWakeStep({ flow, dt, state = null,
         state.suctionNumeratorLimit !== suctionNumeratorLimit ||
         state.advection !== advection ||
         state.advectionSubsteps !== advectionSubsteps ||
+        state.leadingFormation !== leadingFormation ||
         !Array.isArray(state.sheets) ||
         !Array.isArray(state.cumulative))))
     throw new Error('След из отрезков: некорректный шаг или состояние');
@@ -414,7 +417,9 @@ export function fourierSheetWakeStep({ flow, dt, state = null,
   const offset = sign * (releaseHeight ??
     Math.sqrt(2 * Math.hypot(...flow) * dt / reynolds));
   const rise = flow[1] * dt;
-  const leading = { a: [0, offset], b: [flow[0] * dt, offset + rise],
+  const leading = { a: [0, offset],
+    b: [flow[0] * dt,
+      offset + (leadingFormation === 'tangent' ? 0 : rise)],
     gamma: 0, edge: 'LE', age: 0 };
   const trailing = { a: [1, offset],
     b: [1 + flow[0] * dt, offset + rise], gamma: 0, edge: 'TE', age: 0 };
@@ -477,6 +482,6 @@ export function fourierSheetWakeStep({ flow, dt, state = null,
     leadingActive, trailingGamma: trailing.gamma,
     state: { modes, points, reynolds, releaseHeight,
       shedLeadingEdge, suctionNumeratorLimit,
-      advection, advectionSubsteps, sheets,
+      advection, advectionSubsteps, leadingFormation, sheets,
       cumulative: pressureStep.cumulative, impulseMoment } };
 }

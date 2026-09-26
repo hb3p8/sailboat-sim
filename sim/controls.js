@@ -115,6 +115,8 @@ function readControls(dt) {
       ui.jibup.disabled = !!o.gennakerUp;
       if (o.gennakerUp) ui.jibup.checked = false;
       o.genSheetLen = parseFloat(ui.gensheet.value);
+      o.localPressure = ui.genpressure && ui.genpressure.checked
+        ? { panels: 32 } : false;
     }
     o.jibUp = ui.jibup.checked;
     // Переключатель физики паруса живёт не в состоянии лодки, а рядом с

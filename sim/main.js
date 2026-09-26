@@ -2460,6 +2460,7 @@ function syncPanelFromBoat() {
   set('jibup', o.jibUp !== false);
   set('genup', !!o.gennakerUp);
   set('gensheet', o.genSheetLen != null ? o.genSheetLen : 4.5);
+  set('genpressure', !!o.localPressure);
   set('oldsail', false);
   set('fetch', o.fetch / 1000);
   set('fetchover', o.fetchOverride);
@@ -2812,8 +2813,11 @@ const ui = {};
 for (const id of ['wind', 'winddir', 'hike', 'sailscale', 'gust', 'twist', 'draft',
                   'fetch', 'fetchover', 'cur', 'shd0', 'shk', 'shg', 'chan', 'chop', 'refl',
                   'mainsheet', 'jibsheet', 'mainup', 'jibup', 'oldsail',
-                  'jibtwist', 'jibdraft', 'genup', 'gensheet'])
+                  'jibtwist', 'jibdraft', 'genup', 'gensheet', 'genpressure'])
   ui[id] = document.getElementById(id);
+// Край ползунка следует физическому диапазону шкота из пакета лодки.
+if (ui.gensheet && PACK.rig.gennaker)
+  ui.gensheet.max = (Math.floor(PACK.rig.gennaker.sheet_max_m * 10) / 10).toFixed(1);
 
 // --- вода на панели -----------------------------------------------------------
 //

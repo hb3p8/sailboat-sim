@@ -480,10 +480,15 @@
   <label><span class="cap">
       <span><input id="genup" type="checkbox"> Поднят · шкот</span>
       <span id="v-gensheet"></span></span>
-    <input id="gensheet" type="range" min="3" max="7" step="0.1" value="4.5"></label>
+    <input id="gensheet" type="range" min="3" max="9.2" step="0.1" value="4.5"></label>
   <div id="gennote">Шкот задаётся ДЛИНОЙ: шкотовый угол ходит по дуге, и парус
     вытравливается по потоку, пока брас его не остановит. Подъём убирает
     стаксель — так его и носят. Клавиша <b>N</b>.</div>
+  <label class="flat"><span class="cap"><span><input id="genpressure" type="checkbox" checked>
+    Опытное местное давление генакера</span></span></label>
+  <div>Включено для живого просмотра. Модель пока не прошла зеркальный галс:
+    при 140°/9.0 м скачок тяги 8.7 % против предела 5 %. Снимите галочку
+    для прежнего расчёта.</div>
 
   <h2>Модель</h2>
   <label class="flat"><span class="cap">
@@ -641,6 +646,7 @@ const BUILD = /*__BUILD__*/ null;
 /*__OCEAN__*/
 /*__WAKE__*/
 /*__AERO__*/
+/*__LOCAL-PRESSURE__*/
 /*__CLOTH__*/
 /*__HYDRO__*/
 /*__TELEMETRY__*/

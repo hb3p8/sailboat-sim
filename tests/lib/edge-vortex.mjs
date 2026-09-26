@@ -12,6 +12,35 @@ function induced(vortex, x, z, core2) {
   return [-k * dz, k * dx];
 }
 
+function leadingEdgeSuction(flow, free, core2) {
+  const atEdge = [flow[0], flow[1]];
+  for (const vortex of free) {
+    const v = induced(vortex, 0, 0, core2);
+    atEdge[0] += v[0]; atEdge[1] += v[1];
+  }
+  const vmag = Math.hypot(...atEdge);
+  let sum = 0;
+  const points = 256;
+  for (let k = 0; k < points; k++) {
+    const theta = Math.PI * (k + 0.5) / points;
+    const x = (1 - Math.cos(theta)) / 2;
+    let w = flow[1];
+    for (const vortex of free) w += induced(vortex, x, 0, core2)[1];
+    sum += w;
+  }
+  return sum / (points * vmag);
+}
+
+function meanNormal(vortex, core2) {
+  const points = 256;
+  let sum = 0;
+  for (let k = 0; k < points; k++) {
+    const theta = Math.PI * (k + 0.5) / points;
+    sum += induced(vortex, (1 - Math.cos(theta)) / 2, 0, core2)[1];
+  }
+  return sum / points;
+}
+
 export function edgeVortexStep({ flow, dt, panels = 16, state = null,
                                  shedLeadingEdge = true }) {
   if (!Array.isArray(flow) || flow.length !== 2 || !flow.every(Number.isFinite) ||
@@ -56,9 +85,14 @@ export function edgeVortexStep({ flow, dt, panels = 16, state = null,
     for (const vortex of free)
       rhs[i] -= induced(vortex, control[i], 0, core2)[1];
   }
-  // Нулевой первый связанный вихрь — пробное условие снятия LE-сингулярности.
-  // Сумма всех циркуляций остаётся нулевой, пока внешнего момента нет.
-  if (shedLeadingEdge) matrix[panels][0] = 1;
+  // Для острой передней кромки обнуляем A0 из интеграла нормального потока
+  // по θ, а не первую дискретную циркуляцию: это разные условия.
+  if (shedLeadingEdge) {
+    matrix[panels][panels] = meanNormal({ ...lev, gamma: 1 }, core2);
+    matrix[panels][n - 1] = meanNormal({ ...tev, gamma: 1 }, core2);
+    rhs[panels] = -flow[1];
+    for (const vortex of free) rhs[panels] -= meanNormal(vortex, core2);
+  }
   for (let j = 0; j < n; j++) matrix[n - 1][j] = 1;
   rhs[n - 1] = -free.reduce((s, v) => s + v.gamma, 0);
   const solution = solveLinear(matrix, rhs);
@@ -78,6 +112,7 @@ export function edgeVortexStep({ flow, dt, panels = 16, state = null,
   const old = state ? state.bound : Array(panels).fill(0);
   let cumulative = 0, oldCumulative = 0;
   const pressure = [];
+  let circulatoryForce = 0, unsteadyForce = 0;
   for (let i = 0; i < panels; i++) {
     cumulative += solution[i]; oldCumulative += old[i];
     // Для плоской пластины первая часть — касательный поток × вихревой лист,
@@ -86,13 +121,23 @@ export function edgeVortexStep({ flow, dt, panels = 16, state = null,
     for (const vortex of free) tangential += induced(vortex, control[i], 0, core2)[0];
     if (shedLeadingEdge) tangential += induced(lev, control[i], 0, core2)[0];
     tangential += induced(tev, control[i], 0, core2)[0];
-    pressure.push(-tangential * solution[i] / width[i] -
-                  (cumulative - oldCumulative) / dt);
+    const circulatory = -tangential * solution[i] / width[i];
+    const unsteady = -(cumulative - oldCumulative) / dt;
+    pressure.push(circulatory + unsteady);
+    circulatoryForce += circulatory * width[i];
+    unsteadyForce += unsteady * width[i];
   }
   const next = { panels, shedLeadingEdge,
     bound: Array.from(solution.slice(0, panels)),
     free: shedLeadingEdge ? [...free, lev, tev] : [...free, tev] };
   return { ok: true, residual, bound: next.bound, lev, tev, pressure,
+    // A0 из интеграла требуемого нормального потока по θ (тонкий профиль).
+    // Критическое значение и право применять этот критерий к ткани не заданы.
+    lesp: leadingEdgeSuction(flow, next.free, core2),
+    // Не калиброванный LESP: первая циркуляция / √ширины панели.
+    // Это только проверка сеточной инвариантности признака входного всасывания.
+    suctionProxy: -solution[0] / (speed * Math.sqrt(width[0])),
+    circulatoryForce, unsteadyForce,
     force: pressure.reduce((s, p, i) => s + p * width[i], 0),
     circulation: next.bound.reduce((s, g) => s + g, 0) +
       next.free.reduce((s, v) => s + v.gamma, 0), state: next };

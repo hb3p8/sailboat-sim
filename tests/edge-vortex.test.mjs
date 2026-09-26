@@ -31,6 +31,13 @@ for (const panels of [16, 32, 64, 96]) {
 const attachedCoarse = run(64, 0.01, 0.1, false).force;
 const attachedFine = run(96, 0.005, 0.1, false).force;
 assert.ok(Math.abs(attachedFine - attachedCoarse) / attachedFine < 0.02);
+const suction64 = run(64, 0.005, 0.1, false);
+const suction96 = run(96, 0.005, 0.1, false);
+const suctionMirror = run(96, 0.005, -0.1, false);
+assert.ok(Math.abs(suction64.lesp - suction96.lesp) < 2e-5);
+assert.ok(Math.abs(suction96.lesp + suctionMirror.lesp) < 1e-12);
+assert.ok(Math.abs(suction96.suctionProxy / (Math.PI * suction96.lesp) - 1) < 0.002);
+console.log(`A0 контроль: 64=${suction64.lesp.toFixed(6)}, 96=${suction96.lesp.toFixed(6)}`);
 
 for (const panels of [8, 16, 32]) {
   for (const dt of [0.04, 0.02, 0.01]) {
@@ -42,6 +49,9 @@ for (const panels of [8, 16, 32]) {
     console.log(`панели=${panels} dt=${dt}: F+ = ${a.force.toFixed(6)}, F− = ${b.force.toFixed(6)}, невязка=${a.residual.toExponential(2)}`);
   }
 }
+const sharp = run(64, 0.005, 0.1);
+assert.ok(Math.abs(sharp.lesp) < 1e-12);
+console.log(`острая передняя кромка: A0=${sharp.lesp.toExponential(2)}, F=${sharp.force.toFixed(6)}, циркуляционный=${sharp.circulatoryForce.toFixed(6)}, нестационарный=${sharp.unsteadyForce.toFixed(6)}`);
 // Положительный угол входа на пластине должен давать положительную нормальную
 // нагрузку. Пока схема этого не выполняет, её нельзя переносить на генакер.
 if (process.argv.includes('--gate')) {

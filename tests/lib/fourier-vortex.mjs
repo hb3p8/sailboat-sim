@@ -13,6 +13,27 @@ function induced(vortex, x, z) {
   return [-k * dz, k * dx];
 }
 
+// Интеграл Био–Савара по прямому отрезку свободной пелены с
+// постоянной циркуляцией на единицу длины, не точечная квадратура.
+export function inducedSegment(sheet, x, z) {
+  const [ax, az] = sheet.a, [bx, bz] = sheet.b;
+  const length = Math.hypot(bx - ax, bz - az);
+  if (!(length > 0)) throw new Error('Свободная пелена: нулевой отрезок');
+  const tx = (bx - ax) / length, tz = (bz - az) / length;
+  const nx = -tz, nz = tx;
+  const s = (x - ax) * tx + (z - az) * tz;
+  const h = (x - ax) * nx + (z - az) * nz;
+  if (h === 0 && s > 0 && s < length)
+    throw new Error('Свободная пелена: точка на вихревом слое');
+  const density = sheet.gamma / length;
+  const along = -density / PI2 *
+    (Math.atan((length - s) / h) - Math.atan(-s / h));
+  const across = density / (2 * PI2) *
+    Math.log((s * s + h * h) / ((s - length) ** 2 + h * h));
+  return [along * tx + across * nx,
+          along * tz + across * nz];
+}
+
 // Точный интеграл Био–Савара для постоянной плотности на каждом отрезке.
 export function boundVelocity(state, x, z) {
   let ux = 0, uz = 0;
@@ -67,7 +88,7 @@ function advectFree(free, state, flow, dt, substeps, mapped) {
   return { ok: true, free: start };
 }
 
-export function fourierPlate({ flow, free = [], modes = 8,
+export function fourierPlate({ flow, free = [], sheets = [], modes = 8,
                                points = 256 }) {
   if (!Array.isArray(flow) || flow.length !== 2 ||
       !flow.every(Number.isFinite) || !(flow[0] > 0) ||
@@ -79,6 +100,10 @@ export function fourierPlate({ flow, free = [], modes = 8,
     const v = induced(vortex, 0, 0);
     atEdge[0] += v[0]; atEdge[1] += v[1];
   }
+  for (const sheet of sheets) {
+    const v = inducedSegment(sheet, 0, 0);
+    atEdge[0] += v[0]; atEdge[1] += v[1];
+  }
   const vmag = Math.hypot(...atEdge);
   if (!(vmag > 0)) return { ok: false, reason: 'zero-leading-edge-speed' };
   const theta = [], x = [], incoming = [], tangential = [];
@@ -88,6 +113,10 @@ export function fourierPlate({ flow, free = [], modes = 8,
     let ux = flow[0], uz = flow[1];
     for (const vortex of free) {
       const v = induced(vortex, xi, 0);
+      ux += v[0]; uz += v[1];
+    }
+    for (const sheet of sheets) {
+      const v = inducedSegment(sheet, xi, 0);
       ux += v[0]; uz += v[1];
     }
     theta.push(t); x.push(xi);

@@ -151,6 +151,35 @@ export function fourierPlate({ flow, free = [], sheets = [], modes = 8,
     gamma, x, edges, incoming, reconstructed, downwashError };
 }
 
+function unsteadyPressure(plate, previous, dt) {
+  const cumulative = [], pressure = [];
+  let running = 0, unsteadyForce = 0, force = 0;
+  for (let i = 0; i < plate.gamma.length; i++) {
+    const width = plate.edges[i + 1] - plate.edges[i];
+    const half = running + plate.gamma[i] * width / 2;
+    const unsteady = -(half - (previous ? previous[i] : 0)) / dt;
+    pressure.push(plate.pressure[i] + unsteady);
+    unsteadyForce += unsteady * width;
+    force += pressure[i] * width;
+    cumulative.push(half);
+    running += plate.gamma[i] * width;
+  }
+  return { cumulative, pressure, force, unsteadyForce };
+}
+
+function solveEdgeStrengths(baseline, leadingUnit, trailingUnit, oldGamma) {
+  const a = leadingUnit.suctionNumerator - baseline.suctionNumerator;
+  const b = trailingUnit.suctionNumerator - baseline.suctionNumerator;
+  const c = 1 + leadingUnit.circulation - baseline.circulation;
+  const d = 1 + trailingUnit.circulation - baseline.circulation;
+  const determinant = a * d - b * c;
+  if (Math.abs(determinant) < 1e-10) return null;
+  const rhsA = -baseline.suctionNumerator;
+  const rhsK = -oldGamma - baseline.circulation;
+  return [(rhsA * d - b * rhsK) / determinant,
+          (a * rhsK - rhsA * c) / determinant];
+}
+
 export function fourierWakeStep({ flow, dt, state = null,
                                   modes = 32, points = 512,
                                   shedLeadingEdge = false,
@@ -233,17 +262,11 @@ export function fourierWakeStep({ flow, dt, state = null,
     const leadingUnit = fourierPlate({ flow, free: [...old,
       { ...newLeading, gamma: 1 }, newVortex], modes, points });
     if (!leadingUnit.ok) return { ok: false, reason: 'leading-plate' };
-    const a = leadingUnit.suctionNumerator - baseline.suctionNumerator;
-    const b = unit.suctionNumerator - baseline.suctionNumerator;
-    const c = 1 + leadingUnit.circulation - baseline.circulation;
-    const d = 1 + unit.circulation - baseline.circulation;
-    const determinant = a * d - b * c;
-    if (Math.abs(determinant) < 1e-10)
+    const strengths = solveEdgeStrengths(baseline, leadingUnit,
+      unit, oldGamma);
+    if (!strengths)
       return { ok: false, reason: 'leading-singular' };
-    const rhsA = -baseline.suctionNumerator;
-    const rhsK = -oldGamma - baseline.circulation;
-    newLeading.gamma = (rhsA * d - b * rhsK) / determinant;
-    newVortex.gamma = (a * rhsK - rhsA * c) / determinant;
+    [newLeading.gamma, newVortex.gamma] = strengths;
   } else {
     const response = unit.circulation - baseline.circulation;
     const denominator = 1 + response;
@@ -256,19 +279,11 @@ export function fourierWakeStep({ flow, dt, state = null,
   const plate = fourierPlate({ flow, free,
     modes, points });
   if (!plate.ok) return plate;
-  const cumulative = [], pressure = [];
-  let running = 0, unsteadyForce = 0, force = 0;
+  const { cumulative, pressure, force, unsteadyForce } =
+    unsteadyPressure(plate, state?.cumulative, dt);
   let impulseMoment = free.reduce((s, v) => s + v.gamma * v.x, 0);
   for (let i = 0; i < points; i++) {
     const width = plate.edges[i + 1] - plate.edges[i];
-    const half = running + plate.gamma[i] * width / 2;
-    const previous = state ? state.cumulative[i] : 0;
-    const unsteady = -(half - previous) / dt;
-    pressure.push(plate.pressure[i] + unsteady);
-    unsteadyForce += unsteady * width;
-    force += pressure[i] * width;
-    cumulative.push(half);
-    running += plate.gamma[i] * width;
     impulseMoment += plate.gamma[i] * plate.x[i] * width;
   }
   const impulseForce = (impulseMoment -
@@ -284,4 +299,65 @@ export function fourierWakeStep({ flow, dt, state = null,
       reynolds,
       free, cumulative,
       impulseMoment, gamma: plate.gamma, edges: plate.edges } };
+}
+
+// Первый временной контроль отрезков свободной пелены: геометрия каждого
+// нового отрезка задаётся переносом потока, без индуцированного сворачивания.
+export function fourierSheetWakeStep({ flow, dt, state = null,
+                                       modes = 64, points = 512,
+                                       reynolds = 1e5,
+                                       releaseHeight = null }) {
+  if (!(dt > 0) || !Number.isFinite(reynolds) || !(reynolds > 0) ||
+      (releaseHeight !== null &&
+        (!Number.isFinite(releaseHeight) || !(releaseHeight > 0))) ||
+      (state && (state.modes !== modes || state.points !== points ||
+        state.reynolds !== reynolds ||
+        state.releaseHeight !== releaseHeight ||
+        !Array.isArray(state.sheets) ||
+        !Array.isArray(state.cumulative))))
+    throw new Error('След из отрезков: некорректный шаг или состояние');
+  const old = state ? state.sheets.map(sheet => ({ ...sheet,
+    a: [sheet.a[0] + flow[0] * dt, sheet.a[1] + flow[1] * dt],
+    b: [sheet.b[0] + flow[0] * dt, sheet.b[1] + flow[1] * dt] })) : [];
+  const sign = flow[1] < 0 ? -1 : 1;
+  const offset = sign * (releaseHeight ??
+    Math.sqrt(2 * Math.hypot(...flow) * dt / reynolds));
+  const rise = flow[1] * dt;
+  const leading = { a: [0, offset], b: [flow[0] * dt, offset + rise],
+    gamma: 0, edge: 'LE' };
+  const trailing = { a: [1, offset],
+    b: [1 + flow[0] * dt, offset + rise], gamma: 0, edge: 'TE' };
+  const baseline = fourierPlate({ flow,
+    sheets: [...old, leading, trailing], modes, points });
+  const leadingUnit = fourierPlate({ flow,
+    sheets: [...old, { ...leading, gamma: 1 }, trailing], modes, points });
+  const trailingUnit = fourierPlate({ flow,
+    sheets: [...old, leading, { ...trailing, gamma: 1 }], modes, points });
+  if (!baseline.ok || !leadingUnit.ok || !trailingUnit.ok)
+    return { ok: false, reason: 'plate' };
+  const oldGamma = old.reduce((s, sheet) => s + sheet.gamma, 0);
+  const strengths = solveEdgeStrengths(baseline, leadingUnit,
+    trailingUnit, oldGamma);
+  if (!strengths) return { ok: false, reason: 'edge-singular' };
+  [leading.gamma, trailing.gamma] = strengths;
+  const sheets = [...old, leading, trailing];
+  const plate = fourierPlate({ flow, sheets, modes, points });
+  if (!plate.ok) return plate;
+  const pressureStep = unsteadyPressure(plate, state?.cumulative, dt);
+  let impulseMoment = sheets.reduce((s, sheet) =>
+    s + sheet.gamma * (sheet.a[0] + sheet.b[0]) / 2, 0);
+  for (let i = 0; i < points; i++)
+    impulseMoment += plate.gamma[i] * plate.x[i] *
+      (plate.edges[i + 1] - plate.edges[i]);
+  const impulseForce = (impulseMoment -
+    (state ? state.impulseMoment : 0)) / dt;
+  return { ok: true, ...pressureStep, edges: plate.edges,
+    impulseMoment, impulseForce,
+    circulatoryForce: plate.force, A0: plate.A0,
+    residual: plate.downwashError,
+    kelvin: plate.circulation +
+      sheets.reduce((s, sheet) => s + sheet.gamma, 0),
+    leadingGamma: leading.gamma, trailingGamma: trailing.gamma,
+    state: { modes, points, reynolds, releaseHeight, sheets,
+      cumulative: pressureStep.cumulative, impulseMoment } };
 }

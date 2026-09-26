@@ -23,7 +23,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
 from cfd.lib import geometry as geo          # noqa: E402
-from cfd.lib.ogrid import ogrid, write_plot3d  # noqa: E402
+from cfd.lib.ogrid import ogrid, remap_radial, write_plot3d  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 
@@ -113,6 +113,10 @@ def main():
     ap.add_argument("--n-theta", type=int, default=300)
     ap.add_argument("--n-radial", type=int, default=100)
     ap.add_argument("--first-layer", type=float, default=None, help="первый слой, м")
+    ap.add_argument("--remap-first-layer", type=float, default=None,
+                    help="первый слой после радиального переразбиения, м")
+    ap.add_argument("--remap-radial", type=int, default=None,
+                    help="число радиальных ячеек после переразбиения")
     ap.add_argument("--max-ratio", type=float, default=30.0,
                     help="во сколько раз точки могут сгущаться против медианы")
     ap.add_argument("--out", default="gen-og-c185.p3dfmt")
@@ -122,6 +126,15 @@ def main():
                         nose_resolved=a.nose_resolved)
     pts = ogrid(loop, r_far=a.r_far, n_theta=a.n_theta, n_radial=a.n_radial,
                 first_layer=a.first_layer, max_ratio=a.max_ratio)
+    if (a.remap_first_layer is None) != (a.remap_radial is None):
+        ap.error("--remap-first-layer and --remap-radial must be given together")
+    if a.remap_first_layer is not None:
+        if a.out == "gen-og-c185.p3dfmt":
+            ap.error("choose a distinct --out for a remapped experimental grid")
+        base_q = quality(pts, chord=a.chord)
+        if base_q["negative"] or base_q["nonortho_max"] > 70:
+            raise SystemExit("исходная сетка не проходит геометрическую проверку")
+        pts = remap_radial(pts, a.remap_radial, a.remap_first_layer)
     q = quality(pts, chord=a.chord)
     print("сечение: пузо %.3f, горб %.2f, хорда %.2f м, толщина %.1f%%"
           % (a.camber, a.draft, a.chord, 100 * a.thickness))
@@ -138,6 +151,8 @@ def main():
           % (q["negative"], q["nonortho_max"]))
     if q["negative"]:
         raise SystemExit("сетка с вывернутыми ячейками не пишется: считать по ней нельзя")
+    if a.remap_first_layer is not None and q["nonortho_max"] > 70:
+        raise SystemExit("переразбитая сетка превысила ориентир неортогональности 70°")
     path = os.path.join(ROOT, "cfd", "grids", a.out)
     write_plot3d(path, pts, span=a.span, chord=a.chord)
     print("записана %s" % os.path.relpath(path, ROOT))

@@ -28,7 +28,7 @@
 
 import numpy as np
 
-__all__ = ["ogrid", "write_plot3d"]
+__all__ = ["ogrid", "remap_radial", "write_plot3d"]
 
 
 def _resample_loop(loop, n, curv_gain=12.0, max_ratio=4.0):
@@ -328,6 +328,48 @@ def ogrid(loop, r_far, n_theta=320, n_radial=140, first_layer=None,
     centre = out[-1].mean(axis=0)
     ang = np.arctan2(out[-1][:, 1] - centre[1], out[-1][:, 0] - centre[0])
     out[-1] = centre + r_far * np.column_stack([np.cos(ang), np.sin(ang)])
+    return out
+
+
+def remap_radial(grid, n_radial, first_layer):
+    """Split a valid O-grid radially while preserving its wall and outer ring.
+
+    Ring positions are interpolated in cumulative median radial arc length.
+    Geometric spacing controls the first layer and grows smoothly outwards;
+    this is a geometric operation, not evidence of a resolved boundary layer.
+    The caller must recheck signed areas and non-orthogonality afterward.
+    """
+    grid = np.asarray(grid, dtype=np.float64)
+    if grid.ndim != 3 or grid.shape[2] != 2 or grid.shape[0] < 2:
+        raise ValueError("expected O-grid with shape (rings, stations, 2)")
+    if not isinstance(n_radial, int) or n_radial < 2:
+        raise ValueError("n_radial must be an integer >= 2")
+    step = np.median(np.linalg.norm(np.diff(grid, axis=0), axis=2), axis=1)
+    if not np.isfinite(step).all() or np.any(step <= 0):
+        raise ValueError("source radial spacing must be finite and positive")
+    source = np.concatenate([[0.0], np.cumsum(step)])
+    length = source[-1]
+    if not np.isfinite(first_layer) or not 0 < first_layer < length / n_radial:
+        raise ValueError("first_layer must be positive and below uniform spacing")
+
+    # The first term of n_radial geometrically growing steps must equal the
+    # requested length. Bisection avoids guessing a growth ratio at huge r_far.
+    lo, hi = 0.0, 1.0
+    for _ in range(100):
+        mid = (lo + hi) / 2
+        first = length * np.expm1(mid) / np.expm1(n_radial * mid)
+        if first > first_layer:
+            lo = mid
+        else:
+            hi = mid
+    rate = (lo + hi) / 2
+    target = length * np.expm1(np.arange(n_radial + 1) * rate) / np.expm1(n_radial * rate)
+    source_index = np.searchsorted(source, target, side="right") - 1
+    source_index = np.clip(source_index, 0, len(source) - 2)
+    fraction = (target - source[source_index]) / (source[source_index + 1] - source[source_index])
+    out = (grid[source_index] * (1 - fraction[:, None, None])
+           + grid[source_index + 1] * fraction[:, None, None])
+    out[0], out[-1] = grid[0], grid[-1]
     return out
 
 

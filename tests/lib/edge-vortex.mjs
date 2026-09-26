@@ -82,7 +82,11 @@ export function edgeVortexStep({ flow, dt, panels = 16, state = null,
     cumulative += solution[i]; oldCumulative += old[i];
     // Для плоской пластины первая часть — касательный поток × вихревой лист,
     // вторая — временная производная скачка потенциала (Бернулли).
-    pressure.push(-flow[0] * solution[i] / width[i] -
+    let tangential = flow[0];
+    for (const vortex of free) tangential += induced(vortex, control[i], 0, core2)[0];
+    if (shedLeadingEdge) tangential += induced(lev, control[i], 0, core2)[0];
+    tangential += induced(tev, control[i], 0, core2)[0];
+    pressure.push(-tangential * solution[i] / width[i] -
                   (cumulative - oldCumulative) / dt);
   }
   const next = { panels, shedLeadingEdge,

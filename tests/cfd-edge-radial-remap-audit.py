@@ -47,6 +47,18 @@ def main():
         refined_q = quality(refined, chord=chord)
         print(r_far, base_q["negative"], round(base_q["nonortho_max"], 3),
               refined_q["negative"], round(refined_q["nonortho_max"], 3))
+    coarser = remap_radial(base, 180, .0005)
+    coarser_q = quality(coarser, chord=chord)
+    coarser_first = np.linalg.norm(coarser[1] - coarser[0], axis=1)
+    assert coarser_q["negative"] == 0
+    assert coarser_q["nonortho_max"] < 70
+    assert np.array_equal(coarser[0], base[0])
+    assert np.array_equal(coarser[-1], base[-1])
+    print("0.5mm geometric candidate", coarser_q["negative"],
+          round(coarser_q["nonortho_max"], 3),
+          round(coarser_q["first_layer"] * 1000, 6),
+          round(float(coarser_first.min()) * 1000, 6),
+          round(float(coarser_first.max()) * 1000, 6))
 
 
 if __name__ == "__main__":

@@ -38,6 +38,15 @@ def main():
               round(float(first.max()) * 1000, 6),
               q["negative"], round(q["nonortho_max"], 3),
               round(float(max_ratio), 3))
+    print("r_far_m base_negative base_nonortho_deg remap_negative remap_nonortho_deg")
+    for r_far in (30, 120, 300, 600):
+        candidate = ogrid(contour, r_far=r_far, n_theta=600,
+                          n_radial=100, first_layer=.006)
+        base_q = quality(candidate, chord=chord)
+        refined = remap_radial(candidate, 180, .0002)
+        refined_q = quality(refined, chord=chord)
+        print(r_far, base_q["negative"], round(base_q["nonortho_max"], 3),
+              refined_q["negative"], round(refined_q["nonortho_max"], 3))
 
 
 if __name__ == "__main__":

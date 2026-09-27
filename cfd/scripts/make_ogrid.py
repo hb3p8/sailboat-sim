@@ -139,7 +139,8 @@ def main():
     print("сечение: пузо %.3f, горб %.2f, хорда %.2f м, толщина %.1f%%"
           % (a.camber, a.draft, a.chord, 100 * a.thickness))
     print("сетка %d × %d = %d ячеек, дальняя граница %.0f м (%.0f хорд)"
-          % (a.n_theta, a.n_radial, q["cells"], a.r_far, a.r_far / a.chord))
+          % (pts.shape[1], pts.shape[0] - 1, q["cells"],
+             a.r_far, a.r_far / a.chord))
     print("первый слой %.1f мм, шаг по обшивке %.1f…%.1f мм (медиана %.1f)"
           % (1e3 * q["first_layer"], 1e3 * q["wall_step_min"],
              1e3 * q["wall_step_max"], 1e3 * q["wall_step_med"]))

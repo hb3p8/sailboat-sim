@@ -155,6 +155,11 @@ ref: physics $(addprefix t-,$(REF))
 
 all-tests: test slow
 
+# Локальные ссылки и доступность документации; без сборки, браузера и сети.
+.PHONY: docs-check
+docs-check:
+	@$(PY) scripts/check_docs.py
+
 # Кернел Био — Савара: wasm для симулятора, dylib для нативного замера.
 #
 # Тулчейн — llvm и lld из Homebrew, а НЕ системный clang: у эппловского нет

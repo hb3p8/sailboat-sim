@@ -113,7 +113,7 @@ serve: viewer/terrain.html $(TERRAIN_PACK)
 #
 # Правило: гоняются те батареи, которые правку ВИДЯТ, и в регрессионном режиме.
 # Полный прогон (`--full`) и вся батарея — когда есть основания думать, что
-# сломалось. Подробнее и почему именно так — в CLAUDE.md.
+# сломалось. Подробнее и почему именно так — в docs/guides/testing.md.
 # Отдельную батарею можно позвать по имени: `make t-wind`, `make t-upwind`.
 FAST := axes buoyancy membrane cloth vlm waves ocean wind terrain replay physics sailcoeffs kernel
 # Пелена в медленных: две сорокапятисекундные прогонки подряд, восемнадцать
@@ -194,7 +194,7 @@ fit: extract
 	$(VENV) scripts/fit_hull.py
 	$(MAKE) all
 
-# Офлайн-контур CFD (docs/cfd-validation.md, cfd/README.md).
+# Офлайн-контур CFD (docs/subsystems/offline-cfd.md, cfd/README.md).
 #
 # В `all` и в `test` расчёт не входит и войти не может: один случай корпуса —
 # это десятки миллионов ячеек и часы на чужой машине. В `test` входит только

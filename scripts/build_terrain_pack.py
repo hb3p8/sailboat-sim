@@ -19,7 +19,7 @@ file://, где `fetch()` запрещён политикой источника
     разгон по 16 румбам       100 м   uint8   волна, ветер
     высота горизонта, 16 рум. 100 м   uint8   ветер
 
-План и обоснования — docs/terrain-in-sim.md.
+План и обоснования — docs/subsystems/terrain.md.
 """
 
 import base64
@@ -193,7 +193,7 @@ def skyline_field(top, ground, step, xs, ys, cxs, cys):
 def current_field(wet, step, xs, ys, cxs, cys):
     """Течение: уклон водной поверхности по акватории, безразмерный.
 
-    Данных нет и взять их неоткуда (docs/terrain-in-sim.md §2), поэтому течение
+    Данных нет и взять их неоткуда (docs/subsystems/terrain.md), поэтому течение
     здесь — выдумка. Но выдумка с правильной структурой, и структура эта не
     придумана, а решена: течение считается из СОХРАНЕНИЯ РАСХОДА, а не из
     правил вида «на узком месте быстрее».
@@ -432,7 +432,7 @@ def main():
         "cnx": int(cxs.size), "cny": int(cys.size),
         "rhumbs": RHUMBS,
         # Начало отсчёта — ЦЕНТР квадрата, а не угол: мир физики совпадает с
-        # системой выгрузки, X на восток, Y на север (docs/terrain-in-sim.md §3).
+        # системой выгрузки, X на восток, Y на север (docs/subsystems/terrain.md).
         "x0": float(xs[0]), "y0": float(ys[0]),
         "level": t["level"],
         "hmin": t["hmin"], "hmax": t["hmax"], "top_max": t["top_max"],

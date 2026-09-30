@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Подготовка геометрии для CFD (§3.2 docs/cfd-validation.md).
+"""Подготовка геометрии для CFD (docs/subsystems/offline-cfd.md).
 
 `scripts/export.py` уже пишет тела по отдельности и проверяет их на
 замкнутость. Здесь не повторяется его работа, а делается то, чего realtime не

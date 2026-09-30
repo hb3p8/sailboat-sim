@@ -4,8 +4,9 @@
     python3 scripts/build_sim.py
 
 Вклеивает three, пакет физики, сетки и код в `sim/index.html`. Как и
-просмотрщик, файл открывается двойным кликом с file:// — ни сервера, ни
-сборщика в проекте нет.
+просмотрщик, файл содержит код и основные данные. Для внешних моделей,
+записи замеров и WebGPU используйте scripts/serve.py; порядок запуска —
+в docs/guides/simulation.md.
 """
 
 import datetime
@@ -153,7 +154,7 @@ def main():
                         json.dumps(mesh, separators=(",", ":")))
     # Пакет акватории необязателен: без него страница собирается и работает,
     # лодка ходит по бесконечной воде. Это не запасной путь, а полноправный —
-    # см. docs/terrain-in-sim.md.
+    # см. docs/subsystems/terrain.md.
     terr_path = os.path.join(exp, "terrain_pack.json")
     if os.path.exists(terr_path):
         terr = json.load(open(terr_path))

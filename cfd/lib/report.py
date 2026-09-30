@@ -140,5 +140,5 @@ def document(title, intro, sections):
     parts.append("---")
     parts.append("")
     parts.append("Отчёт собран `cfd/scripts/`; правила статуса — "
-                 "docs/cfd-validation.md §4.5 и §6.")
+                 "docs/subsystems/offline-cfd.md (приёмка результата).")
     return "\n".join(parts) + "\n"

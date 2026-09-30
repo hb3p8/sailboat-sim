@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { Boat } from '../sim/physics.js';
 import { localPressureForRow, pressureToNodes } from '../sim/local-pressure.js';
+import { sectionsOf, wrenchOf } from './lib/gennaker-observables.mjs';
 
 const pack = JSON.parse(readFileSync(new URL('../out/export/physics.json', import.meta.url), 'utf8'));
 const D = Math.PI / 180, hz = 30;
@@ -52,31 +53,26 @@ function baselineLoads(b, cloth, area) {
 }
 function rowWrench(cloth, row, forces) {
   const normal = cloth.nrm.slice(cloth.ix(row, 0) * 3, cloth.ix(row, 0) * 3 + 3);
-  const out = new Float64Array(6);
+  const points = [], vectors = [];
   for (let c = 0; c < cloth.cols; c++) {
     const i = cloth.ix(row, c), k = i * 3, f = forces[c];
-    const fx = f * normal[0], fy = f * normal[1], fz = f * normal[2];
-    out[0] += fx; out[1] += fy; out[2] += fz;
-    out[3] += cloth.pos[k + 1] * fz - cloth.pos[k + 2] * fy;
-    out[4] += cloth.pos[k + 2] * fx - cloth.pos[k] * fz;
-    out[5] += cloth.pos[k] * fy - cloth.pos[k + 1] * fx;
+    points.push(Array.from(cloth.pos.slice(k, k + 3)));
+    vectors.push(Array.from(normal, n => n * f));
   }
-  return out;
+  const w = wrenchOf(points, vectors);
+  return Float64Array.from([...w.forceN, ...w.momentNm]);
 }
 function panelWrench(cloth, row, profile) {
   const normal = cloth.nrm.slice(cloth.ix(row, 0) * 3, cloth.ix(row, 0) * 3 + 3);
-  const out = new Float64Array(6);
+  const points = [], vectors = [];
   for (let i = 0; i < profile.forces.length; i++) {
     const v = profile.at[i] * (cloth.cols - 1), c = Math.min(cloth.cols - 2, Math.floor(v)), t = v - c;
     const k = cloth.ix(row, c) * 3, next = cloth.ix(row, c + 1) * 3, f = profile.forces[i];
     const p = [0, 1, 2].map(j => cloth.pos[k + j] * (1 - t) + cloth.pos[next + j] * t);
-    const fx = f * normal[0], fy = f * normal[1], fz = f * normal[2];
-    out[0] += fx; out[1] += fy; out[2] += fz;
-    out[3] += p[1] * fz - p[2] * fy;
-    out[4] += p[2] * fx - p[0] * fz;
-    out[5] += p[0] * fy - p[1] * fx;
+    points.push(p); vectors.push(Array.from(normal, n => n * f));
   }
-  return out;
+  const w = wrenchOf(points, vectors);
+  return Float64Array.from([...w.forceN, ...w.momentNm]);
 }
 const frac = (p, limit) => sum(p.forces.map((f, i) => {
   const a = p.edgesChord[i], b = p.edgesChord[i + 1];
@@ -157,7 +153,7 @@ for (const c of cases) {
   }
   let row = 1, entry = Infinity;
   for (let r = 1; r + 1 < cloth.rows; r++) {
-    const angle = cloth.rowShape(r).entry / D;
+    const angle = sectionsOf(cloth, [r / (cloth.rows - 1)])[0].entry / D;
     if (angle < entry) { entry = angle; row = r; }
   }
   const si = cloth.stripOf(row), input = {

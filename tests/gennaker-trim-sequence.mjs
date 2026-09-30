@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Boat } from '../sim/physics.js';
+import { sectionsOf } from './lib/gennaker-observables.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pack = JSON.parse(readFileSync(join(root, 'out/export/physics.json'), 'utf8'));
@@ -51,8 +52,7 @@ function run(u0, change) {
       -(2.2 * wrap((100 - twa) * D - b.psi) - 0.9 * b.r)));
     b.step(1 / 30);
     const gen = b.rig.stripState.slice(12);
-    const entry = Array.from({ length: 9 }, (_, k) =>
-      b.rig.cloth.rowShape((k + 1) * (b.rig.cloth.rows - 1) / 10).entry / D);
+    const entry = sectionsOf(b.rig.cloth).map(s => s.entry / D);
     // Отрисовка добавляет заполаскивание поверх ткани, когда обе величины
     // положительны (sim/main.js, shapeSails). Это отдельный сигнал от формы.
     const flapStrips = gen.filter(g => g.luffFrac > 0.02 && g.slack > 0).length;

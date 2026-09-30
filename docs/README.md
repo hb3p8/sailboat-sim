@@ -52,7 +52,8 @@
 | [Источники](research/sources.md) | Происхождение данных и доступность материалов |
 | [Индекс прежних документов](research/history.md) | Восстановление подробной истории через Git |
 
-Дополнительная методика: [измерение паруса](reference/sail-measurements.md).
+Дополнительные методики: [измерение паруса](reference/sail-measurements.md)
+и [совместная приёмка генакера](reference/gennaker-acceptance.md).
 
 Точки входа внутри рабочих каталогов: [CFD](../cfd/README.md),
 [зависимости просмотрщика](../viewer/vendor/README.md),

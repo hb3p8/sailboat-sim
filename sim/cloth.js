@@ -495,6 +495,40 @@ function arcAt(A, B, L, n, t, out) {
   return out;
 }
 
+// Кратчайшие пути по локальным нерастяжимым рёбрам, в метрах.
+// Каждый путь даёт допустимый верхний предел расстояния через пространство
+// по неравенству треугольника. Это не точная геодезическая поверхности:
+// диагонали податливы и потому не входят в граф жёстких рёбер.
+export function clothEdgePaths(n, ci, cj, rest, count, source) {
+  if (!Number.isInteger(n) || n < 1 || !Number.isInteger(source) || source < 0 ||
+      source >= n || !Number.isInteger(count) || count < 0 ||
+      count > Math.min(ci.length, cj.length, rest.length))
+    throw new Error('Некорректный граф материальных путей');
+  const neighbors = Array.from({ length: n }, () => []);
+  for (let k = 0; k < count; k++) {
+    const a = ci[k], b = cj[k], length = rest[k];
+    if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0 ||
+        a >= n || b >= n || !Number.isFinite(length) || length < 0)
+      throw new Error('Некорректное материальное ребро');
+    neighbors[a].push([b, length]); neighbors[b].push([a, length]);
+  }
+  const distance = new Float64Array(n), visited = new Uint8Array(n);
+  distance.fill(Infinity); distance[source] = 0;
+  // Два исходных угла, небольшая сетка; выполняется при изменении кроя,
+  // не в проходах проектора. Численный параметр расширения пути не нужен.
+  for (let step = 0; step < n; step++) {
+    let next = -1, best = Infinity;
+    for (let i = 0; i < n; i++) if (!visited[i] && distance[i] < best) {
+      best = distance[i]; next = i;
+    }
+    if (next < 0) throw new Error('Материальная сетка не связана');
+    visited[next] = 1;
+    for (const [other, length] of neighbors[next])
+      if (!visited[other]) distance[other] = Math.min(distance[other], best + length);
+  }
+  return distance;
+}
+
 export class Cloth {
   // `opts.bend` — жёсткость на излом. Наружу вынесена ради стенда: при нуле
   // натянутая строка обязана быть в точности равномерно нагруженной нитью, и
@@ -510,6 +544,7 @@ export class Cloth {
     this.freeClew = opts && opts.freeClew != null ? opts.freeClew : FREE_CLEW;
     this.cut3d = opts && opts.cut3d != null ? opts.cut3d : CUT3D;
     this.boardMaterial = opts && opts.boardMaterial === true;
+    this.attachmentPaths = opts && opts.attachmentPaths === true;
     this.designSide = -1;
     this.rigRef = null;
     this.nRows = this.rows;
@@ -540,6 +575,7 @@ export class Cloth {
       for (let c = 0; c + 1 < this.cols; c++) { ci.push(this.ix(r, c)); cj.push(this.ix(r, c + 1)); ck.push(1); }
     for (let r = 0; r + 1 < this.rows; r++)
       for (let c = 0; c < this.cols; c++) { ci.push(this.ix(r, c)); cj.push(this.ix(r + 1, c)); ck.push(1); }
+    this.localHardCount = ci.length;
     for (let r = 0; r + 1 < this.rows; r++)
       for (let c = 0; c + 1 < this.cols; c++) {
         ci.push(this.ix(r, c)); cj.push(this.ix(r + 1, c + 1)); ck.push(SHEAR);
@@ -547,11 +583,10 @@ export class Cloth {
       }
     // ПОВОДКИ ОТ ЗАКРЕПЛЁННЫХ УГЛОВ. Не выдумка и не жёсткость: у нерастяжимой
     // ткани расстояние между двумя точками В ПРОСТРАНСТВЕ не может превысить
-    // расстояние между ними В ВЫКРОЙКЕ. Выкройка выпукла (передняя шкаторина
-    // выгнута вперёд, задняя в корму, нижняя прямая), поэтому по ней кратчайший
-    // путь — прямая, и её длина и есть верхний предел. То есть поводок это то же
-    // самое условие нерастяжимости, только записанное сразу, а не набранное
-    // цепочкой рёбер.
+    // длину материального пути. Пространственная хорда объёмного кроя короче
+    // пути и может запрещать распрямление без растяжения. Старый вариант пока
+    // основной; attachmentPaths заменяет только эти пределы путями по жёстким
+    // рёбрам. Проверка и ограничения — в docs/research/cloth-pressure.md.
     //
     // Без них сходимости нет, и это померено. У фала полотно сходится к
     // дощечке шириной 0.25 м, а соседняя строка шире метра: верхняя ячейка —
@@ -579,6 +614,7 @@ export class Cloth {
     // должны были работать — а не работают вовсе: летящая хорда на полувысоте
     // 3.18 м против 3.17 без них, при восьмипроцентном недоходе до сошедшегося
     // решения. Четверть лишних связей задаром (docs/research/cloth-pressure.md).
+    this.attachmentStart = ci.length;
     for (let r = 0; r < this.rows; r++)
       for (let c = 0; c < this.cols; c++) {
         const i = this.ix(r, c);
@@ -938,6 +974,15 @@ export class Cloth {
       : Math.hypot(X[a] - X[b], Y[a] - Y[b]);
     for (let k = 0; k < this.ci.length; k++)
       this.rest[k] = dist(this.ci[k], this.cj[k]);
+    if (this.attachmentPaths) {
+      const limits = new Map();
+      for (let k = this.attachmentStart; k < this.ci.length; k++) {
+        const anchor = this.ci[k];
+        if (!limits.has(anchor)) limits.set(anchor, clothEdgePaths(this.n,
+          this.ci, this.cj, this.rest, this.localHardCount, anchor));
+        this.rest[k] = limits.get(anchor)[this.cj[k]];
+      }
+    }
     // Масса узла — по площади поверхности вокруг него. Треугольник по трём
     // сторонам, формулой Герона: она годится и в плоскости, и в пространстве.
     const tri = (a, b, c) => {
@@ -1172,10 +1217,9 @@ export class Cloth {
 
   ix(r, c) { return r * this.cols + c; }
 
-  // Расстояние между узлами ПО КРОЮ — та самая мера, из которой взяты длины
-  // покоя. У плоской выкройки это расстояние в её плоскости, у трёхмерного
-  // кроя — на проектной поверхности. Отдаётся наружу, чтобы свидетели мерили
-  // ткань той же мерой, какой она скроена, а не той, какая была раньше.
+  // Хорда между узлами опорного кроя. Совпадает с покоем локального ребра;
+  // при удалённых узлах не является материальным путём. Интеграл длины
+  // кромки получается суммой соседних рёбер, не хордой между её концами.
   matDist(i, j) {
     return this.cut3d
       ? Math.hypot(this.dx[i] - this.dx[j], this.dy[i] - this.dy[j],

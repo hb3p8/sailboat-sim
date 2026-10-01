@@ -19,7 +19,7 @@ const flags = new Map();
 for (const a of process.argv.slice(2)) {
   const [key, value] = a.split('=');
   if (!['--out', '--case', '--local-pressure', '--panels', '--hz', '--rows', '--cols',
-    '--iter', '--free-clew', '--full', '--trace', '--gate'].includes(key))
+    '--iter', '--free-clew', '--attachment-paths', '--full', '--trace', '--gate'].includes(key))
     throw new Error(`Неизвестный параметр ${key}`);
   if (flags.has(key)) throw new Error(`Повторный параметр ${key}`);
   flags.set(key, value ?? true);
@@ -32,13 +32,14 @@ const number = (key, fallback) => {
 };
 const config = { hz: number('--hz', 30), rows: number('--rows', 11),
   cols: number('--cols', 9), iter: number('--iter', 10), panels: number('--panels', 32),
-  localPressure: flags.has('--local-pressure'), freeClew: flags.has('--free-clew') };
+  localPressure: flags.has('--local-pressure'), freeClew: flags.has('--free-clew'),
+  attachmentPaths: flags.has('--attachment-paths') };
 if (![30, 60, 120].includes(config.hz) || config.rows < 3 || config.rows > 41 ||
     config.cols < 5 || config.cols > 65 || config.iter < 1 || config.iter > 640 ||
     config.panels < 4 || config.panels > 128) throw new Error('Параметры вне диапазона протокола');
 for (const key of ['--out', '--case'])
   if (flags.get(key) === true) throw new Error(`${key}: требуется значение`);
-for (const key of ['--local-pressure', '--free-clew', '--full', '--trace', '--gate'])
+for (const key of ['--local-pressure', '--free-clew', '--attachment-paths', '--full', '--trace', '--gate'])
   if (flags.has(key) && flags.get(key) !== true) throw new Error(`${key}: значение не требуется`);
 const D = Math.PI / 180;
 const wrap = x => ((x + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
@@ -70,7 +71,8 @@ function once(c, tack, u0, changed) {
   const b = new Boat(pack);
   b.o.freeWake = true; b.o.wakeForces = true;
   b.o.localPressure = config.localPressure ? { panels: config.panels } : false;
-  b.o.cloth = { rows: config.rows, cols: config.cols, iter: config.iter, freeClew: config.freeClew };
+  b.o.cloth = { rows: config.rows, cols: config.cols, iter: config.iter,
+    freeClew: config.freeClew, attachmentPaths: config.attachmentPaths };
   b.o.crewHike = -tack; b.o.crewMass = 219.9;
   b.wind.o.gust = 0; b.wind.o.shift = 0;
   b.setGennaker(true);
@@ -81,7 +83,7 @@ function once(c, tack, u0, changed) {
   const origin = [pack.mass.cg_m[0], 0, pack.mass.cg_m[2]];
   const cloth = b.rig.cloth, forcesAt = cloth.forcesAt;
   const effectiveCloth = Object.fromEntries(['rows', 'cols', 'iter', 'bend', 'cut3d',
-    'boardMaterial', 'freeClew', 'rhoAir'].map(k => [k, cloth[k]]));
+    'boardMaterial', 'freeClew', 'attachmentPaths', 'rhoAir'].map(k => [k, cloth[k]]));
   const initialOptions = JSON.parse(JSON.stringify(b.o));
   let pressure, forceCheck = 0, allRigCheck = 0;
   // Снимок делается до перемещения узлов, в момент расчёта самой нагрузки.
@@ -171,7 +173,8 @@ function windowOf(samples, lo, hi) {
 const results = [];
 console.log(`Совместная приёмка: ${FULL ? 'полный набор соседей' : 'основные сценарии'}, ` +
   `давление ${config.localPressure ? config.panels : 'штатное'}, ${config.hz} Гц, ` +
-  `ткань ${config.rows}×${config.cols}/${config.iter}, свободный угол ${config.freeClew}`);
+    `ткань ${config.rows}×${config.cols}/${config.iter}, свободный угол ${config.freeClew}, ` +
+    `дальние пути ${config.attachmentPaths}`);
 for (const c of cases) for (const tack of [1, -1]) for (const u0 of [3, 3.05]) {
   const changed = once(c, tack, u0, true), control = once(c, tack, u0, false);
   for (let i = 0; i < c.ends[0] * config.hz; i++)

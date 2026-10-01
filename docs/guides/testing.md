@@ -136,6 +136,22 @@ node tests/cloth-implicit-invariants.test.mjs
 node tests/cloth-frozen-aero-grid.mjs --tack=1 --sheet=9 --iter=40 --fixed-load --cols=9,17,33 --mechanics --rigid-board --energy-material --implicit-motion --hold-cut-clew --cut-nesting --seconds=30 --out=out/acceptance/implicit-motion-full-plus.json
 ```
 
+`--grids=11x9,21x17,41x33` задаёт пары «строки × столбцы» вместо
+`--cols`; без него прежние 11 строк сохраняются. `--cut-nesting` сверяет
+общие узлы по обоим направлениям. Середина измеряется на половине высоты,
+а не на неизменном номере строки. Сначала проверьте исходный вход:
+
+```sh
+node tests/cloth-frozen-aero-grid.mjs --tack=1 --sheet=9 --fixed-load --grids=11x9,21x17,41x33 --rigid-board --hold-cut-clew --cut-nesting --audit-input --out=out/acceptance/frozen-input-height-plus.json
+```
+
+`--audit-input` готовит штатный крой и измеряет силу, три момента в осях
+рига вокруг начала координат, массу и понодальные нагрузки до движения.
+Решатель не вызывается; такую запись нельзя выдать за проверку движения.
+Флаг несовместим с `--mechanics`, `--energy-material` и изменением шкота.
+`--fixed-load` сохраняет давление во времени внутри одного опыта, но само
+по себе не гарантирует одинаковое поле при изменении сетки по высоте.
+
 `--energy-material` требует неподвижных углов; прежние мягкие связи и дальние
 пределы отключены. Энергия и остатки — в `energyMotion`; прежний наблюдатель
 не получает выдуманных реакций. `--without-shear`, `--without-bend`, `--bend`

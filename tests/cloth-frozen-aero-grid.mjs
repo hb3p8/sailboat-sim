@@ -13,6 +13,7 @@ import { gennakerClew } from '../sim/aero.js';
 import { constraintFamily, constraintErrorsOf, observeClothMechanics } from './lib/cloth-mechanics.mjs';
 import { installEnergyExperiment } from './lib/cloth-energy-experiment.mjs';
 import { IMPLICIT_TOLERANCES } from './lib/cloth-implicit-motion.mjs';
+import { wrenchOf } from './lib/gennaker-observables.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packPath = resolve(root, 'out/export/physics.json'), packBytes = readFileSync(packPath);
@@ -21,16 +22,17 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const sourcePaths = [...readdirSync(resolve(root, 'sim')).filter(f => f.endsWith('.js')).map(f => `sim/${f}`),
   'tests/cloth-frozen-aero-grid.mjs', 'tests/lib/cloth-mechanics.mjs',
   'tests/lib/cloth-energy-experiment.mjs', 'tests/lib/cloth-energy-motion.mjs',
-  'tests/lib/cloth-material.mjs', 'tests/cloth-compliance.mjs', 'tests/lib/cloth-implicit-motion.mjs', 'tests/lib/cloth-linear-solve.mjs'];
+  'tests/lib/cloth-material.mjs', 'tests/cloth-compliance.mjs', 'tests/lib/cloth-implicit-motion.mjs', 'tests/lib/cloth-linear-solve.mjs',
+  'tests/lib/gennaker-observables.mjs'];
 const sourceSha256 = Object.fromEntries(sourcePaths.map(p => [p, hash(readFileSync(resolve(root, p)))]));
 const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
 const dirty = Boolean(execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim());
 const startedAt = new Date().toISOString();
 const numericFlags = ['tack', 'sheet', 'iter', 'cloth-hz', 'load-scale', 'gravity-scale',
-  'sheet-ramp', 'bend', 'seconds', 'cols', 'out'];
+  'sheet-ramp', 'bend', 'seconds', 'cols', 'grids', 'out'];
 const booleanFlags = ['fixed-load', 'fixed-normals', 'edges', 'cells', 'cut-nesting',
   'board-material', 'attachment-paths', 'rigid-board', 'mechanics', 'without-shear',
-  'without-bend', 'corner-gap', 'hold-cut-clew', 'energy-material', 'implicit-motion'];
+  'without-bend', 'corner-gap', 'hold-cut-clew', 'energy-material', 'implicit-motion', 'audit-input'];
 const seenFlags = new Set();
 for (const argument of process.argv.slice(2)) {
   const equals = argument.indexOf('='), name = argument.slice(2, equals < 0 ? undefined : equals);
@@ -62,6 +64,7 @@ const withoutShear = process.argv.includes('--without-shear');
 const withoutBend = process.argv.includes('--without-bend');
 const energyMaterial = process.argv.includes('--energy-material');
 const implicitMotion = process.argv.includes('--implicit-motion');
+const auditInput = process.argv.includes('--audit-input');
 const seconds = arg('seconds', 30);
 const outArg = process.argv.find(s => s.startsWith('--out='))?.slice('--out='.length);
 if (process.argv.includes('--out') || outArg === '') throw new Error('--out: требуется путь после =');
@@ -70,17 +73,26 @@ const holdCutClew = process.argv.includes('--hold-cut-clew');
 const bend = process.argv.some(s => s.startsWith('--bend=')) ? arg('bend', 0.05) : null;
 const cols = (process.argv.find(s => s.startsWith('--cols='))?.split('=')[1] ?? '9,17,33')
   .split(',').map(Number);
+const gridsArg = process.argv.find(s => s.startsWith('--grids='))?.slice('--grids='.length);
+if (gridsArg && seenFlags.has('cols')) throw new Error('--grids и --cols задают альтернативные списки сеток');
+const grids = gridsArg ? gridsArg.split(',').map(s => {
+  if (!/^\d+x\d+$/.test(s)) throw new Error('--grids: нужны пары строкxстолбцов, например 11x9,21x17');
+  const [rows, cols] = s.split('x').map(Number); return { rows, cols };
+}) : cols.map(cols => ({ rows: 11, cols }));
 if (![1, -1].includes(tack) || !(sheet > 0) || !(loadScale >= 0 && loadScale <= 2) ||
     !(gravityScale >= 0 && gravityScale <= 1) || !(sheetRamp >= 0 && sheetRamp <= 30) ||
     !Number.isInteger(iter) || iter < 1 ||
     (bend != null && !(bend >= 0 && bend <= 1)) ||
     ![30, 60, 120, 240].includes(clothHz) ||
     !(seconds >= 1 && seconds <= 30 && Number.isInteger(seconds)) ||
-    cols.some(x => !Number.isInteger(x) || x < 5 || x > 65))
+    grids.some(g => ![g.rows, g.cols].every(x => Number.isInteger(x) && x >= 5 && x <= 65)) ||
+    new Set(grids.map(g => `${g.rows}x${g.cols}`)).size !== grids.length)
   throw new Error('Неверные параметры стенда');
 if (energyMaterial && (!fixedLoad || !mechanics || !rigidBoard || !holdCutClew || withoutShear || withoutBend || bend != null || sheetRamp))
   throw new Error('Новый материал: нужны --fixed-load --mechanics --rigid-board --hold-cut-clew; исключение семей, bend и sheet-ramp неприменимы');
 if (implicitMotion && !energyMaterial) throw new Error('--implicit-motion требует --energy-material');
+if (auditInput && (energyMaterial || mechanics || sheetRamp || !fixedLoad))
+  throw new Error('--audit-input: нужен --fixed-load; движение, механика и смена шкота не вычисляются');
 const wrap = x => ((x + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
 
 const b = new Boat(pack);
@@ -165,15 +177,41 @@ if (mechanics) console.log(`Аудит механики: начальная по
 if (energyMaterial) console.log('Явный новый материал: энергия и остаток физического движения записываются отдельно; неподвижные углы, жёсткие кромки и длина планки; прежние внутренние жёсткие рёбра/мягкие связи/дальние пределы отключены.');
 if (implicitMotion) console.log(`Полное уравнение энергии: ошибка сил ≤${IMPLICIT_TOLERANCES.forceToleranceN} Н, длины ≤${IMPLICIT_TOLERANCES.lengthToleranceM} м; недоведённый шаг отклоняется.`);
 if (withoutShear || withoutBend) console.log(`Диагностическое исключение связей: диагонали ${withoutShear}, изгиб ${withoutBend}; не новый принятый материал`);
-console.log('столбцов | время ткани с | мин. вход °/строка | max ход назад/вывернуто % | пузо строки 5 % | Fx/Fy ткани Н');
+console.log(auditInput ? 'Только исходный вход: движения ткани и его приёмки в этой записи нет.' :
+  'строки×столбцы | время ткани с | мин. вход °/строка | max ход назад/вывернуто % | полнота середины % | Fx/Fy ткани Н');
 const results = [];
 const priorCuts = [];
+const checkCut = cl => {
+  if (!cutNesting) return;
+  for (const prev of priorCuts) {
+    if ((cl.rows - 1) % (prev.rows - 1) || (cl.cols - 1) % (prev.cols - 1)) continue;
+    const sr = (cl.rows - 1) / (prev.rows - 1), sc = (cl.cols - 1) / (prev.cols - 1);
+    let worst = { d: 0, row: 0, col: 0 };
+    for (let r = 0; r < prev.rows; r++) for (let c = 0; c < prev.cols; c++) {
+      const a = cl.ix(r * sr, c * sc), z = r * prev.cols + c;
+      const d = Math.hypot(cl.dx[a] - prev.dx[z], cl.dy[a] - prev.dy[z], cl.dz[a] - prev.dz[z]);
+      if (d > worst.d) worst = { d, row: r, col: c };
+    }
+    console.log(`${cl.rows}×${cl.cols} | крой против ${prev.rows}×${prev.cols}: общий узел max ${worst.d.toExponential(3)} м, строка ${worst.row}, столбец ${worst.col}`);
+    if (worst.d > 1e-9) throw new Error('Вложенные сетки имеют разный крой в общем узле');
+  }
+  priorCuts.push({ rows: cl.rows, cols: cl.cols, dx: cl.dx.slice(), dy: cl.dy.slice(), dz: cl.dz.slice() });
+};
+const initialInputOf = cl => {
+  const points = Array.from({ length: cl.n }, (_, i) => Array.from(cl.pos.slice(3 * i, 3 * i + 3)));
+  const forces = points.map((_, i) => Array.from(cl.nrm.slice(3 * i, 3 * i + 3), x => x * cl.pressureForce[i]));
+  return { frame: 'rig', originM: [0, 0, 0], ...wrenchOf(points, forces),
+    massKg: Array.from(cl.mass).reduce((s, x) => s + x, 0),
+    referenceAreaM2: Array.from(cl.area).reduce((s, x) => s + x, 0),
+    positionsM: points.flat(), pressureVectorsN: forces.flat(), appliedVectorsN: Array.from(cl.frc),
+    nodalMassKg: Array.from(cl.mass) };
+};
 const clewArc = b.p.rig.gennaker.clew_arc_r;
 const designSheet = 0.5 * (b.p.rig.gennaker.sheet_min_m + b.p.rig.gennaker.sheet_max_m);
-for (const n of cols) {
+for (const { rows, cols: n } of grids) {
   b.p.rig.gennaker.clew_arc_r = clewArc;
   b.o.genSheetLen = sheetRamp ? designSheet : sheet;
-  const cl = new Cloth(b.rig.sails[2], 2, { rows: 11, cols: n, iter,
+  const cl = new Cloth(b.rig.sails[2], 2, { rows, cols: n, iter,
     ...(bend == null ? {} : { bend }), boardMaterial, attachmentPaths, rigidBoard });
   // Топология и крой сохраняются: исключается только действие выбранной семьи.
   for (let k = 0; k < cl.ck.length; k++) {
@@ -199,6 +237,26 @@ for (const n of cols) {
       if (!firstArea) firstArea = currentArea().slice();
       return firstArea;
     };
+  }
+  let initialInput = null;
+  const originalForcesAt = cl.forcesAt;
+  cl.forcesAt = function (...args) {
+    const value = originalForcesAt.apply(this, args);
+    if (!initialInput) initialInput = initialInputOf(this);
+    return value;
+  };
+  if (auditInput) {
+    // step() готовит штатный крой и начальное положение. Здесь advance()
+    // только читает силу: ни один из сорока вызовов не перемещает полотно.
+    cl.advance = function (...args) { this.forcesAt(...args); };
+    if (!cl.step(b, 1 / clothHz)) throw new Error('Не удалось подготовить вход ткани');
+    checkCut(cl);
+    assert.equal(frozenInput(), inputBefore, 'Замороженный вход изменился при измерении');
+    results.push({ rows, cols: n, initialInput,
+      referencePositionsM: Array.from({ length: cl.n * 3 }, (_, k) =>
+        [cl.dx, cl.dy, cl.dz][k % 3][Math.floor(k / 3)]) });
+    console.log(`${rows}×${n} | только вход: сила ${initialInput.forceN.map(x => x.toFixed(6)).join('/')} Н; момент ${initialInput.momentNm.map(x => x.toFixed(6)).join('/')} Н·м; масса ${initialInput.massKg.toFixed(6)} кг`);
+    continue;
   }
   let firstPressure = null;
   const startIndex = mechanics ? -1 : 0;
@@ -226,22 +284,7 @@ for (const n of cols) {
           `крой ${[cl.pos[k], cl.pos[k + 1], cl.pos[k + 2]].map(x => x.toFixed(3)).join('/')}, ` +
           `дуга ${expected.map(x => x.toFixed(3)).join('/')}`);
       }
-      if (cutNesting) {
-        for (const prev of priorCuts) {
-          if ((n - 1) % (prev.cols - 1) !== 0) continue;
-          const stride = (n - 1) / (prev.cols - 1);
-          let worst = { d: 0, row: 0, col: 0 };
-          for (let r = 0; r < cl.rows; r++) for (let c = 0; c < prev.cols; c++) {
-            const a = cl.ix(r, c * stride), z = r * prev.cols + c;
-            const d = Math.hypot(cl.dx[a] - prev.dx[z], cl.dy[a] - prev.dy[z],
-                                 cl.dz[a] - prev.dz[z]);
-            if (d > worst.d) worst = { d, row: r, col: c };
-          }
-          console.log(`${n} | крой против ${prev.cols}: общий узел max ${worst.d.toExponential(3)} м, строка ${worst.row}, столбец ${worst.col}`);
-          if (worst.d > 1e-9) throw new Error('Вложенные сетки имеют разный крой в общем узле');
-        }
-        priorCuts.push({ cols: n, dx: cl.dx.slice(), dy: cl.dy.slice(), dz: cl.dz.slice() });
-      }
+      checkCut(cl);
       if (holdCutClew) b.p.rig.gennaker.clew_arc_r = 0;
       if (observer) { warmup = { ...observer.snapshot(), ...(energy ? { energyMotion: energy.snapshot() } : {}) }; observer.reset(); }
       energy?.reset();
@@ -251,18 +294,18 @@ for (const n of cols) {
     if (![5, 10, 20, 30, seconds, ...(edgeAudit || cellAudit ? [0.5, 1, 2, 3] : [])].includes(time)) continue;
     const s = minShape(cl), load = cl.load || {};
     const audit = observer?.snapshot() || null;
-    samples.push({ timeS: time, shape: s, middle: cl.rowShape(5),
+    samples.push({ timeS: time, shape: s, middle: cl.rowShape((rows - 1) / 2),
       loadN: { fx: load.fx, fy: load.fy, fz: load.fz },
       edges: { luff: edgeState(cl, 0), leech: edgeState(cl, cl.cols - 1) },
       constraints: constraintErrorsOf(cl), mechanics: audit,
       ...(energy ? { energyMotion: energy.snapshot(), positionsM: Array.from(cl.pos) } : {}) });
-    let line = `${n} | ${time.toFixed(time < 5 ? 1 : 0)} | ${s.angle.toFixed(1)}/${s.row} | ${(100 * s.maxBack).toFixed(1)}/${(100 * s.maxFlip).toFixed(1)} | ${(100 * cl.rowShape(5).camber).toFixed(1)} | ${(load.fx || 0).toFixed(1)}/${(load.fy || 0).toFixed(1)}`;
+    let line = `${rows}×${n} | ${time.toFixed(time < 5 ? 1 : 0)} | ${s.angle.toFixed(1)}/${s.row} | ${(100 * s.maxBack).toFixed(1)}/${(100 * s.maxFlip).toFixed(1)} | ${(100 * cl.rowShape((rows - 1) / 2).camber).toFixed(1)} | ${(load.fx || 0).toFixed(1)}/${(load.fy || 0).toFixed(1)}`;
     if (edgeAudit) {
       const luff = edgeState(cl, 0), leech = edgeState(cl, cl.cols - 1);
       line += ` | кромки дуга/крой ${(100 * luff.ratio).toFixed(1)}/${(100 * leech.ratio).toFixed(1)} %; натянуто ${luff.taut}/${leech.taut} из ${cl.rows - 1}; ход назад стр. ${s.backRow}`;
     }
     if (cellAudit) {
-      const r = s.backRow < 0 ? 5 : s.backRow;
+      const r = s.backRow < 0 ? Math.floor((rows - 1) / 2) : s.backRow;
       const links = rowLinks(cl, r);
       line += ` | строка ${r}: дуга/крой ${(100 * links.ratio).toFixed(1)} %, слабых ${links.slack}, растянутых >1 % ${links.excess} из ${cl.cols - 1}, min/max ${(100 * links.min).toFixed(1)}/${(100 * links.max).toFixed(1)} %`;
     }
@@ -282,7 +325,7 @@ for (const n of cols) {
     'Замороженный вектор давления изменился при посадке');
   const referencePositionsM = Array.from({ length: cl.n * 3 }, (_, k) =>
     [cl.dx, cl.dy, cl.dz][k % 3][Math.floor(k / 3)]);
-  results.push({ cols: n, warmup, mechanics: measured, samples,
+  results.push({ rows, cols: n, initialInput, warmup, mechanics: measured, samples,
     ...(energy ? { energyMotion: energy.snapshot() } : {}),
     constraints: constraintErrorsOf(cl), finalPositionsM: Array.from(cl.pos), referencePositionsM,
     wallSeconds: (performance.now() - wallStart) / 1000 });
@@ -297,7 +340,7 @@ if (outArg) {
   const path = resolve(root, outArg); mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify({ schema: 1, startedAt, createdAt: new Date().toISOString(),
     revision, dirty, physicsSha256: hash(packBytes), sourceSha256,
-    config: { tack, sheet, iter, clothHz, seconds, cols, loadScale, gravityScale, sheetRamp,
+    config: { tack, sheet, iter, clothHz, seconds, cols: grids.map(g => g.cols), grids, auditInput, loadScale, gravityScale, sheetRamp,
       fixedLoad, fixedNormals, bend, boardMaterial, attachmentPaths, rigidBoard, mechanics,
       withoutShear, withoutBend, holdCutClew, energyMaterial, implicitMotion },
     durationRule: mechanics ? 'посадка отдельно, затем заданные секунды движения' : 'прежний счёт кадров включает посадку',

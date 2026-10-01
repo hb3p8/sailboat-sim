@@ -543,7 +543,8 @@ export class Cloth {
     this.iter = opts && opts.iter ? opts.iter : ITER;
     this.freeClew = opts && opts.freeClew != null ? opts.freeClew : FREE_CLEW;
     this.cut3d = opts && opts.cut3d != null ? opts.cut3d : CUT3D;
-    this.boardMaterial = opts && opts.boardMaterial === true;
+    this.rigidBoard = opts && opts.rigidBoard === true;
+    this.boardMaterial = this.rigidBoard || (opts && opts.boardMaterial === true);
     this.attachmentPaths = opts && opts.attachmentPaths === true;
     this.designSide = -1;
     this.rigRef = null;
@@ -553,7 +554,7 @@ export class Cloth {
     this.pos = new Float64Array(N * 3);
     this.prev = new Float64Array(N * 3);
     this.frc = new Float64Array(N * 3);
-    this.w = new Float64Array(N);        // обратная масса; ноль — закреплён
+    this.w = new Float64Array(N);        // обратная масса независимого узла
     this.nrm = new Float64Array(N * 3);
     // Выкройка: плоский кусок ткани, из которого парус сшит. Все длины покоя
     // берутся из неё, и потому они между собой согласованы — что для куска
@@ -663,6 +664,17 @@ export class Cloth {
     this.clew = this.ix(0, this.cols - 1);
     this.tack = this.ix(0, 0);
     this.head = this.ix(this.rows - 1, 0);
+    if (this.rigidBoard) {
+      this.boardEnd = this.n - 1;
+      this.boardTarget = Int32Array.from({ length: N }, (_, i) => i);
+      this.boardFraction = new Float64Array(N).fill(1);
+      for (let c = 0; c < this.cols; c++) {
+        const i = this.head + c;
+        this.boardTarget[i] = this.boardEnd;
+        this.boardFraction[i] = c / (this.cols - 1);
+      }
+      this.boardForce = new Float64Array(3);
+    }
   }
 
   // Высота строки над нижней шкаториной, в долях размаха.
@@ -1023,6 +1035,38 @@ export class Cloth {
     this.w[this.tack] = 0;
     this.w[this.head] = 0;
     if (!this.freeClew) this.w[this.clew] = 0;
+    if (this.rigidBoard) {
+      this.boardRest = dist(this.head, this.boardEnd);
+      this.prepareBoard();
+    }
+  }
+
+  // p_i = p_head + t_i (p_end - p_head), закреплённый head.
+  // Из кинетической энергии: M_end = Σ m_i t_i². Зависимые точки не
+  // закреплены в пространстве: их силы и ограничения действуют через end.
+  // Исходные mass/area сохраняются, включая прежнее приближение массы воздуха.
+  prepareBoard() {
+    let mass = 0;
+    for (let i = this.head; i <= this.boardEnd; i++) {
+      const t = this.boardFraction[i];
+      mass += this.mass[i] * t * t;
+      this.w[i] = 0;
+    }
+    if (!(mass > 0) || !Number.isFinite(mass) || !(this.boardRest > 1e-9))
+      throw new Error('Некорректная масса или длина верхнего крепления');
+    this.boardMass = mass;
+    this.w[this.boardEnd] = 1 / mass;
+  }
+
+  // Виртуальная работа: F_end = Σ t_i F_i. frc остаётся исходной узловой
+  // нагрузкой для аудита; здесь сворачивается и давление, и вес, и затухание.
+  boardForces() {
+    const force = this.boardForce;
+    force.fill(0);
+    for (let i = this.head; i <= this.boardEnd; i++)
+      for (let d = 0; d < 3; d++)
+        force[d] += this.boardFraction[i] * this.frc[i * 3 + d];
+    return force;
   }
 
   // Начальное положение: полотно ставится туда, где его до сих пор рисовали, —
@@ -1056,6 +1100,7 @@ export class Cloth {
         const k = i * 3;
         this.pos[k] = this.dx[i]; this.pos[k + 1] = this.dy[i]; this.pos[k + 2] = this.dz[i];
       }
+      if (this.rigidBoard) this.board();
       this.prev.set(this.pos);
       return;
     }
@@ -1073,6 +1118,7 @@ export class Cloth {
         this.pos[i + 2] = z;
       }
     }
+    if (this.rigidBoard) this.board();
     this.prev.set(this.pos);
   }
 
@@ -1458,15 +1504,22 @@ export class Cloth {
   }
 
   advance(b, h, side, env) {
+    if (this.rigidBoard) this.board();
     this.forcesAt(b, h, side, env);
     const p = this.pos, pv = this.prev, f = this.frc, N = this.n;
+    const boardForce = this.rigidBoard ? this.boardForces() : null;
+    // Скорость зависимых точек нужна forcesAt на следующем подшаге.
+    if (this.rigidBoard)
+      for (let i = this.head + 1; i < this.boardEnd; i++)
+        for (let d = 0; d < 3; d++) pv[i * 3 + d] = p[i * 3 + d];
     const damp = Math.exp(-DAMP_HZ * h);
     for (let i = 0; i < N; i++) {
       const w = this.w[i];
       if (w === 0) continue;
       const k = i * 3;
       for (let d = 0; d < 3; d++) {
-        let v = (p[k + d] - pv[k + d]) / h * damp + f[k + d] * w * h;
+        const force = boardForce && i === this.boardEnd ? boardForce[d] : f[k + d];
+        let v = (p[k + d] - pv[k + d]) / h * damp + force * w * h;
         if (v > VMAX) v = VMAX; else if (v < -VMAX) v = -VMAX;
         pv[k + d] = p[k + d];
         p[k + d] += v * h;
@@ -1496,10 +1549,23 @@ export class Cloth {
   // Дощечка настоящая и жёсткая: это планка, вшитая в фаловый угол. Поэтому её
   // узлы не решаются, а САЖАЮТСЯ на отрезок между концами, каждый на своём
   // месте по выкройке. Концы при этом решаются как прежде: фаловый закреплён,
-  // задний тянут задняя шкаторина и полотно. Ни одной новой постоянной.
+  // задний тянут задняя шкаторина и полотно. В основном варианте внутренние
+  // поправки после этого теряются. Явный rigidBoard исключает зависимые узлы
+  // из динамики и передаёт их силы/массу/градиенты концу, сохраняя длину планки.
   board() {
     const p = this.pos, R = this.rows - 1;
     const a = this.ix(R, 0) * 3, z = this.ix(R, this.cols - 1) * 3;
+    if (this.rigidBoard) {
+      // Жёсткая планка держит длину и при растяжении, и при сжатии.
+      // Предсказание в трёх координатах проецируется на сферу вокруг head.
+      const dx = p[z] - p[a], dy = p[z + 1] - p[a + 1], dz = p[z + 2] - p[a + 2];
+      const length = Math.hypot(dx, dy, dz);
+      if (!(length > 1e-12)) throw new Error('Вырожденное жёсткое верхнее крепление');
+      const scale = this.boardRest / length;
+      p[z] = p[a] + dx * scale;
+      p[z + 1] = p[a + 1] + dy * scale;
+      p[z + 2] = p[a + 2] + dz * scale;
+    }
     const w = this.rowW[R];
     if (!(w > 1e-9)) return;
     for (let c = 1; c + 1 < this.cols; c++) {
@@ -1519,6 +1585,7 @@ export class Cloth {
 
   // Один проход по списку связей. `list` — либо все подряд, либо выборка верха.
   sweep(list, M) {
+    if (this.rigidBoard) return this.sweepBoard(list, M);
     const p = this.pos, ci = this.ci, cj = this.cj, ck = this.ck, rest = this.rest;
     for (let n = 0; n < M; n++) {
       const k = list ? list[n] : n;
@@ -1536,6 +1603,36 @@ export class Cloth {
       const g = OMEGA * Math.abs(kk) * (d - rest[k]) / d / s;
       p[a] += wa * g * dx; p[a + 1] += wa * g * dy; p[a + 2] += wa * g * dz;
       p[c] -= wb * g * dx; p[c + 1] -= wb * g * dy; p[c + 2] -= wb * g * dz;
+    }
+    this.board();
+  }
+
+  // Те же связи после исключения внутренних координат планки. Поправка
+  // узла на доле t действует на end с якобианом t, знаменатель содержит t².
+  // Если оба конца связи на одной планке, их градиенты сначала складываются.
+  sweepBoard(list, M) {
+    const p = this.pos, target = this.boardTarget, fraction = this.boardFraction;
+    const head = this.head * 3;
+    for (let n = 0; n < M; n++) {
+      const k = list ? list[n] : n, ia = this.ci[k], ib = this.cj[k];
+      const ta = fraction[ia], tb = fraction[ib], a = target[ia], b = target[ib];
+      const wa = this.w[a], wb = this.w[b];
+      const s = a === b ? wa * (tb - ta) ** 2 : wa * ta * ta + wb * tb * tb;
+      if (s === 0) continue;
+      const a3 = a * 3, b3 = b * 3;
+      // Читаем зависимую точку из текущего end: промежуточные pos планки
+      // могут ещё относиться к предыдущей поправке в этом проходе.
+      const dx = (tb === 1 ? p[b3] : p[head] + tb * (p[b3] - p[head]))
+        - (ta === 1 ? p[a3] : p[head] + ta * (p[a3] - p[head]));
+      const dy = (tb === 1 ? p[b3 + 1] : p[head + 1] + tb * (p[b3 + 1] - p[head + 1]))
+        - (ta === 1 ? p[a3 + 1] : p[head + 1] + ta * (p[a3 + 1] - p[head + 1]));
+      const dz = (tb === 1 ? p[b3 + 2] : p[head + 2] + tb * (p[b3 + 2] - p[head + 2]))
+        - (ta === 1 ? p[a3 + 2] : p[head + 2] + ta * (p[a3 + 2] - p[head + 2]));
+      const d = Math.hypot(dx, dy, dz), kk = this.ck[k];
+      if (d < 1e-9 || (kk > 0 && d <= this.rest[k])) continue;
+      const g = OMEGA * Math.abs(kk) * (d - this.rest[k]) / d / s;
+      p[a3] += wa * ta * g * dx; p[a3 + 1] += wa * ta * g * dy; p[a3 + 2] += wa * ta * g * dz;
+      p[b3] -= wb * tb * g * dx; p[b3 + 1] -= wb * tb * g * dy; p[b3 + 2] -= wb * tb * g * dz;
     }
     this.board();
   }

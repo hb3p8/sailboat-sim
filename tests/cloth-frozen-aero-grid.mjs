@@ -21,6 +21,7 @@ const cellAudit = process.argv.includes('--cells');
 const cutNesting = process.argv.includes('--cut-nesting');
 const boardMaterial = process.argv.includes('--board-material');
 const attachmentPaths = process.argv.includes('--attachment-paths');
+const rigidBoard = process.argv.includes('--rigid-board');
 const cornerAudit = process.argv.includes('--corner-gap');
 const holdCutClew = process.argv.includes('--hold-cut-clew');
 const bend = process.argv.some(s => s.startsWith('--bend=')) ? arg('bend', 0.05) : null;
@@ -112,7 +113,7 @@ console.log(`Исходный максимальный разброс q по х�
 console.log(`Опорная ткань 11×9: вход ${minShape(reference).angle.toFixed(1)}°, ` +
             `пузо строки 5 ${(100 * reference.rowShape(5).camber).toFixed(1)} % хорды; ` +
             `тяга ${b.rig.stripState.slice(12).reduce((s, d) => s + d.drive, 0).toFixed(1)} Н`);
-console.log(`Ткань: ${iter} проходов, ${clothHz} Гц, изгиб ${bend == null ? 'штатный' : bend}, нормали ${fixedNormals ? 'зафиксированы на первом подшаге' : 'следуют за тканью'}, площадь нагрузки ${fixedLoad ? 'зафиксирована на первом подшаге' : 'следует за тканью'}; дальние пределы ${attachmentPaths ? 'пути по жёстким рёбрам' : 'хорды кроя'}`);
+console.log(`Ткань: ${iter} проходов, ${clothHz} Гц, изгиб ${bend == null ? 'штатный' : bend}, нормали ${fixedNormals ? 'зафиксированы на первом подшаге' : 'следуют за тканью'}, площадь нагрузки ${fixedLoad ? 'зафиксирована на первом подшаге' : 'следует за тканью'}; дальние пределы ${attachmentPaths ? 'пути по жёстким рёбрам' : 'хорды кроя'}; жёсткое верхнее крепление ${rigidBoard}`);
 console.log('столбцов | время ткани с | мин. вход °/строка | max ход назад/вывернуто % | пузо строки 5 % | Fx/Fy ткани Н');
 const priorCuts = [];
 const clewArc = b.p.rig.gennaker.clew_arc_r;
@@ -121,7 +122,7 @@ for (const n of cols) {
   b.p.rig.gennaker.clew_arc_r = clewArc;
   b.o.genSheetLen = sheetRamp ? designSheet : sheet;
   const cl = new Cloth(b.rig.sails[2], 2, { rows: 11, cols: n, iter,
-    ...(bend == null ? {} : { bend }), boardMaterial, attachmentPaths });
+    ...(bend == null ? {} : { bend }), boardMaterial, attachmentPaths, rigidBoard });
   if (fixedNormals) {
     const follow = cl.rowNormals.bind(cl);
     let firstNormals = null;

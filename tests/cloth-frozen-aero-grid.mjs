@@ -1,12 +1,43 @@
 // Один и тот же замороженный аэродинамический вход для нескольких сеток ткани:
 // node tests/cloth-frozen-aero-grid.mjs --tack=1 --sheet=9
 // Лодка и полоски после опорных 30 с не двигаются; отдельно шагает только ткань.
-import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Boat } from '../sim/physics.js';
 import { Cloth } from '../sim/cloth.js';
 import { gennakerClew } from '../sim/aero.js';
+import { constraintFamily, constraintErrorsOf, observeClothMechanics } from './lib/cloth-mechanics.mjs';
 
-const pack = JSON.parse(readFileSync(new URL('../out/export/physics.json', import.meta.url), 'utf8'));
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const packPath = resolve(root, 'out/export/physics.json'), packBytes = readFileSync(packPath);
+const pack = JSON.parse(packBytes);
+const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+const sourcePaths = [...readdirSync(resolve(root, 'sim')).filter(f => f.endsWith('.js')).map(f => `sim/${f}`),
+  'tests/cloth-frozen-aero-grid.mjs', 'tests/lib/cloth-mechanics.mjs'];
+const sourceSha256 = Object.fromEntries(sourcePaths.map(p => [p, hash(readFileSync(resolve(root, p)))]));
+const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+const dirty = Boolean(execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim());
+const startedAt = new Date().toISOString();
+const numericFlags = ['tack', 'sheet', 'iter', 'cloth-hz', 'load-scale', 'gravity-scale',
+  'sheet-ramp', 'bend', 'seconds', 'cols', 'out'];
+const booleanFlags = ['fixed-load', 'fixed-normals', 'edges', 'cells', 'cut-nesting',
+  'board-material', 'attachment-paths', 'rigid-board', 'mechanics', 'without-shear',
+  'without-bend', 'corner-gap', 'hold-cut-clew'];
+const seenFlags = new Set();
+for (const argument of process.argv.slice(2)) {
+  const equals = argument.indexOf('='), name = argument.slice(2, equals < 0 ? undefined : equals);
+  if (!argument.startsWith('--') || ![...numericFlags, ...booleanFlags].includes(name))
+    throw new Error(`Неизвестный параметр ${argument}`);
+  if (seenFlags.has(name)) throw new Error(`Повторный параметр --${name}`);
+  seenFlags.add(name);
+  if (numericFlags.includes(name) && (equals < 0 || equals === argument.length - 1))
+    throw new Error(`--${name}: требуется значение после =`);
+  if (booleanFlags.includes(name) && equals >= 0) throw new Error(`--${name}: значение не требуется`);
+}
 const D = Math.PI / 180;
 const arg = (key, def) => Number(process.argv.find(s => s.startsWith(`--${key}=`))?.split('=')[1] ?? def);
 const tack = arg('tack', 1), sheet = arg('sheet', 9), iter = arg('iter', 40);
@@ -22,6 +53,12 @@ const cutNesting = process.argv.includes('--cut-nesting');
 const boardMaterial = process.argv.includes('--board-material');
 const attachmentPaths = process.argv.includes('--attachment-paths');
 const rigidBoard = process.argv.includes('--rigid-board');
+const mechanics = process.argv.includes('--mechanics');
+const withoutShear = process.argv.includes('--without-shear');
+const withoutBend = process.argv.includes('--without-bend');
+const seconds = arg('seconds', 30);
+const outArg = process.argv.find(s => s.startsWith('--out='))?.slice('--out='.length);
+if (process.argv.includes('--out') || outArg === '') throw new Error('--out: требуется путь после =');
 const cornerAudit = process.argv.includes('--corner-gap');
 const holdCutClew = process.argv.includes('--hold-cut-clew');
 const bend = process.argv.some(s => s.startsWith('--bend=')) ? arg('bend', 0.05) : null;
@@ -32,6 +69,7 @@ if (![1, -1].includes(tack) || !(sheet > 0) || !(loadScale >= 0 && loadScale <= 
     !Number.isInteger(iter) || iter < 1 ||
     (bend != null && !(bend >= 0 && bend <= 1)) ||
     ![30, 60, 120].includes(clothHz) ||
+    !(seconds >= 1 && seconds <= 30 && Number.isInteger(seconds)) ||
     cols.some(x => !Number.isInteger(x) || x < 5 || x > 65))
   throw new Error('Неверные параметры стенда');
 const wrap = x => ((x + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
@@ -114,7 +152,10 @@ console.log(`Опорная ткань 11×9: вход ${minShape(reference).ang
             `пузо строки 5 ${(100 * reference.rowShape(5).camber).toFixed(1)} % хорды; ` +
             `тяга ${b.rig.stripState.slice(12).reduce((s, d) => s + d.drive, 0).toFixed(1)} Н`);
 console.log(`Ткань: ${iter} проходов, ${clothHz} Гц, изгиб ${bend == null ? 'штатный' : bend}, нормали ${fixedNormals ? 'зафиксированы на первом подшаге' : 'следуют за тканью'}, площадь нагрузки ${fixedLoad ? 'зафиксирована на первом подшаге' : 'следует за тканью'}; дальние пределы ${attachmentPaths ? 'пути по жёстким рёбрам' : 'хорды кроя'}; жёсткое верхнее крепление ${rigidBoard}`);
+if (mechanics) console.log('Аудит механики: начальная посадка отдельно; длительность отсчитывается после неё. Работа силы и энергия движения измеряются; энергия материала и работа креплений неизвестны.');
+if (withoutShear || withoutBend) console.log(`Диагностическое исключение связей: диагонали ${withoutShear}, изгиб ${withoutBend}; не новый принятый материал`);
 console.log('столбцов | время ткани с | мин. вход °/строка | max ход назад/вывернуто % | пузо строки 5 % | Fx/Fy ткани Н');
+const results = [];
 const priorCuts = [];
 const clewArc = b.p.rig.gennaker.clew_arc_r;
 const designSheet = 0.5 * (b.p.rig.gennaker.sheet_min_m + b.p.rig.gennaker.sheet_max_m);
@@ -123,6 +164,14 @@ for (const n of cols) {
   b.o.genSheetLen = sheetRamp ? designSheet : sheet;
   const cl = new Cloth(b.rig.sails[2], 2, { rows: 11, cols: n, iter,
     ...(bend == null ? {} : { bend }), boardMaterial, attachmentPaths, rigidBoard });
+  // Топология и крой сохраняются: исключается только действие выбранной семьи.
+  for (let k = 0; k < cl.ck.length; k++) {
+    const family = constraintFamily(cl, k);
+    if ((withoutShear && family === 'shear') || (withoutBend && family === 'bend')) cl.ck[k] = 0;
+  }
+  const observer = mechanics ? observeClothMechanics(cl) : null;
+  let warmup = null;
+  const samples = [], wallStart = performance.now();
   if (fixedNormals) {
     const follow = cl.rowNormals.bind(cl);
     let firstNormals = null;
@@ -140,16 +189,17 @@ for (const n of cols) {
     };
   }
   let firstPressure = null;
-  for (let i = 0; i < 30 * clothHz; i++) {
+  const startIndex = mechanics ? -1 : 0;
+  for (let i = startIndex; i < seconds * clothHz; i++) {
     if (sheetRamp) b.o.genSheetLen = designSheet + (sheet - designSheet) *
-      Math.min(1, i / (clothHz * sheetRamp));
+      Math.max(0, Math.min(1, i / (clothHz * sheetRamp)));
     if (!cl.step(b, 1 / clothHz)) throw new Error('Шаг ткани отклонён');
     if (fixedLoad) {
       const applied = JSON.stringify(cl.pressureForce);
       if (firstPressure == null) firstPressure = applied;
       else if (applied !== firstPressure) throw new Error('Зафиксированная понодальная нагрузка изменилась');
     }
-    if (i === 0) {
+    if (i === startIndex) {
       const cut = minShape(cl, true), fly = minShape(cl);
       console.log(`${n} | крой/первый шаг | ${cut.angle.toFixed(1)}/${fly.angle.toFixed(1)}° | ` +
         `${(100 * cut.maxBack).toFixed(1)}/${(100 * cut.maxFlip).toFixed(1)} % по крою; ` +
@@ -181,10 +231,16 @@ for (const n of cols) {
         priorCuts.push({ cols: n, dx: cl.dx.slice(), dy: cl.dy.slice(), dz: cl.dz.slice() });
       }
       if (holdCutClew) b.p.rig.gennaker.clew_arc_r = 0;
+      if (observer) { warmup = observer.snapshot(); observer.reset(); }
     }
     const time = (i + 1) / clothHz;
-    if (![5, 10, 20, 30, ...(edgeAudit || cellAudit ? [0.5, 1, 2, 3] : [])].includes(time)) continue;
+    if (![5, 10, 20, 30, seconds, ...(edgeAudit || cellAudit ? [0.5, 1, 2, 3] : [])].includes(time)) continue;
     const s = minShape(cl), load = cl.load || {};
+    const audit = observer?.snapshot() || null;
+    samples.push({ timeS: time, shape: s, middle: cl.rowShape(5),
+      loadN: { fx: load.fx, fy: load.fy, fz: load.fz },
+      edges: { luff: edgeState(cl, 0), leech: edgeState(cl, cl.cols - 1) },
+      constraints: constraintErrorsOf(cl), mechanics: audit });
     let line = `${n} | ${time.toFixed(time < 5 ? 1 : 0)} | ${s.angle.toFixed(1)}/${s.row} | ${(100 * s.maxBack).toFixed(1)}/${(100 * s.maxFlip).toFixed(1)} | ${(100 * cl.rowShape(5).camber).toFixed(1)} | ${(load.fx || 0).toFixed(1)}/${(load.fy || 0).toFixed(1)}`;
     if (edgeAudit) {
       const luff = edgeState(cl, 0), leech = edgeState(cl, cl.cols - 1);
@@ -196,8 +252,36 @@ for (const n of cols) {
       line += ` | строка ${r}: дуга/крой ${(100 * links.ratio).toFixed(1)} %, слабых ${links.slack}, растянутых >1 % ${links.excess} из ${cl.cols - 1}, min/max ${(100 * links.min).toFixed(1)}/${(100 * links.max).toFixed(1)} %`;
     }
     console.log(line);
+    if (audit) console.log(`${n} | механика ${time.toFixed(1)} с: работа давления ${audit.workJ.pressure.toFixed(4)} Дж, ` +
+      `прочих сил ${audit.workJ.otherApplied.toFixed(4)} Дж; энергия движения ${audit.kineticJ.toExponential(3)} Дж; ` +
+      `шаги ${audit.stepsByH.map(s => `${s.hS.toFixed(6)} с × ${s.count}`).join(', ')}`);
   }
   if (frozenInput() !== inputBefore) throw new Error('Замороженный вход изменился при шаге ткани');
+  const measured = observer?.snapshot() || null;
+  if (fixedLoad && measured) assert.ok(measured.maxPressureVectorChangeN < 1e-12,
+    'Замороженный вектор давления изменился внутри подшага');
+  if (fixedLoad && warmup) assert.ok(warmup.maxPressureVectorChangeN < 1e-12,
+    'Замороженный вектор давления изменился при посадке');
+  const referencePositionsM = Array.from({ length: cl.n * 3 }, (_, k) =>
+    [cl.dx, cl.dy, cl.dz][k % 3][Math.floor(k / 3)]);
+  results.push({ cols: n, warmup, mechanics: measured, samples,
+    constraints: constraintErrorsOf(cl), finalPositionsM: Array.from(cl.pos), referencePositionsM,
+    wallSeconds: (performance.now() - wallStart) / 1000 });
+  observer?.detach();
 }
 b.p.rig.gennaker.clew_arc_r = clewArc;
 b.o.genSheetLen = sheet;
+for (const path of sourcePaths) assert.equal(hash(readFileSync(resolve(root, path))), sourceSha256[path],
+  `Исходник изменился во время опыта: ${path}`);
+assert.equal(hash(readFileSync(packPath)), hash(packBytes), 'Пакет изменился во время опыта');
+if (outArg) {
+  const path = resolve(root, outArg); mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ schema: 1, startedAt, createdAt: new Date().toISOString(),
+    revision, dirty, physicsSha256: hash(packBytes), sourceSha256,
+    config: { tack, sheet, iter, clothHz, seconds, cols, loadScale, gravityScale, sheetRamp,
+      fixedLoad, fixedNormals, bend, boardMaterial, attachmentPaths, rigidBoard, mechanics,
+      withoutShear, withoutBend, holdCutClew },
+    durationRule: mechanics ? 'посадка отдельно, затем заданные секунды движения' : 'прежний счёт кадров включает посадку',
+    results }, null, 2) + '\n');
+  console.log(`Сохранено: ${path}`);
+}

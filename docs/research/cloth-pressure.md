@@ -451,6 +451,10 @@ node tests/gennaker-acceptance.mjs --case=core --hz=120 --attachment-paths --rig
 
 ## Воспроизведение
 
+Следующий этап формулировки общего размерного закона вынесен в
+[исследование энергии ткани](cloth-material.md). Известные деформации и
+кривизна проверяются отдельно от движения основного `Cloth`.
+
 ```sh
 node tests/local-pressure.test.mjs
 node tests/local-pressure-coupling.test.mjs

@@ -35,6 +35,8 @@
 
 - [Kim, Chentanez, Müller, Long Range Attachments (2012), §3.2](https://matthias-research.github.io/pages/publications/sca2012cloth.pdf) — различие пространственной хорды и пути вдоль исходной ткани. Текст проверен 2026-10-01; применение и границы — в [исследовании механики](cloth-pressure.md).
 - [Macklin, Müller, Chentanez, XPBD (2016), §3–4](https://mmacklin.com/xpbd.pdf) — заданная энергия и накопленный множитель податливой связи; ограничения простой доли исправления за проход. Повторно проверено 2026-10-01; [контроль и границы переноса](cloth-pressure.md).
+- [Cheng, Shkoller, The Interaction of the 3D Navier–Stokes Equations with a Moving Nonlinear Koiter Elastic Shell (2010), уравнения 1.2–1.4](https://www.math.ucdavis.edu/~shkoller/ChengSh2010.pdf) — энергия через изменения исходных метрики и кривизны. Формулы проверены 2026-10-01; самостоятельная дискретизация и назначенные параметры — в [энергии ткани](cloth-material.md).
+- [Garg и соавт., Cubic Shells (2007), §2.2](https://cims.nyu.edu/gcl/papers/garg2007cs.pdf) — вес шарнира `3 l²/(A1+A2)` в синусном законе. Проверено 2026-10-01; квадратичный угловой кандидат проекта сохранён как отрицательный контроль, не как точная копия публикации.
 
 Названия исходных записей ниже относятся к ревизии `c66ca9c`; восстановление
 и новые места описаны в [индексе истории](history.md).

@@ -115,14 +115,17 @@ console.log('ок: известный угол изгиба; ошибочные 
 
 // Другие известные изгибы: смена радиуса исходного цилиндра и смешанная кривизна.
 // Здесь сверяем интеграл, а не формулу одного узла или форму нового решателя.
-const curvedErrors = [], twistErrors = [], kappa = .17;
-let twistReferenceJ = 0;
+const curvedErrors = [], twistErrors = [], skewErrors = [], kappa = .17;
+let twistReferenceJ = 0, skewReferenceJ = 0;
 // Независимая квадратура серединами прямоугольников для z=κxy:
 // |Δb|²=2κ²/(1+κ²(x²+y²)), исходная площадь=2 м².
 const integrationN = 800;
 for (let r = 0; r < integrationN; r++) for (let c = 0; c < integrationN; c++) {
   const x = 2 * (c + .5) / integrationN, y = (r + .5) / integrationN;
   twistReferenceJ += 2 / (integrationN * integrationN) * kappa * kappa / (1 + kappa * kappa * (x * x + y * y));
+  // Косой исходный базис: X=x+0.4y, Y=0.2x+1.3y, якобиан площади 1.22.
+  const X = x + .4 * y, Y = .2 * x + 1.3 * y;
+  skewReferenceJ += 2.44 / (integrationN * integrationN) * kappa * kappa / (1 + kappa * kappa * (X * X + Y * Y));
 }
 for (const n of [9, 17, 33]) {
   const rows = n, cols = 2 * n - 1, ref = rectangle(rows, cols), topology = gridTriangles(rows, cols);
@@ -134,9 +137,14 @@ for (const n of [9, 17, 33]) {
   const twist = transform(ref, ([x, y]) => [x, y, kappa * x * y]);
   const value = materialSurface(ref, topology, MODEL_MATERIAL, { bendingModel: 'curvature', rows, cols }).evaluate(twist);
   twistErrors.push(Math.abs(value.bendingJ / twistReferenceJ - 1));
+  const skew = transform(ref, ([x, y]) => [x + .4 * y, .2 * x + 1.3 * y, 0]);
+  const skewTwist = transform(skew, ([x, y]) => [x, y, kappa * x * y]);
+  const skewValue = materialSurface(skew, topology, MODEL_MATERIAL, { bendingModel: 'curvature', rows, cols }).evaluate(skewTwist);
+  skewErrors.push(Math.abs(skewValue.bendingJ / skewReferenceJ - 1));
 }
-for (const errors of [curvedErrors, twistErrors]) {
+for (const errors of [curvedErrors, twistErrors, skewErrors]) {
   assert.ok(errors[2] < errors[1] && errors[1] < errors[0], 'Энергия известного изгиба не сходится');
   assert.ok(errors[2] < .001, 'Энергия известного изгиба не приблизилась к опоре');
 }
-console.log(`ок: исходный цилиндр и смешанный изгиб; конечные ошибки ${curvedErrors[2].toExponential(3)}/${twistErrors[2].toExponential(3)}`);
+console.log(`ок: исходный цилиндр, смешанный изгиб и косой базис; конечные ошибки ` +
+  `${curvedErrors[2].toExponential(3)}/${twistErrors[2].toExponential(3)}/${skewErrors[2].toExponential(3)}`);

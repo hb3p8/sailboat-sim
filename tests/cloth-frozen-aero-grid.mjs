@@ -223,7 +223,32 @@ const initialInputOf = cl => {
 };
 const clewArc = b.p.rig.gennaker.clew_arc_r;
 const designSheet = 0.5 * (b.p.rig.gennaker.sheet_min_m + b.p.rig.gennaker.sheet_max_m);
+const verifyInputs = () => {
+  for (const path of sourcePaths) assert.equal(hash(readFileSync(resolve(root, path))), sourceSha256[path],
+    `Исходник изменился во время опыта: ${path}`);
+  assert.equal(hash(readFileSync(packPath)), hash(packBytes), 'Пакет изменился во время опыта');
+  assert.equal(frozenInput(), inputBefore, 'Замороженный вход изменился');
+};
+const saveOutcome = extra => {
+  if (!outArg) return;
+  const path = resolve(root, outArg); mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ schema: 1, startedAt, createdAt: new Date().toISOString(),
+    revision, dirty, physicsSha256: hash(packBytes), sourceSha256,
+    config: { tack, sheet, iter, clothHz, seconds, cols: grids.map(g => g.cols), grids, auditInput, loadScale, gravityScale, sheetRamp,
+      fixedLoad, fixedNormals, bend, boardMaterial, attachmentPaths, rigidBoard, mechanics,
+      withoutShear, withoutBend, holdCutClew, energyMaterial, implicitMotion, sharedInput },
+    ...(sharedInput ? { sharedInputField: { ...sharedInputField, values: Array.from(sharedInputField.values),
+      parameterDomain: 'доли высоты/ширины [0,1]×[0,1]',
+      rule: 'билинейные плотности из исходных узловых интегралов 11×9; точное распределение 2×2 точками на вложенных ячейках',
+      componentOrder: 'pressure[3] Н, gravity[3] Н, mass[1] кг, normalDrag[9] Н·с/м на единицу параметрической площади' } } : {}),
+    durationRule: mechanics ? 'посадка отдельно, затем заданные секунды движения' : 'прежний счёт кадров включает посадку',
+    results, ...extra }, null, 2) + '\n');
+  console.log(`Сохранено: ${path}`);
+};
+let failureContext = null;
+try {
 for (const { rows, cols: n } of grids) {
+  failureContext = { rows, cols: n, stage: 'preparation', requestedFrameTimeS: null, lastCompletedFrameTimeS: null };
   b.p.rig.gennaker.clew_arc_r = clewArc;
   b.o.genSheetLen = sheetRamp ? designSheet : sheet;
   const cl = new Cloth(b.rig.sails[2], 2, { rows, cols: n, iter,
@@ -261,10 +286,17 @@ for (const { rows, cols: n } of grids) {
     if (!initialInput) initialInput = initialInputOf(this);
     return value;
   };
+  failureContext.snapshot = () => ({ initialInput, warmup, samples,
+    lastCompletedPositionsM: Array.from(cl.pos), lastCompletedMechanics: observer?.snapshot() || null,
+    lastCompletedEnergyMotion: energy?.snapshot() || null,
+    referencePositionsM: Array.from({ length: cl.n * 3 }, (_, k) =>
+      [cl.dx, cl.dy, cl.dz][k % 3][Math.floor(k / 3)]),
+    wallSeconds: (performance.now() - wallStart) / 1000 });
   if (auditInput) {
     // step() готовит штатный крой и начальное положение. Здесь advance()
     // только читает силу: ни один из сорока вызовов не перемещает полотно.
     cl.advance = function (...args) { this.forcesAt(...args); };
+    failureContext.stage = 'input-audit';
     if (!cl.step(b, 1 / clothHz)) throw new Error('Не удалось подготовить вход ткани');
     checkCut(cl);
     assert.equal(frozenInput(), inputBefore, 'Замороженный вход изменился при измерении');
@@ -277,9 +309,12 @@ for (const { rows, cols: n } of grids) {
   let firstPressure = null;
   const startIndex = mechanics ? -1 : 0;
   for (let i = startIndex; i < seconds * clothHz; i++) {
+    failureContext.stage = i === startIndex ? 'warmup' : 'timed';
+    failureContext.requestedFrameTimeS = (i + 1) / clothHz;
     if (sheetRamp) b.o.genSheetLen = designSheet + (sheet - designSheet) *
       Math.max(0, Math.min(1, i / (clothHz * sheetRamp)));
     if (!cl.step(b, 1 / clothHz)) throw new Error('Шаг ткани отклонён');
+    failureContext.lastCompletedFrameTimeS = (i + 1) / clothHz;
     if (fixedLoad) {
       const applied = JSON.stringify(cl.pressureForce);
       if (firstPressure == null) firstPressure = applied;
@@ -347,23 +382,16 @@ for (const { rows, cols: n } of grids) {
     wallSeconds: (performance.now() - wallStart) / 1000 });
   observer?.detach();
 }
+} catch (error) {
+  let inputsVerified = true, inputError = null;
+  try { verifyInputs(); } catch (guardError) { inputsVerified = false; inputError = guardError.message; }
+  const { snapshot, ...context } = failureContext || {};
+  saveOutcome({ phase: 'failed', inputsVerified, inputError,
+    failure: { ...context, message: error.message }, failedGrid: snapshot?.() || null,
+    resultRule: 'results — завершённые сетки; failedGrid — последнее сохранённое состояние, не принятый конечный результат' });
+  throw error;
+}
 b.p.rig.gennaker.clew_arc_r = clewArc;
 b.o.genSheetLen = sheet;
-for (const path of sourcePaths) assert.equal(hash(readFileSync(resolve(root, path))), sourceSha256[path],
-  `Исходник изменился во время опыта: ${path}`);
-assert.equal(hash(readFileSync(packPath)), hash(packBytes), 'Пакет изменился во время опыта');
-if (outArg) {
-  const path = resolve(root, outArg); mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify({ schema: 1, startedAt, createdAt: new Date().toISOString(),
-    revision, dirty, physicsSha256: hash(packBytes), sourceSha256,
-    config: { tack, sheet, iter, clothHz, seconds, cols: grids.map(g => g.cols), grids, auditInput, loadScale, gravityScale, sheetRamp,
-      fixedLoad, fixedNormals, bend, boardMaterial, attachmentPaths, rigidBoard, mechanics,
-      withoutShear, withoutBend, holdCutClew, energyMaterial, implicitMotion, sharedInput },
-    ...(sharedInput ? { sharedInputField: { ...sharedInputField, values: Array.from(sharedInputField.values),
-      parameterDomain: 'доли высоты/ширины [0,1]×[0,1]',
-      rule: 'билинейные плотности из исходных узловых интегралов 11×9; точное распределение 2×2 точками на вложенных ячейках',
-      componentOrder: 'pressure[3] Н, gravity[3] Н, mass[1] кг, normalDrag[9] Н·с/м на единицу параметрической площади' } } : {}),
-    durationRule: mechanics ? 'посадка отдельно, затем заданные секунды движения' : 'прежний счёт кадров включает посадку',
-    results }, null, 2) + '\n');
-  console.log(`Сохранено: ${path}`);
-}
+verifyInputs();
+saveOutcome({ phase: 'complete', inputsVerified: true });

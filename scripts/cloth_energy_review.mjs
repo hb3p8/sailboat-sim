@@ -14,6 +14,8 @@ if (!paths.length || new Set(paths).size !== paths.length || paths.includes(dest
   throw new Error('Нужны разные входы и отдельный результат');
 const data = paths.map(path => {
   const bytes = readFileSync(path), record = JSON.parse(bytes);
+  if (record.phase === 'failed' || record.inputsVerified === false)
+    throw new Error('Отклонённый опыт или изменившиеся исходники не подходят для стенда завершённых форм');
   const cutOnly = record.config?.cutOnly === true;
   if ((!cutOnly && (!record.config?.energyMaterial || !record.config.fixedLoad || !record.config.holdCutClew)) || !record.results?.length)
     throw new Error('Нужен опыт нового материала с постоянной нагрузкой и неподвижными углами');

@@ -163,13 +163,22 @@ node tests/cloth-frozen-aero-grid.mjs --tack=1 --sheet=9 --fixed-load --grids=11
 
 ```sh
 node tests/cloth-shared-input.test.mjs
-node tests/cloth-frozen-aero-grid.mjs --tack=1 --sheet=9 --iter=40 --fixed-load --grids=11x9,21x17,41x33 --mechanics --rigid-board --energy-material --implicit-motion --hold-cut-clew --cut-nesting --shared-input --seconds=5 --out=out/acceptance/implicit-shared-space-plus.json
+node tests/cloth-frozen-aero-grid.mjs --tack=1 --sheet=9 --iter=40 --fixed-load --grids=11x9,21x17 --mechanics --rigid-board --energy-material --implicit-motion --hold-cut-clew --cut-nesting --shared-input --seconds=1 --out=out/acceptance/implicit-shared-space-smoke.json
 ```
 
 Поле, порядок его 16 компонент и происхождение записаны в JSON. Крой,
 K/G/B, затухание 6 с⁻¹ и допуски полного решения не меняются. При уточнении
 массы планка заново получает сумму `Σm_i t_i²`, а не прежнюю массу конца.
-Короткая серия проверяет начало перехода; 5 с не принимают конечное равновесие.
+Короткая серия проверяет подключение; она не принимает пространство или
+равновесие. При продлении общего входа до 5 с на 21×17 есть известные отказы
+доведения при пределах 40 и 80; условия сохранены в исследовании материала.
+
+При отказе стенд сохраняет `phase: failed`, сообщение, фазу и время попытки,
+проверку исходников и последнее завершённое состояние в `failedGrid`.
+`results` содержит только завершённые сетки. Последнее состояние не является
+конечным принятым результатом. Проверка записи отказа: та же команда с
+`--iter=1` и новым именем результата должна завершиться с кодом 1 при посадке.
+Генератор завершённых форм отклоняет такие записи.
 
 Перед пространственной серией проверяйте переход от границы к первым
 внутренним строкам. Текущий крой имеет известный отрицательный результат:

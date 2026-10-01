@@ -828,6 +828,8 @@ if (dynamicSeconds) {
           force[3 * a + j] = frozenPressure[a] * frozenNormals[3 * a + j];
     } else {
       cl.pos.set(p); cl.prev.set(prev);
+      // Пару положений обновляет этот стенд; её длительность — его собственный h.
+      cl.prevDt = h;
       if (!alreadySolvedAero) {
         b.rig.latRebuild = true;
         b.rig.forces(b, b.apparentWind(), h);

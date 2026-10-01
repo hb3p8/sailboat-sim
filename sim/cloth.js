@@ -553,6 +553,7 @@ export class Cloth {
     this.n = N;
     this.pos = new Float64Array(N * 3);
     this.prev = new Float64Array(N * 3);
+    this.prevDt = 0;                    // длительность перемещения pos − prev
     this.frc = new Float64Array(N * 3);
     this.w = new Float64Array(N);        // обратная масса независимого узла
     this.nrm = new Float64Array(N * 3);
@@ -1102,6 +1103,7 @@ export class Cloth {
       }
       if (this.rigidBoard) this.board();
       this.prev.set(this.pos);
+      this.prevDt = 0;
       return;
     }
     for (let r = 0; r < this.rows; r++) {
@@ -1120,6 +1122,7 @@ export class Cloth {
     }
     if (this.rigidBoard) this.board();
     this.prev.set(this.pos);
+    this.prevDt = 0;
   }
 
   // Нормали, по которым давит поток: одна на строку.
@@ -1252,16 +1255,22 @@ export class Cloth {
   // восстановленное и ставит на его место форму, какую крой даёт сам по себе.
   // Ловилось это не как «дамп не встал», а как расхождение по углу атаки
   // полосок генакера в пятнадцать-двадцать пять градусов на первом же шаге.
-  restore(pos, prev, rig) {
+  restore(pos, prev, rig, prevDt = SUB_DT) {
     if (!pos || pos.length !== this.pos.length) return false;
+    if (!Number.isFinite(prevDt) || prevDt < 0) return false;
     this.pos.set(pos);
     this.prev.set(prev && prev.length === this.prev.length ? prev : pos);
+    this.prevDt = prevDt;
     this.ready = true;
     this.rigRef = rig;
     return true;
   }
 
   ix(r, c) { return r * this.cols + c; }
+
+  // pos − prev накоплено за прошлый подшаг. Новый h задаёт последующее
+  // движение, но не меняет уже накопленную скорость. После seed скорость нулевая.
+  velocityDt(h) { return this.prevDt > 0 ? this.prevDt : h; }
 
   // Хорда между узлами опорного кроя. Совпадает с покоем локального ребра;
   // при удалённых узлах не является материальным путём. Интеграл длины
@@ -1303,6 +1312,7 @@ export class Cloth {
   forcesAt(b, h, side, env) {
     const calc = b.rig.stripCalc, base = this.si * STRIPS;
     const p = this.pos, pv = this.prev, f = this.frc, N = this.n;
+    const velocityDt = this.velocityDt(h);
     // Поток берётся у средней полоски: направление давления по высоте меняется
     // мало, а вот сторона у всего паруса одна.
     const mid = calc[base + Math.floor(STRIPS / 2)] || {};
@@ -1474,8 +1484,8 @@ export class Cloth {
         if (!live) continue;
         const nx = this.nrm[k], ny = this.nrm[k + 1], nz = this.nrm[k + 2];
         if (cd > 0) {
-          const vx = (p[k] - pv[k]) / h, vy = (p[k + 1] - pv[k + 1]) / h,
-                vz = (p[k + 2] - pv[k + 2]) / h;
+          const vx = (p[k] - pv[k]) / velocityDt, vy = (p[k + 1] - pv[k + 1]) / velocityDt,
+                vz = (p[k + 2] - pv[k + 2]) / velocityDt;
           const vn = vx * nx + vy * ny + vz * nz;
           const dmp = -cd * vn * area[i];
           f[k] += dmp * nx; f[k + 1] += dmp * ny; f[k + 2] += dmp * nz;
@@ -1507,6 +1517,7 @@ export class Cloth {
     if (this.rigidBoard) this.board();
     this.forcesAt(b, h, side, env);
     const p = this.pos, pv = this.prev, f = this.frc, N = this.n;
+    const velocityDt = this.velocityDt(h);
     const boardForce = this.rigidBoard ? this.boardForces() : null;
     // Скорость зависимых точек нужна forcesAt на следующем подшаге.
     if (this.rigidBoard)
@@ -1519,13 +1530,14 @@ export class Cloth {
       const k = i * 3;
       for (let d = 0; d < 3; d++) {
         const force = boardForce && i === this.boardEnd ? boardForce[d] : f[k + d];
-        let v = (p[k + d] - pv[k + d]) / h * damp + force * w * h;
+        let v = (p[k + d] - pv[k + d]) / velocityDt * damp + force * w * h;
         if (v > VMAX) v = VMAX; else if (v < -VMAX) v = -VMAX;
         pv[k + d] = p[k + d];
         p[k + d] += v * h;
       }
     }
     this.project(b, side);
+    this.prevDt = h;
     // Скорость наружу не выводится: её роль здесь только в предсказании, а
     // берётся она разностью положений, как и положено позиционной динамике.
   }

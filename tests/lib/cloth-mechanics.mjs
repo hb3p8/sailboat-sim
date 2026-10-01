@@ -63,7 +63,7 @@ export function observeClothMechanics(cloth) {
     const result = forcesAt.apply(this, args);
     before = this.pos.slice(); applied = this.frc.slice();
     pressure = new Float64Array(this.n * 3);
-    currentH = args[1]; beforeKinetic = kineticOf(this, currentH);
+    currentH = args[1]; beforeKinetic = kineticOf(this, this.velocityDt(currentH));
     for (let i = 0; i < this.n; i++) for (let d = 0; d < 3; d++)
       pressure[3 * i + d] = this.pressureForce[i] * this.nrm[3 * i + d];
     if (!pressureFirst) pressureFirst = pressure.slice();

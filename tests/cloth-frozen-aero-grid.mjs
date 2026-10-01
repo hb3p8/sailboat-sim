@@ -74,7 +74,7 @@ if (![1, -1].includes(tack) || !(sheet > 0) || !(loadScale >= 0 && loadScale <= 
     !(gravityScale >= 0 && gravityScale <= 1) || !(sheetRamp >= 0 && sheetRamp <= 30) ||
     !Number.isInteger(iter) || iter < 1 ||
     (bend != null && !(bend >= 0 && bend <= 1)) ||
-    ![30, 60, 120].includes(clothHz) ||
+    ![30, 60, 120, 240].includes(clothHz) ||
     !(seconds >= 1 && seconds <= 30 && Number.isInteger(seconds)) ||
     cols.some(x => !Number.isInteger(x) || x < 5 || x > 65))
   throw new Error('Неверные параметры стенда');

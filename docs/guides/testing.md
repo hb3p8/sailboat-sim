@@ -44,7 +44,7 @@ Makefile — источник состава наборов: обновляйт�
 | Мягкие связи и работа ткани | `cloth-mechanics.test.mjs`; замороженный стенд с `--mechanics`, исключение одной семьи связей и запись фактического подшага |
 | Энергия нового материала | `cloth-material.test.mjs`; `cloth-material-refinement.mjs --bending=curvature --gate`, затем полный крой/движение; `--bending=hinge` — сохранённый отрицательный контроль |
 | Движение нового материала | `cloth-energy-motion.test.mjs`; затем `--energy-material` в замороженном стенде, контроль податливости, уравнения движения и физического силового остатка по отдельности |
-| Полное уравнение энергии | `cloth-implicit-motion.test.mjs`; замороженный стенд с `--energy-material --implicit-motion`, ошибка сил и длины на каждом подшаге, затем сетка/время/итерации |
+| Полное уравнение энергии | `cloth-implicit-motion.test.mjs`, `cloth-implicit-invariants.test.mjs`; замороженный стенд с `--energy-material --implicit-motion`, ошибка сил и длины на каждом подшаге, затем сетка/время/итерации |
 | Подшаг и история скорости ткани | `cloth-time-step.test.mjs`, cloth и replay; обе стороны перехода времени, снимок, затем затронутые замороженный/совместный прогоны |
 | Местное давление | local-pressure, local-pressure-coupling; замороженная форма, оба направления ветра и связанная ткань |
 | Корпус, экипаж и плавучесть | buoyancy, physics; planing/stability при затронутом поведении |
@@ -120,17 +120,20 @@ node tests/cloth-frozen-aero-grid.mjs --tack=1 --sheet=9 --iter=40 --fixed-load 
 ```
 
 Контроли: отдельные `--without-shear`, `--without-bend`, затем оба флага;
-другая сторона — `--tack=-1`. Уточнение — `--iter=160` и `--cloth-hz=120`.
+другая сторона — `--tack=-1`. Уточнение — `--iter=160` и `--cloth-hz=120` или `240`.
+Поддержаны 30/60/120/240 Гц; 30 и 60 внешних кадров дают одинаковый
+внутренний шаг 1/60 с, а 120/240 — фактические шаги 1/120 и 1/240 с.
 Подшаг при 30/60 кадрах одинаков, поэтому проверять его нужно по JSON,
 а не по частоте внешнего цикла. `--mechanics` отделяет посадку от длительности;
 для прежнего отсчёта не передавайте этот флаг. `--seconds=1` пригоден для
 короткой проверки инструмента, не для приёмки установившегося паруса.
 
-Для нового заданного материала вместо прежнего проектора:
+Для нового заданного материала полным уравнением вместо прежнего проектора:
 
 ```sh
-node tests/cloth-energy-motion.test.mjs
-node tests/cloth-frozen-aero-grid.mjs --tack=1 --sheet=9 --iter=40 --fixed-load --cols=9,17,33 --mechanics --rigid-board --energy-material --hold-cut-clew --cut-nesting --seconds=30 --out=out/acceptance/energy-motion-full-plus.json
+node tests/cloth-implicit-motion.test.mjs
+node tests/cloth-implicit-invariants.test.mjs
+node tests/cloth-frozen-aero-grid.mjs --tack=1 --sheet=9 --iter=40 --fixed-load --cols=9,17,33 --mechanics --rigid-board --energy-material --implicit-motion --hold-cut-clew --cut-nesting --seconds=30 --out=out/acceptance/implicit-motion-full-plus.json
 ```
 
 `--energy-material` требует неподвижных углов; прежние мягкие связи и дальние
@@ -140,18 +143,25 @@ node tests/cloth-frozen-aero-grid.mjs --tack=1 --sheet=9 --iter=40 --fixed-load 
 Фактический подшаг и отдельная посадка хранятся в записи. Близость картинок,
 нулевая скорость и малая ошибка податливости не принимают физический остаток.
 
-Для полного неявного уравнения добавьте `--implicit-motion` и предварительно
-выполните `node tests/cloth-implicit-motion.test.mjs`. `--iter` задаёт предел
+Без `--implicit-motion` сохранён приближённый вариант отрицательного контроля;
+его известные движения проверяет `cloth-energy-motion.test.mjs`. Полное
+уравнение проверяется двумя командами выше. `--iter` задаёт предел
 внешних итераций, а доведение — независимые допуски сил, длины, знака реакции
 и её произведения на свободную длину из `IMPLICIT_TOLERANCES`. Недоведённый шаг
 отклоняется; его нельзя принять по близкому силуэту или ослабить допуски.
 Мягкие множители вычисляются из энергии после решения; нулевая податливость
 этой ветви — тождество. Контроль движения — физический силовой остаток.
 
+Прямые предельно натянутые кромки проверяются отдельно:
+`node tests/cloth-implicit-invariants.test.mjs --straight-control`. Для текущего
+решателя ожидается отказ с кодом 1: поперечная реакция не представляется
+конечными множителями обычных ограничений длины. Это отрицательный контроль
+постановки кромок, не зелёная регрессия; [условия](../research/cloth-material.md).
+
 Для визуального разбора с человеком соберите сохранённые формы:
 
 ```sh
-node scripts/cloth_energy_review.mjs --input=out/acceptance/energy-motion-full-plus.json --out=out/acceptance/energy-motion-review.html
+node scripts/cloth_energy_review.mjs --input=out/acceptance/implicit-motion-full-plus.json --input=out/acceptance/implicit-motion-full-minus.json --out=out/acceptance/implicit-motion-review.html
 ```
 
 Откройте результат через локальный сервер. Стенд не пересчитывает физику:

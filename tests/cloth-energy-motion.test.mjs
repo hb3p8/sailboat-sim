@@ -64,17 +64,19 @@ for (let i = 0; i < 80; i++) {
   if (.25 * 1050 * x * (x * x - 1) < 10) lo = x; else hi = x;
 }
 const expected = (lo + hi) / 2, results = [];
-for (const hz of [60, 120, 240]) {
+for (const hz of [60, 120, 240]) for (const passes of (hz === 60 ? [4, 40, 160] : [40])) {
   const surface = materialSurface(reference, [[0, 1, 2]], parameters);
   const motion = new EnergyMotion({ positions: reference, mass: [1, 1, 1], constraints: surface.constraints, fixed: [0, 2] });
   let audit;
-  for (let step = 0; step < 5 * hz; step++) audit = motion.step(external, 1 / hz, 40);
-  results.push({ hz, x: motion.pos[3], error: Math.abs(motion.pos[3] - expected),
+  for (let step = 0; step < 5 * hz; step++) audit = motion.step(external, 1 / hz, passes);
+  results.push({ hz, passes, x: motion.pos[3], error: Math.abs(motion.pos[3] - expected),
     complianceResidual: Math.max(...Object.values(audit.complianceResiduals).map(g => g.max)), motionResidualN: audit.maxMotionResidualN,
     physicalResidualN: audit.maxPhysicalResidualN });
   close(motion.pos[4], 0); close(motion.pos[5], 0);
 }
-assert.ok(results[2].error < results[1].error && results[1].error < results[0].error);
+const byTime = results.filter(r => r.passes === 40), byPasses = results.filter(r => r.hz === 60);
+assert.ok(byTime[2].error < byTime[1].error && byTime[1].error < byTime[0].error);
+assert.ok(byPasses[2].error <= byPasses[1].error + 1e-12 && byPasses[1].error <= byPasses[0].error + 1e-12);
 console.log(`Треугольник: известное равновесие x=${expected.toFixed(9)} м; ${JSON.stringify(results)}`);
 
 // Непрерывная скорость при смене h и затухание без нагрузки.

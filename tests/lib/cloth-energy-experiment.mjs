@@ -1,10 +1,11 @@
 // Подключение исследовательской энергии к замороженному стенду, не к Boat.
 import { materialSurface, gridTriangles, MODEL_MATERIAL } from './cloth-material.mjs';
 import { EnergyMotion } from './cloth-energy-motion.mjs';
+import { ImplicitEnergyMotion } from './cloth-implicit-motion.mjs';
 import { distance } from '../cloth-compliance.mjs';
 import { constraintFamily } from './cloth-mechanics.mjs';
 
-export function installEnergyExperiment(cloth) {
+export function installEnergyExperiment(cloth, { implicit = false } = {}) {
   if (!cloth.rigidBoard || cloth.freeClew) throw new Error('Нужны неподвижные углы и исключённая верхняя планка');
   const kept = [], counts = {};
   for (let k = 0; k < cloth.ci.length; k++) {
@@ -15,7 +16,8 @@ export function installEnergyExperiment(cloth) {
   let motion, surface, last, totals;
   const reset = () => { totals = { substeps: 0, elapsedS: 0, appliedWorkJ: 0, dampingWorkJ: 0,
     hardWorkEstimateJ: 0, discreteEnergyDefectJ: 0, maxPhysicalResidualN: 0,
-    maxMotionResidualN: 0, maxHardViolationM: 0, initialSoftEnergyJ: null, initialKineticJ: null }; };
+    maxMotionResidualN: 0, maxHardViolationM: 0, initialSoftEnergyJ: null, initialKineticJ: null,
+    ...(implicit ? { solverIterations: 0, maxSolverIterations: 0, qpIterations: 0, lineSearchReductions: 0 } : {}) }; };
   reset();
   cloth.advance = function (boat, h, side, environment) {
     if (!motion) {
@@ -27,9 +29,11 @@ export function installEnergyExperiment(cloth) {
         { family: constraintFamily(this, k) }));
       hard.push(Object.assign(distance(this.head, this.boardEnd, this.boardRest, 0), { family: 'board' }));
       const nodes = Array.from({ length: this.cols }, (_, c) => this.head + c);
-      motion = new EnergyMotion({ positions: this.pos, mass: this.mass,
+      const Motion = implicit ? ImplicitEnergyMotion : EnergyMotion;
+      motion = new Motion({ positions: this.pos, mass: this.mass,
         fixed: [this.tack, this.head, this.clew],
         board: { head: this.head, end: this.boardEnd, nodes, fractions: nodes.map(i => this.boardFraction[i]) },
+        ...(implicit ? { gridRows: this.rows, gridCols: this.cols } : {}),
         constraints: [...surface.constraints.map(c => ({ ...c, unit: c.family === 'bending' ? '1/м' : '1' })), ...hard], dampingHz: 6 });
       // Общие массивы: форма, нормали давления и измерители читают один результат.
       motion.pos = this.pos; motion.prev = this.prev;
@@ -41,6 +45,12 @@ export function installEnergyExperiment(cloth) {
     totals.substeps++; totals.elapsedS += h;
     for (const name of ['appliedWorkJ', 'dampingWorkJ', 'hardWorkEstimateJ', 'discreteEnergyDefectJ']) totals[name] += last[name];
     for (const name of ['maxPhysicalResidualN', 'maxMotionResidualN', 'maxHardViolationM']) totals[name] = Math.max(totals[name], last[name]);
+    if (last.solver) {
+      totals.solverIterations += last.solver.iterations;
+      totals.maxSolverIterations = Math.max(totals.maxSolverIterations, last.solver.iterations);
+      totals.qpIterations += last.solver.qpIterations;
+      totals.lineSearchReductions += last.solver.lineSearchReductions;
+    }
   };
   return { reset, snapshot() {
     if (!last) return null;
@@ -49,6 +59,7 @@ export function installEnergyExperiment(cloth) {
       hardBoundaryCounts: { ...counts, board: 1 }, softConstraints: surface.constraints.length,
       interiorHardEdges: false, attachmentBounds: false, dampingHz: 6,
       actualSupportReactionsAccepted: false,
+      implicitMotion: implicit,
       rule: 'только новая энергия; жёсткие кромки и длина планки; прежние мягкие связи/дальние пределы не действуют' };
   } };
 }

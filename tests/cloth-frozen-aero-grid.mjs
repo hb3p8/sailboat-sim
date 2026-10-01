@@ -12,6 +12,7 @@ import { Cloth } from '../sim/cloth.js';
 import { gennakerClew } from '../sim/aero.js';
 import { constraintFamily, constraintErrorsOf, observeClothMechanics } from './lib/cloth-mechanics.mjs';
 import { installEnergyExperiment } from './lib/cloth-energy-experiment.mjs';
+import { IMPLICIT_TOLERANCES } from './lib/cloth-implicit-motion.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packPath = resolve(root, 'out/export/physics.json'), packBytes = readFileSync(packPath);
@@ -20,7 +21,7 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const sourcePaths = [...readdirSync(resolve(root, 'sim')).filter(f => f.endsWith('.js')).map(f => `sim/${f}`),
   'tests/cloth-frozen-aero-grid.mjs', 'tests/lib/cloth-mechanics.mjs',
   'tests/lib/cloth-energy-experiment.mjs', 'tests/lib/cloth-energy-motion.mjs',
-  'tests/lib/cloth-material.mjs', 'tests/cloth-compliance.mjs'];
+  'tests/lib/cloth-material.mjs', 'tests/cloth-compliance.mjs', 'tests/lib/cloth-implicit-motion.mjs', 'tests/lib/cloth-linear-solve.mjs'];
 const sourceSha256 = Object.fromEntries(sourcePaths.map(p => [p, hash(readFileSync(resolve(root, p)))]));
 const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
 const dirty = Boolean(execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim());
@@ -29,7 +30,7 @@ const numericFlags = ['tack', 'sheet', 'iter', 'cloth-hz', 'load-scale', 'gravit
   'sheet-ramp', 'bend', 'seconds', 'cols', 'out'];
 const booleanFlags = ['fixed-load', 'fixed-normals', 'edges', 'cells', 'cut-nesting',
   'board-material', 'attachment-paths', 'rigid-board', 'mechanics', 'without-shear',
-  'without-bend', 'corner-gap', 'hold-cut-clew', 'energy-material'];
+  'without-bend', 'corner-gap', 'hold-cut-clew', 'energy-material', 'implicit-motion'];
 const seenFlags = new Set();
 for (const argument of process.argv.slice(2)) {
   const equals = argument.indexOf('='), name = argument.slice(2, equals < 0 ? undefined : equals);
@@ -60,6 +61,7 @@ const mechanics = process.argv.includes('--mechanics');
 const withoutShear = process.argv.includes('--without-shear');
 const withoutBend = process.argv.includes('--without-bend');
 const energyMaterial = process.argv.includes('--energy-material');
+const implicitMotion = process.argv.includes('--implicit-motion');
 const seconds = arg('seconds', 30);
 const outArg = process.argv.find(s => s.startsWith('--out='))?.slice('--out='.length);
 if (process.argv.includes('--out') || outArg === '') throw new Error('--out: требуется путь после =');
@@ -78,6 +80,7 @@ if (![1, -1].includes(tack) || !(sheet > 0) || !(loadScale >= 0 && loadScale <= 
   throw new Error('Неверные параметры стенда');
 if (energyMaterial && (!fixedLoad || !mechanics || !rigidBoard || !holdCutClew || withoutShear || withoutBend || bend != null || sheetRamp))
   throw new Error('Новый материал: нужны --fixed-load --mechanics --rigid-board --hold-cut-clew; исключение семей, bend и sheet-ramp неприменимы');
+if (implicitMotion && !energyMaterial) throw new Error('--implicit-motion требует --energy-material');
 const wrap = x => ((x + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
 
 const b = new Boat(pack);
@@ -160,6 +163,7 @@ console.log(`Опорная ткань 11×9: вход ${minShape(reference).ang
 console.log(`Ткань: ${iter} проходов, ${clothHz} Гц, изгиб ${energyMaterial ? 'заданная энергия кривизны' : bend == null ? 'штатный' : bend}, нормали ${fixedNormals ? 'зафиксированы на первом подшаге' : 'следуют за тканью'}, площадь нагрузки ${fixedLoad ? 'зафиксирована на первом подшаге' : 'следует за тканью'}; дальние пределы ${energyMaterial ? 'отключены' : attachmentPaths ? 'пути по жёстким рёбрам' : 'хорды кроя'}; жёсткое верхнее крепление ${rigidBoard}`);
 if (mechanics) console.log(`Аудит механики: начальная посадка отдельно; длительность отсчитывается после неё. Работа силы и энергия движения измеряются; ${energyMaterial ? 'энергия нового материала записана в energyMotion; закрепления неподвижны, реакции ещё не приняты' : 'энергия материала и работа креплений неизвестны'}.`);
 if (energyMaterial) console.log('Явный новый материал: энергия и остаток физического движения записываются отдельно; неподвижные углы, жёсткие кромки и длина планки; прежние внутренние жёсткие рёбра/мягкие связи/дальние пределы отключены.');
+if (implicitMotion) console.log(`Полное уравнение энергии: ошибка сил ≤${IMPLICIT_TOLERANCES.forceToleranceN} Н, длины ≤${IMPLICIT_TOLERANCES.lengthToleranceM} м; недоведённый шаг отклоняется.`);
 if (withoutShear || withoutBend) console.log(`Диагностическое исключение связей: диагонали ${withoutShear}, изгиб ${withoutBend}; не новый принятый материал`);
 console.log('столбцов | время ткани с | мин. вход °/строка | max ход назад/вывернуто % | пузо строки 5 % | Fx/Fy ткани Н');
 const results = [];
@@ -176,7 +180,7 @@ for (const n of cols) {
     const family = constraintFamily(cl, k);
     if ((withoutShear && family === 'shear') || (withoutBend && family === 'bend')) cl.ck[k] = 0;
   }
-  const energy = energyMaterial ? installEnergyExperiment(cl) : null;
+  const energy = energyMaterial ? installEnergyExperiment(cl, { implicit: implicitMotion }) : null;
   const observer = mechanics ? observeClothMechanics(cl) : null;
   let warmup = null;
   const samples = [], wallStart = performance.now();
@@ -295,7 +299,7 @@ if (outArg) {
     revision, dirty, physicsSha256: hash(packBytes), sourceSha256,
     config: { tack, sheet, iter, clothHz, seconds, cols, loadScale, gravityScale, sheetRamp,
       fixedLoad, fixedNormals, bend, boardMaterial, attachmentPaths, rigidBoard, mechanics,
-      withoutShear, withoutBend, holdCutClew, energyMaterial },
+      withoutShear, withoutBend, holdCutClew, energyMaterial, implicitMotion },
     durationRule: mechanics ? 'посадка отдельно, затем заданные секунды движения' : 'прежний счёт кадров включает посадку',
     results }, null, 2) + '\n');
   console.log(`Сохранено: ${path}`);

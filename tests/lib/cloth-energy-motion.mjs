@@ -90,6 +90,10 @@ export class EnergyMotion {
     if (this.board && delta && reduced.some(([i]) => i === this.board.end)) this.reconstruct();
   }
 
+  solve(prediction, h, passes) {
+    for (let pass = 0; pass < passes; pass++) for (const c of this.constraints) this.project(c, h);
+  }
+
   step(force, h, passes) {
     if (force?.length !== this.pos.length || !Array.from(force).every(Number.isFinite) ||
         !Number.isFinite(h) || !(h > 0) || !Number.isInteger(passes) || passes < 1)
@@ -112,8 +116,9 @@ export class EnergyMotion {
     }
     this.reconstruct(); const prediction = this.pos.slice();
     for (const c of this.constraints) c.lambda = 0;
+    let solver;
     try {
-      for (let pass = 0; pass < passes; pass++) for (const c of this.constraints) this.project(c, h);
+      solver = this.solve(prediction, h, passes);
       if (!Array.from(this.pos).every(Number.isFinite)) throw new Error('Не-конечная позиция ткани');
     } catch (error) { this.pos.set(old); this.prev.set(prior); throw error; }
     this.prev.set(old); this.prevDt = h;
@@ -162,6 +167,7 @@ export class EnergyMotion {
       maxMotionResidualN, rmsMotionResidualN: Math.sqrt(rmsMotionResidualN / Math.max(1, dofs)),
       maxPhysicalResidualN, rmsPhysicalResidualN: Math.sqrt(rmsPhysicalResidualN / Math.max(1, dofs)),
       constraintForce, hardForce, prediction,
+      ...(solver ? { solver } : {}),
       interpretation: 'остатки податливости, множителей и физического уравнения измерены отдельно; реакции не приняты' };
   }
 }

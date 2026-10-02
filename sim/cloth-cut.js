@@ -47,3 +47,35 @@ export function bezierSectionPeak(P) {
   }
   return { t, cam, at };
 }
+
+// Отдельная гипотеза: две кубические половины с общим максимумом.
+// Крайние ручки доходят до половины глубины; одинаковые ручки у максимума
+// определяются непрерывностью второй производной, без визуального подбора.
+// Все четыре заданных параметра выполняются до согласования с краями полотна.
+export function joinedCubicSection(depth, peakAt, entryRad, exitRad) {
+  if (!(Number.isFinite(depth) && depth>0 && Number.isFinite(peakAt) && peakAt>0 && peakAt<1 &&
+        [entryRad,exitRad].every(a=>Number.isFinite(a)&&a>0&&a<Math.PI)))
+    throw new Error('Нужны глубина >0, место максимума между 0 и 1, углы между 0 и π');
+  const frontX=.5*depth/Math.tan(entryRad),backX=1-.5*depth/Math.tan(exitRad);
+  const frontSpan=peakAt-frontX,backSpan=backX-peakAt;
+  const handle=(frontSpan+backSpan)/4;
+  if (!(handle>0 && handle<=frontSpan && handle<=backSpan))
+    throw new Error('Составной профиль: заданные параметры нарушают порядок внутренних контрольных точек');
+  const segments=[[0,0,frontX,.5*depth,peakAt-handle,depth,peakAt,depth],
+    [peakAt,depth,peakAt+handle,depth,backX,.5*depth,1,0]];
+  const parameterPoint=(t,out)=>{
+    const P=segments[t<=.5?0:1],s=t<=.5?2*t:2*t-1,u=1-s;
+    const w0=u*u*u,w1=3*u*u*s,w2=3*u*s*s,w3=s*s*s;
+    out[0]=w0*P[0]+w1*P[2]+w2*P[4]+w3*P[6];
+    out[1]=w0*P[1]+w1*P[3]+w2*P[5]+w3*P[7];
+    return out;
+  };
+  // То же приближение длины, что у прежнего профиля; точка максимума входит
+  // в отсчёты. Оно не изменяет точную форму или условия её существования.
+  let ratio=0,lastX=0,lastZ=0;const p=[0,0];
+  for(let i=1;i<=64;i++) {
+    parameterPoint(i/64,p);ratio+=Math.hypot(p[0]-lastX,p[1]-lastZ);lastX=p[0];lastZ=p[1];
+  }
+  return {segments,parameterPoint,ratio,cam:depth,at:peakAt,
+    controlOrderMargin:Math.min(frontSpan,backSpan)-handle};
+}

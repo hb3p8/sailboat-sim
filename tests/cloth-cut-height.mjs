@@ -14,14 +14,14 @@ const args=process.argv.slice(2), allowed=['rows','cols','grids','cut','out'];
 const seen=new Set();
 for(const a of args){const name=a.slice(2,a.indexOf('='));
   if(!a.startsWith('--') || !a.includes('=') || !allowed.includes(name) || seen.has(name) || !a.split('=')[1])
-    throw new Error('Нужны уникальные --rows=11,21,… --cols=9 или --grids=11x9,21x17; --cut=original|continuous|continuous-analytic; --out=запись.json');
+    throw new Error('Нужны уникальные --rows=11,21,… --cols=9 или --grids=11x9,21x17; --cut=original|continuous|continuous-analytic|continuous-joined; --out=запись.json');
   seen.add(name);
 }
 const value=(name,fallback)=>args.find(a=>a.startsWith(`--${name}=`))?.slice(name.length+3) ?? fallback;
 const rows=value('rows','11,21,41,81,161,321').split(',').map(Number),cols=Number(value('cols','9'));
 const cut=value('cut','original'),gridArg=value('grids',null);
-if(!['original','continuous','continuous-analytic'].includes(cut))
-  throw new Error('--cut: original, continuous или continuous-analytic');
+if(!['original','continuous','continuous-analytic','continuous-joined'].includes(cut))
+  throw new Error('--cut: original, continuous, continuous-analytic или continuous-joined');
 if(gridArg && (seen.has('rows') || seen.has('cols'))) throw new Error('--grids заменяет --rows и --cols');
 const grids=gridArg ? gridArg.split(',').map(s=>{
   if(!/^\d+x\d+$/.test(s)) throw new Error('--grids: нужны пары строкxстолбцов');
@@ -43,10 +43,13 @@ const revision=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'
 const dirty=Boolean(execFileSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8'}).trim());
 const results=[];
 for(const {rows:count,cols} of grids){
+  let sections;
   const cuts=[-1,1].map(side=>{
     const cloth=new Cloth(b.rig.sails[2],2,{rows:count,cols,rigidBoard:true,
-      continuousCut:cut!=='original',analyticCutProfile:cut==='continuous-analytic'});
+      continuousCut:cut!=='original',analyticCutProfile:cut==='continuous-analytic',joinedCutProfile:cut==='continuous-joined'});
     cloth.gen=b.p.rig.gennaker;cloth.designSide=side;cloth.design3d([]);
+    if(side===-1)sections=[1/6,2/6,3/6,4/6,5/6].map(fraction=>({fraction,
+      shape:cloth.rowShape(fraction*(count-1),true)}));
     return Array.from({length:cloth.n*3},(_,k)=>[cloth.dx,cloth.dy,cloth.dz][k%3][Math.floor(k/3)]);
   });
   assert.ok(cuts.every(p=>p.every(Number.isFinite)),'Не-конечный крой');
@@ -80,7 +83,7 @@ for(const {rows:count,cols} of grids){
   assert.ok(minTriangleAreaM2>0 && Number.isFinite(minCellNormalCosine),'Вырожденная ячейка');
   results.push({rows:count,cols,parameterStep:1/(count-1),chordFractions:points,
     bottomToFirstM,lastToTopM,surfaceAreaM2,minTriangleAreaM2,minCellNormalCosine,
-    boundaryLengthsM,referencePositionsM:p});
+    boundaryLengthsM,sections,referencePositionsM:p});
   console.log(`${count}×${cols} | шаг ${(1/(count-1)).toFixed(6)} | низ→первый ряд передний край/середина/задний край: ${[0,Math.floor(cols/2),cols-1].map(c=>bottomToFirstM[c].toFixed(6)).join('/')} м`);
   console.log(`  площадь ${surfaceAreaM2.toFixed(6)} м²; длины переднего/заднего/нижнего/верхнего краёв ${Object.values(boundaryLengthsM).map(x=>x.toFixed(6)).join('/')} м; наименьшая площадь треугольника ${minTriangleAreaM2.toExponential(3)} м²; косинус между треугольниками ячейки ${minCellNormalCosine.toFixed(6)}`);
 }
@@ -89,7 +92,7 @@ for(const {rows:count,cols} of grids){
 let profileScan = null;
 if(cut!=='original') {
   const cloth=new Cloth(b.rig.sails[2],2,{rows:11,cols:9,rigidBoard:true,
-    continuousCut:true,analyticCutProfile:cut==='continuous-analytic'});
+    continuousCut:true,analyticCutProfile:cut==='continuous-analytic',joinedCutProfile:cut==='continuous-joined'});
   cloth.gen=b.p.rig.gennaker;cloth.designSide=-1;cloth.design3d([]);
   profileScan={u:.1875,vRange:[.1,.115],results:[.001,.0001,.00001].map(step=>{
     let last=cloth.cutSurfaceAt(.1875,.1,[]),maxDistanceM=0,atV=null;

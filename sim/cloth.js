@@ -34,7 +34,7 @@ import { edgeFn, sailSagAt, STRIPS, NCHORD, gennakerClew,
          gennakerSheetLen, designAt,
          DESIGN_DRAFT, DESIGN_ENTRY, DESIGN_EXIT } from './aero.js';
 import { localPressureForRow, pressureToNodes } from './local-pressure.js';
-import { matchedCutSurface, bezierSectionPeak } from './cloth-cut.js';
+import { matchedCutSurface, bezierSectionPeak, joinedCubicSection } from './cloth-cut.js';
 
 // Сетка ткани. Строк — как у отрисовки (SAIL_ROWS), чтобы полотно и обвод резались
 // по одним и тем же высотам; столбцов девять при трёх панелях решётки, то есть
@@ -406,11 +406,11 @@ function profAtPar(A, B, n, t, sol, out) {
   const ex = B[0] - A[0], ey = B[1] - A[1], ez = B[2] - A[2];
   const c = Math.hypot(ex, ey, ez);
   if (c < 1e-9) { out[0] = A[0]; out[1] = A[1]; out[2] = A[2]; return out; }
-  const P = sol.P;
-  let L = 0, px = P[0], pz = P[1];
+  const P = sol.P,atParameter=sol.parameterPoint || ((s,out)=>bezAt(P,s,out));
+  let L = 0, px = P ? P[0] : 0, pz = P ? P[1] : 0;
   BEZ_CUM[0] = 0;
   for (let i = 1; i <= BEZ_N; i++) {
-    bezAt(P, i / BEZ_N, BEZ_TMP);
+    atParameter(i / BEZ_N, BEZ_TMP);
     L += Math.hypot(BEZ_TMP[0] - px, BEZ_TMP[1] - pz);
     BEZ_CUM[i] = L; px = BEZ_TMP[0]; pz = BEZ_TMP[1];
   }
@@ -423,7 +423,7 @@ function profAtPar(A, B, n, t, sol, out) {
       break;
     }
   }
-  bezAt(P, sPar, BEZ_TMP);
+  atParameter(sPar, BEZ_TMP);
   const x = BEZ_TMP[0], z = BEZ_TMP[1] * c;
   out[0] = A[0] + ex * x + n[0] * z;
   out[1] = A[1] + ey * x + n[1] * z;
@@ -551,8 +551,11 @@ export class Cloth {
     this.cut3d = opts && opts.cut3d != null ? opts.cut3d : CUT3D;
     this.continuousCut = opts && opts.continuousCut === true;
     this.analyticCutProfile = opts && opts.analyticCutProfile === true;
+    this.joinedCutProfile = opts && opts.joinedCutProfile === true;
     if (this.analyticCutProfile && !this.continuousCut)
       throw new Error('Аналитический профиль требует отдельного непрерывного кроя');
+    if (this.joinedCutProfile && (!this.continuousCut || this.analyticCutProfile))
+      throw new Error('Составной профиль требует непрерывного кроя и отдельного выбора семейства');
     this.rigidBoard = opts && opts.rigidBoard === true;
     this.boardMaterial = this.rigidBoard || (opts && opts.boardMaterial === true);
     this.attachmentPaths = opts && opts.attachmentPaths === true;
@@ -797,8 +800,14 @@ export class Cloth {
     const dft = DESIGN_DRAFT[kind] || DESIGN_DRAFT.main;
     const ent = DESIGN_ENTRY[kind] || DESIGN_ENTRY.main;
     const exi = (DESIGN_EXIT[kind] || DESIGN_EXIT.main) * Math.PI / 180;
-    const solAt = (f, analytic = this.analyticCutProfile) => bezSolve(designAt(dsg, f), designAt(dft, f),
-                                  designAt(ent, f) * Math.PI / 180, exi, this.continuousCut, analytic);
+    const joinedProfiles=new Map();
+    const solAt = (f, analytic = this.analyticCutProfile, joined = this.joinedCutProfile) => {
+      const parameters=[designAt(dsg,f),designAt(dft,f),designAt(ent,f)*Math.PI/180,exi];
+      if(!joined)return bezSolve(...parameters,this.continuousCut,analytic);
+      const key=parameters.join(',');
+      if(!joinedProfiles.has(key))joinedProfiles.set(key,joinedCubicSection(...parameters));
+      return joinedProfiles.get(key);
+    };
     // ЦЕЛЬ ПОДБОРА — ОБМЕРНАЯ ШИРИНА НА ПОЛУВЫСОТЕ. Пузо теперь задаёт длину
     // строки само, поэтому развёртке серпа осталось ровно одно дело: развести
     // шкаторины так, чтобы парус вышел нужной ШИРИНЫ. Каждое измерение
@@ -817,7 +826,7 @@ export class Cloth {
       const c = Math.max(0.02, Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]));
       // Отдельный контроль меняет только внутренний профиль. Развёртка
       // граничных кривых сохраняет прежнюю калибровку, в том числе её погрешность.
-      return c * solAt(0.5, false).ratio;
+      return c * solAt(0.5, false, false).ratio;
     };
     // Ширина растёт с углом монотонно: чем больше шкаторины врозь, тем длиннее
     // хорда и тем шире парус. Деление пополам, двадцати шагов хватает.

@@ -31,8 +31,8 @@ for (const residual of [0,1]) {
 }
 const b = new Boat(JSON.parse(readFileSync(new URL('../out/export/physics.json',import.meta.url))));
 b.setGennaker(true);
-const make = (rows,cols,side,continuousCut,analyticCutProfile=false) => {
-  const c = new Cloth(b.rig.sails[2],2,{rows,cols,continuousCut,analyticCutProfile,rigidBoard:true});
+const make = (rows,cols,side,continuousCut,analyticCutProfile=false,joinedCutProfile=false) => {
+  const c = new Cloth(b.rig.sails[2],2,{rows,cols,continuousCut,analyticCutProfile,joinedCutProfile,rigidBoard:true});
   c.gen=b.p.rig.gennaker;c.designSide=side;c.design3d([]);return c;
 };
 const point = (c,r,col) => {const i=c.ix(r,col);return [c.dx[i],c.dy[i],c.dz[i]];};
@@ -40,14 +40,16 @@ const previous=make(11,9,-1,true);
 // Прежний дискретный поиск остаётся явным отрицательным контролем.
 assert.ok(distance(previous.cutSurfaceAt(.1875,.10530,[]),previous.cutSurfaceAt(.1875,.10531,[]))>.04);
 assert.throws(()=>make(11,9,-1,false,true),/непрерывного кроя/);
-for(const analytic of [false,true]) {
-const coarse=make(11,9,-1,true,analytic),old=make(11,9,-1,false),fine=make(21,17,-1,true,analytic);
+assert.throws(()=>make(11,9,-1,false,false,true),/выбора семейства/);
+assert.throws(()=>make(11,9,-1,true,true,true),/выбора семейства/);
+for(const [analytic,joined] of [[false,false],[true,false],[false,true]]) {
+const coarse=make(11,9,-1,true,analytic,joined),old=make(11,9,-1,false),fine=make(21,17,-1,true,analytic,joined);
 // Обе поперечные границы остаются побитно прежними, включая четыре угла.
 for(const r of [0,10])for(let c=0;c<9;c++)assert.deepEqual(point(coarse,r,c),point(old,r,c));
 for(let r=0;r<11;r++)for(let c=0;c<9;c++)assert.deepEqual(point(coarse,r,c),point(fine,r*2,c*2));
 // У нового способа поиска сохраняются также обе боковые кривые.
 for(let r=0;r<11;r++)for(const col of [0,8])assert.deepEqual(point(coarse,r,col),point(previous,r,col));
-const mirrored=make(21,17,1,true,analytic);
+const mirrored=make(21,17,1,true,analytic,joined);
 for(let r=0;r<21;r++)for(let c=0;c<17;c++) {
   const p=point(fine,r,c),q=point(mirrored,r,c);
   p.forEach((x,k)=>assert.ok(x===(k===1?-q[k]:q[k])));
@@ -61,7 +63,7 @@ for(const u of [0,.071,.25,.5,.793,1])for(const v of [0,1])for(const eps of [1e-
 }
 // Геометрическое качество: оба треугольника каждой ячейки ненулевые и
 // ориентированы согласованно. Это не доказательство отсутствия самопересечений.
-const dense=make(41,33,-1,true,analytic),cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const dense=make(41,33,-1,true,analytic,joined),cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
 const sub=(a,b)=>a.map((x,k)=>x-b[k]);
 for(let r=0;r<40;r++)for(let c=0;c<32;c++) {
   const a=point(dense,r,c),bb=point(dense,r,c+1),e=point(dense,r+1,c),g=point(dense,r+1,c+1);
@@ -74,7 +76,7 @@ for(let r=0;r<11;r++)assert.equal(coarse.rowW[r],fine.rowW[r*2]);
 // cutAt(rf,t) обязан читать узлы по индексу ряда, как sample() для летящего
 // полотна. Аналитическая поверхность имеет другой аргумент и другое имя.
 // Независимый плоский квадрат в буферах поймает подмену одного метода другим.
-const sampled=make(11,9,-1,true,analytic);
+const sampled=make(11,9,-1,true,analytic,joined);
 for(let r=0;r<11;r++)for(let col=0;col<9;col++) {
   const i=sampled.ix(r,col);sampled.dx[i]=col/8;sampled.dy[i]=r/10;sampled.dz[i]=0;
 }
@@ -85,7 +87,7 @@ for(const rf of [0,.5,5.3,10]) {
   assert.equal(shape.chord,1);assert.equal(shape.camber,0);assert.equal(shape.arc,1);
   assert.equal(shape.back,0);assert.equal(shape.flip,0);assert.equal(shape.kink,0);
 }
-if(analytic) {
+if(analytic || joined) {
   // Тот же предел 100 м/единицу параметра, что у границ: проверяем область
   // найденного разрыва и стыки проектных станций без изменения допуска.
   for(const u of [.071,.1875,.5,.793])for(const step of [.001,.0001,.00001]) {

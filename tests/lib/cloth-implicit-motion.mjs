@@ -36,6 +36,8 @@ export class ImplicitEnergyMotion extends EnergyMotion {
       for (let d = 0; d < 3; d++) this.free.push(3 * i + d);
     }
     this.coreDofs = this.free.length - (this.board ? 3 : 0);
+    this.inertiaCouplings = (this.massCouplings ?? []).flatMap(({a,b,massKg}) =>
+      [0,1,2].map(d=>({i:this.offset[a]+d,j:this.offset[b]+d,massKg})));
     this.linearBackend = options.linearBackend ?? 'band-js';
     if (!['band-js', 'sparse-js', 'sparse-wasm', 'kkt-wasm'].includes(this.linearBackend) ||
         (['sparse-wasm', 'kkt-wasm'].includes(this.linearBackend) && typeof options.wasmSparseFactor !== 'function'))
@@ -61,6 +63,10 @@ export class ImplicitEnergyMotion extends EnergyMotion {
     for (let j = 0; j < n; j++) {
       const k = this.free[j], m = 1 / this.w[Math.floor(k / 3)], delta = this.pos[k] - prediction[k];
       gradient[j] = m * delta / (h * h); objectiveJ += .5 * m * delta * delta / (h * h);
+    }
+    for (const {i,j,massKg} of this.inertiaCouplings) {
+      const di=this.pos[this.free[i]]-prediction[this.free[i]],dj=this.pos[this.free[j]]-prediction[this.free[j]];
+      gradient[i]+=massKg*dj/(h*h);gradient[j]+=massKg*di/(h*h);objectiveJ+=massKg*di*dj/(h*h);
     }
     const soft = this.soft.map(c => {
       const { C, grad } = c.value(this.pos), g = this.sparse(grad);
@@ -110,6 +116,7 @@ export class ImplicitEnergyMotion extends EnergyMotion {
       else border[(row - core) * size + row - col] += v;
     };
     for (let i = 0; i < n; i++) add(i, i, 1 / (this.w[Math.floor(this.free[i] / 3)] * h * h));
+    for (const {i,j,massKg} of this.inertiaCouplings) add(i,j,massKg/(h*h));
     for (const { c, g } of soft) for (let a = 0; a < g.length; a++) for (let b = 0; b <= a; b++) {
       const [i, vi] = g[a], [j, vj] = g[b]; add(i, j, vi * vj / c.alpha);
     }

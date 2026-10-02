@@ -21,12 +21,12 @@ export class EnergyMotion {
     }
     if (translatingBody) {
       const { node, attachments, dampingHz: bodyDampingHz = 0, frame } = translatingBody;
-      if (!this.movingSupportsAllowed() || board || !Number.isInteger(node) || node < 0 || node >= mass.length ||
+      if (!this.movingSupportsAllowed() || !Number.isInteger(node) || node < 0 || node >= mass.length ||
           this.fixed.has(node) || !Array.isArray(attachments) || !attachments.length ||
           new Set(attachments).size !== attachments.length || attachments.some(i =>
             !Number.isInteger(i) || i < 0 || i >= mass.length || i === node || this.fixed.has(i)) ||
           !Number.isFinite(bodyDampingHz) || bodyDampingHz < 0 || frame!=='inertial-cartesian')
-        throw new Error('Поступательная опора требует полного уравнения, инерциальных осей, отдельных узлов и постановки без планки');
+        throw new Error('Поступательная опора требует полного уравнения, инерциальных осей и отдельных узлов');
       // mass[node] — только опора. Массы прикреплённых узлов ткани уже есть
       // в mass и входят в общую инерцию ровно один раз.
       this.translatingBody = Object.freeze({ node, attachments: Object.freeze(attachments.slice()), dampingHz: bodyDampingHz, frame,
@@ -42,24 +42,44 @@ export class EnergyMotion {
     }
     if (board) {
       const { head, end, nodes, fractions } = board;
-      if (!this.fixed.has(head) || this.fixed.has(end) || !Array.isArray(nodes) ||
+      const body = this.translatingBody;
+      if ((body ? !this.bodyAttachments.has(head) : !this.fixed.has(head)) || this.fixed.has(end) || !Array.isArray(nodes) ||
           nodes.length !== fractions?.length || new Set(nodes).size !== nodes.length ||
           !nodes.includes(head) || !nodes.includes(end) || nodes.some(i =>
             !Number.isInteger(i) || i < 0 || i >= mass.length || (i !== head && this.fixed.has(i))) ||
           fractions.some(t => !Number.isFinite(t) || t < 0 || t > 1) ||
-          fractions[nodes.indexOf(head)] !== 0 || fractions[nodes.indexOf(end)] !== 1)
+          fractions[nodes.indexOf(head)] !== 0 || fractions[nodes.indexOf(end)] !== 1 ||
+          (body && (nodes.includes(body.node) || nodes.some(i => i !== head && this.bodyAttachments.has(i)))))
         throw new Error('Некорректное аффинное верхнее крепление');
       // Копия постановки: внешняя правка fractions не меняет текущую механику.
       this.board = { ...board, nodes: nodes.slice(), fractions: fractions.slice() };
-      let effectiveMass = 0, crossMass = 0;
+      let effectiveMass = 0, crossMass = 0, headMass = 0;
+      if (body) {
+        this.secondaryTarget = new Int32Array(mass.length).fill(-1);
+        this.secondaryFraction = new Float64Array(mass.length);
+      }
       for (let k = 0; k < nodes.length; k++) {
         const i = nodes[k], t = fractions[k];
         this.target[i] = end; this.fraction[i] = t; this.w[i] = 0;
         effectiveMass += mass[i] * t * t;
         crossMass += mass[i] * t * (1 - t);
+        headMass += mass[i] * (1 - t) ** 2;
+        if (body) { this.secondaryTarget[i] = body.node; this.secondaryFraction[i] = 1-t; }
       }
       this.w[end] = 1 / effectiveMass; this.boardMass = effectiveMass;
       this.boardCrossMass = crossMass;
+      if (body) {
+        // Полная масса двух свободных концов: [[A,C],[C,B]] для каждой оси.
+        // Масса головы уже входила в прикреплённые узлы; второй раз её не добавляем.
+        const A = this.bodyEffectiveMassKg + headMass - mass[head], B = effectiveMass, C = crossMass;
+        const determinant = A*B-C*C;
+        if (![A,B,C,determinant,1/determinant].every(Number.isFinite) || !(determinant>0))
+          throw new Error('Некорректная полная масса опоры и планки');
+        this.bodyEffectiveMassKg = A; this.w[body.node] = 1/A;
+        this.coupledBoardMass = Object.freeze({ bodyMassKg:A, endMassKg:B, crossMassKg:C, determinantKg2:determinant });
+        this.massCouplings = Object.freeze([Object.freeze({ a:body.node, b:end, massKg:C })]);
+        Object.freeze(this.board.nodes); Object.freeze(this.board.fractions); Object.freeze(this.board);
+      }
       this.reconstruct(); this.prev.set(this.pos);
     }
     for (const c of this.constraints) if (!(Number.isFinite(c.alpha) && c.alpha >= 0) || typeof c.value !== 'function')
@@ -86,14 +106,22 @@ export class EnergyMotion {
       if (!merged.has(target)) merged.set(target, [0, 0, 0]);
       const value = merged.get(target);
       for (let d = 0; d < 3; d++) value[d] += t * g[d];
+      if (this.secondaryTarget?.[i]>=0) {
+        const second = this.secondaryTarget[i], weight = this.secondaryFraction[i];
+        if (!merged.has(second)) merged.set(second,[0,0,0]);
+        for (let d=0;d<3;d++) merged.get(second)[d] += weight*g[d];
+      }
     }
     return Array.from(merged);
   }
 
   reduceField(field) {
     const out = new Float64Array(this.pos.length);
-    for (let i = 0; i < this.mass.length; i++) for (let d = 0; d < 3; d++)
+    for (let i = 0; i < this.mass.length; i++) for (let d = 0; d < 3; d++) {
       out[3 * this.target[i] + d] += this.fraction[i] * field[3 * i + d];
+      if (this.secondaryTarget?.[i]>=0)
+        out[3*this.secondaryTarget[i]+d] += this.secondaryFraction[i]*field[3*i+d];
+    }
     return out;
   }
 
@@ -110,6 +138,7 @@ export class EnergyMotion {
   }
 
   project(c, h) {
+    if (this.coupledBoardMass) throw new Error('Связанная масса опоры и планки требует полного уравнения');
     const { C, grad } = c.value(this.pos), reduced = this.reduce(grad), scaled = c.alpha / (h * h);
     let denominator = scaled;
     for (const [i, g] of reduced) denominator += this.w[i] * g.reduce((s, x) => s + x * x, 0);
@@ -145,6 +174,13 @@ export class EnergyMotion {
         const roundoff=32*Number.EPSILON*Math.max(1,Math.abs(value),Math.abs(expected),Math.abs(offsets[j][d]));
         if (!Number.isFinite(value) || !Number.isFinite(expected) || Math.abs(value-expected)>roundoff)
           throw new Error('Поступательная опора или история изменена вне общего шага');
+      }
+      if (this.board) for (const field of [this.pos,this.prev]) for (let j=0;j<this.board.nodes.length;j++) for(let d=0;d<3;d++) {
+        const {head,end,nodes,fractions}=this.board, value=field[3*nodes[j]+d];
+        const expected=field[3*head+d]+fractions[j]*(field[3*end+d]-field[3*head+d]);
+        const roundoff=32*Number.EPSILON*Math.max(1,Math.abs(value),Math.abs(expected),Math.abs(field[3*end+d]),Math.abs(field[3*head+d]));
+        if (!Number.isFinite(value) || !Number.isFinite(expected) || Math.abs(value-expected)>roundoff)
+          throw new Error('Связанная планка или история изменена вне общего шага');
       }
     }
     if (supportTargets !== undefined && (!this.movingSupportsAllowed() || !Array.isArray(supportTargets)))
@@ -187,7 +223,8 @@ export class EnergyMotion {
       dampingForce[k] = this.mass[i] * (ownDecay - 1) * (old[k] - prior[k]) / (priorDt * h);
     }
     for (const {node,positionM} of targets) this.pos.set(positionM,3*node);
-    for (let i = 0; i < this.mass.length; i++) if (this.w[i] && i!==this.translatingBody?.node) for (let d = 0; d < 3; d++) {
+    for (let i = 0; i < this.mass.length; i++) if (this.w[i] && i!==this.translatingBody?.node &&
+        !(this.coupledBoardMass && i===this.board.end)) for (let d = 0; d < 3; d++) {
       const k = 3 * i + d;
       this.pos[k] += decay * (old[k] - prior[k]) / priorDt * h + h * h * this.w[i] * reducedForce[k];
     }
@@ -195,10 +232,15 @@ export class EnergyMotion {
       const node=this.translatingBody.node, reducedDamping=this.reduceField(dampingForce);
       for (let d=0;d<3;d++) {
         const k=3*node+d;
-        this.pos[k]=old[k]+(old[k]-prior[k])/priorDt*h + h*h*this.w[node]*(reducedForce[k]+reducedDamping[k]);
+        if (this.coupledBoardMass) {
+          const e=3*this.board.end+d, {bodyMassKg:A,endMassKg:B,crossMassKg:C,determinantKg2:D}=this.coupledBoardMass;
+          const F0=reducedForce[k]+reducedDamping[k],F1=reducedForce[e]+reducedDamping[e];
+          this.pos[k]=old[k]+(old[k]-prior[k])/priorDt*h+h*h*(B*F0-C*F1)/D;
+          this.pos[e]=old[e]+(old[e]-prior[e])/priorDt*h+h*h*(A*F1-C*F0)/D;
+        } else this.pos[k]=old[k]+(old[k]-prior[k])/priorDt*h + h*h*this.w[node]*(reducedForce[k]+reducedDamping[k]);
       }
     }
-    if (this.board && this.supportMotionActive) for (let d=0;d<3;d++) {
+    if (this.board && this.supportMotionActive && !this.coupledBoardMass) for (let d=0;d<3;d++) {
       const k=3*this.board.head+d, delta=this.pos[k]-old[k]-decay*(old[k]-prior[k])/priorDt*h;
       // В полной массе планки есть смешанный член Σ m t(1−t).
       // Движение головы меняет предсказание свободного конца даже без силы.
@@ -233,7 +275,11 @@ export class EnergyMotion {
     const reducedMaterialGradient = this.reduceField(materialResidual);
     let maxMotionResidualN = 0, rmsMotionResidualN = 0, maxPhysicalResidualN = 0, rmsPhysicalResidualN = 0, dofs = 0;
     for (let i = 0; i < this.mass.length; i++) if (this.w[i]) for (let d = 0; d < 3; d++) {
-      const k = 3 * i + d, inertial = (this.pos[k] - prediction[k]) / (h * h * this.w[i]);
+      const k = 3 * i + d;
+      let inertial = (this.pos[k] - prediction[k]) / (h * h * this.w[i]);
+      if (this.massCouplings) for (const {a,b,massKg} of this.massCouplings) if (i===a || i===b) {
+        const other=3*(i===a?b:a)+d; inertial += massKg*(this.pos[other]-prediction[other])/(h*h);
+      }
       predictedResidual[k] = inertial - multiplierForce[k];
       const physical = inertial + reducedMaterialGradient[k] - reducedHardForce[k];
       maxMotionResidualN = Math.max(maxMotionResidualN, Math.abs(predictedResidual[k]));
@@ -273,11 +319,14 @@ export class EnergyMotion {
       const k=3*i+d, displacement=this.pos[k]-old[k];
       const velocity=displacement/h, priorVelocity=(old[k]-prior[k])/priorDt;
       const residual=this.mass[i]*(velocity-priorVelocity)/h-force[k]-dampingForce[k]+materialGradient[k]-hardForce[k];
-      if (this.bodyAttachments?.has(i)) { bodyAttachmentForceN[k]=residual; bodyBalanceResidualN[d]+=residual; }
+      if (this.coupledBoardMass && this.board.nodes.includes(i)) {
+        const weight=1-this.board.fractions[this.board.nodes.indexOf(i)];
+        bodyAttachmentForceN[3*this.board.head+d]+=weight*residual;bodyBalanceResidualN[d]+=weight*residual;
+      } else if (this.bodyAttachments?.has(i)) { bodyAttachmentForceN[k]=residual; bodyBalanceResidualN[d]+=residual; }
       if (i===this.translatingBody?.node) bodyBalanceResidualN[d]+=residual;
       inertiaIncrementJ += .5*this.mass[i]*(velocity-priorVelocity)**2;
       materialIncrementJ += materialGradient[k]*displacement;
-      if (this.board?.nodes.includes(i)) {
+      if (this.board?.nodes.includes(i) && !this.coupledBoardMass) {
         const weight=1-this.board.fractions[this.board.nodes.indexOf(i)];
         supportForceN[3*this.board.head+d] += weight*residual;
       } else if (this.fixed.has(i)) supportForceN[k] += residual;

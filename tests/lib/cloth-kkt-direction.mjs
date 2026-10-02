@@ -9,7 +9,7 @@ export function kktDirection(motion, state, h, priorMu) {
     const base = Array.from(motion.sparseOrder ?? Int32Array.from({ length: motion.coreDofs }, (_, i) => i));
     for (let i = motion.coreDofs; i < n; i++) base.push(i);
     const position = new Int32Array(n); base.forEach((i, k) => position[i] = k);
-    const after = Array.from({ length: n + 1 }, () => []), edges = [];
+    const after = Array.from({ length: n + 1 }, () => []), edges = motion.inertiaCouplings.map(({i,j})=>[i,j]);
     hard.forEach(({ g }, j) => {
       const last = g.length ? Math.max(...g.map(([i]) => position[i])) + 1 : 0;
       after[last].push(n + j);
@@ -36,6 +36,7 @@ export function kktDirection(motion, state, h, priorMu) {
     target[entry] += v;
   };
   for (let i = 0; i < n; i++) add(i, i, 1 / (motion.w[Math.floor(motion.free[i] / 3)] * h * h));
+  for (const {i,j,massKg} of motion.inertiaCouplings) add(i,j,massKg/(h*h));
   for (let k = 0; k < soft.length; k++) {
     const { c, g } = soft[k], plan = motion.kktAssembly[k]; let entry = 0;
     if (g.length !== plan.coordinates.length || g.some(([i], a) => i !== plan.coordinates[a]))

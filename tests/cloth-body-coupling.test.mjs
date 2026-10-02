@@ -239,7 +239,7 @@ assert.throws(()=>new ImplicitEnergyMotion({positions:[0,0,0,1,0,0],mass:[10,2],
 assert.throws(()=>new EnergyMotion({positions:[0,0,0,1,0,0],mass:[10,2],constraints:[],
   translatingBody:bodyOption()}),/Поступательная/);
 assert.throws(()=>new ImplicitEnergyMotion({positions:[0,0,0,0,0,0,2,0,1,0,0,1],mass:[10,2,1,1],constraints:[],
-  fixed:[3],board:{head:3,end:2,nodes:[3,2],fractions:[0,1]},translatingBody:bodyOption(),...options}),/без планки/);
+  fixed:[3],board:{head:3,end:2,nodes:[3,2],fractions:[0,1]},translatingBody:bodyOption(),...options}),/верхнее крепление/);
 
 // Старый режим без опоры: все кадры/реакции/скалярные поля полного паруса
 // должны остаться точно прежними, а не только последний удачный кадр.

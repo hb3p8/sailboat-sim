@@ -161,7 +161,7 @@ node scripts/cloth_cpu_profile.mjs --input=out/acceptance/implicit-joined-linear
 
 ```sh
 PATH=/opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/lld/bin:$PATH /opt/homebrew/opt/llvm/bin/clang --target=wasm32 -O3 -ffp-contract=off -fno-fast-math -nostdlib -Wl,--no-entry -Wl,--export-dynamic -Wl,--export=__heap_base -Wl,--initial-memory=131072 -o out/acceptance/cloth-linear-probe-v2.wasm tests/probes/cloth-linear-wasm.c
-node tests/cloth-linear-wasm-probe.mjs --baseline=d3d25d9 --wasm=out/acceptance/cloth-linear-probe-v2.wasm --out=out/acceptance/implicit-linear-wasm-warm-probe.json
+node tests/cloth-linear-wasm-probe.mjs --baseline=d3d25d9 --wasm=out/acceptance/cloth-linear-probe-v2.wasm --out=out/acceptance/implicit-linear-wasm-warm-clean.json
 ```
 
 Положительная синтетическая матрица n=4000, полоса 305, 80 правых частей;
@@ -170,6 +170,13 @@ node tests/cloth-linear-wasm-probe.mjs --baseline=d3d25d9 --wasm=out/acceptance/
 версии инструмента дало медианы: исходный JS 341.54 мс, ускоренный JS
 216.27 мс, WASM 157.96 мс. Выигрыш WASM против ускоренного JS около 1.37 раза;
 эти числа не переводятся в ускорение всего паруса.
+
+Повтор на чистом `63fef2b` подтвердил точное совпадение всех ответов:
+371.47/243.40/175.40 мс для тех же трёх вариантов. Отношение ускоренного JS
+к WASM 1.39; изменение абсолютных времён между запусками показывает,
+почему одиночный замер не является постоянной характеристикой устройства.
+`implicit-linear-wasm-warm-clean.json` имеет `dirty:false`, SHA256
+`b1ff16fd548fefc9179dde5afd78047dc27eff3d4249c20683a02ed30d1d44c9`.
 
 Ответы всех случаев совпали точно; отдельно проверены пустая/диагональная
 матрица, полосы 3/161, полоса шире матрицы, повторные правые части и отказ

@@ -112,8 +112,8 @@ python3 scripts/perf_report.py 20260930-ab12cd34.jsonl
 [исследовании стоимости](../research/cloth-performance.md)):
 
 ```sh
-node scripts/cloth_browser_fixture.mjs out/acceptance/implicit-kkt-clean-small-plus.json out/acceptance/cloth-sparse-20261002-simd.wasm out/acceptance/browser-cloth-plus.json
-node scripts/cloth_browser_fixture.mjs out/acceptance/implicit-kkt-clean-small-minus.json out/acceptance/cloth-sparse-20261002-simd.wasm out/acceptance/browser-cloth-minus.json
+node scripts/cloth_browser_fixture.mjs out/acceptance/implicit-full-scene-plus.json out/acceptance/cloth-sparse-20261002-simd.wasm out/acceptance/browser-cloth-v2-plus.json
+node scripts/cloth_browser_fixture.mjs out/acceptance/implicit-full-scene-minus.json out/acceptance/cloth-sparse-20261002-simd.wasm out/acceptance/browser-cloth-v2-minus.json
 python3 scripts/serve.py --port 8020 --no-open
 ```
 
@@ -132,7 +132,7 @@ CPU кадра и интервалы снимаются из основного 
 изменение состава сцены или её размеров отклоняется. Этот режим не считает
 движение лодки или новый воздух и не принимает интерактивный манёвр.
 
-Откройте `/sim/cloth-browser-review.html`, выберите сторону и нажмите
+Откройте `/sim/cloth-browser-review.html?series=browser-cloth-v2`, выберите сторону и нажмите
 «Измерить». Подготовьте вход из чистого коммита: иначе результат помечается
 недействительным. Новые файлы создаются без перезаписи; для другой серии
 используйте новый префикс `имя-plus/minus.json` и `?series=имя`.

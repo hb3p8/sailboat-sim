@@ -1,0 +1,23 @@
+// Известные длительности, владение ответами/решателями и отказ наблюдателя.
+import assert from 'node:assert/strict';
+import {observeSparseFactor} from './lib/cloth-worker-timing.mjs';
+let clock=0,released=0;
+const answer=new Float64Array([3,5]);
+const solve=function(rhs){assert.equal(this,solve);assert.equal(rhs,answer);clock+=7;return answer;};
+solve.many=function(rhs){assert.equal(this,solve);clock+=11;return rhs;};
+solve.release=()=>released++;
+const source=function(matrix){assert.equal(this,source);assert.equal(matrix,answer);clock+=13;return solve;};
+source.ldl=function(matrix){assert.equal(this,source);assert.equal(matrix,answer);clock+=17;return solve;};
+source.statistics=()=>({releases:released});
+const observed=observeSparseFactor(source,()=>clock);
+const first=observed.factor(answer),second=observed.factor.ldl(answer);
+assert.equal(first(answer),answer,'Наблюдение сохраняет владение ответом');
+const rhs=[answer,answer];assert.equal(second.many(rhs),rhs);
+first.release();assert.deepEqual(observed.factor.statistics(),{releases:1});
+assert.deepEqual(observed.snapshot(),{factorMs:30,solveMs:18,factorCalls:2,solveCalls:2});
+const saved=observed.snapshot();saved.factorMs=0;assert.equal(observed.snapshot().factorMs,30);
+const failed=function(){clock+=19;throw Error('известный отказ');};failed.statistics=()=>({});
+const bad=observeSparseFactor(failed,()=>clock);
+assert.throws(()=>bad.factor(),/известный отказ/);
+assert.deepEqual(bad.snapshot(),{factorMs:19,solveMs:0,factorCalls:1,solveCalls:0});
+console.log('ок: известные интервалы стадий, обычное/совместное решение, владение ответом, освобождение и отказ');

@@ -5,9 +5,12 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {browserMotion} from '../tests/lib/cloth-browser-motion.mjs';
 import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
+import {observeSparseFactor} from '../tests/lib/cloth-worker-timing.mjs';
 import {IMPLICIT_TOLERANCES} from '../tests/lib/cloth-implicit-motion.mjs';
 const args=process.argv.slice(2);
-assert.equal(args.length,3,'Нужны полный опыт движения угла, чистый снимок сборки и новый путь браузерного входа');
+assert(args.length===3 || (args.length===4 && args[3]==='--profile-worker'),
+  'Нужны полный опыт движения угла, чистый снимок сборки, новый путь входа и необязательный --profile-worker');
+const workerProfile=args.length===4;
 const [input,scenePath,output]=args,hash=b=>createHash('sha256').update(b).digest('hex');
 assert(!existsSync(output),'Сохранённый вход нельзя перезаписывать');
 const bytes=readFileSync(input), original=JSON.parse(bytes),recipe=original.recipe;
@@ -15,7 +18,10 @@ assert.equal(original.phase,'complete');assert.equal(original.dirty,false);
 assert.deepEqual([recipe.rows,recipe.cols,original.config.hS,original.config.profile],[11,9,1/60,'sin4']);
 assert.deepEqual([original.config.durationS,original.config.holdS,original.config.warmupSteps],[1,1,40]);
 assert([-.05,0,.05].includes(original.config.strokeM));
-const observational=new Set(['scripts/cloth_browser_review.mjs','scripts/cloth_full_scene_review.mjs','scripts/cloth_browser_report.mjs']);
+// Здесь изменены наблюдение и передача: каждый физический шаг ниже по-прежнему
+// обязан точно повторить прежний опыт. Материал, решатель и WASM не исключаются.
+const observational=new Set(['scripts/cloth_browser_review.mjs','scripts/cloth_full_scene_review.mjs','scripts/cloth_browser_report.mjs',
+  'tests/lib/cloth-browser-worker.mjs','tests/lib/cloth-browser-client.mjs']);
 for (const [path,sha] of Object.entries(original.sourceSha256)) {
   assert.equal(hash(execFileSync('git',['show',`${original.revision}:${path}`],{maxBuffer:16*1024*1024})),sha);
   if (!observational.has(path)) assert.equal(hash(readFileSync(path)),sha,'Изменился физический источник: '+path);
@@ -33,7 +39,8 @@ assert.equal(hash(sceneBytes),hash(readFileSync('sim/index.html')));
 const assets=['assets/sky.jpg','assets/crew.glb','viewer/vendor/draco/draco_wasm_wrapper.js','viewer/vendor/draco/draco_decoder.wasm'];
 if(JSON.parse(sceneBytes.toString().match(/^const TERRAIN_PACK = (.+);$/m)[1]))assets.push('assets/terrain.glb');
 const sceneBuild={path:scenePath,sha256:hash(sceneBytes),build,assets:Object.fromEntries(assets.map(p=>[p,hash(readFileSync(p))]))};
-const calculation=browserMotion(recipe,await loadSparseFactor(wasmBytes)),motion=calculation.motion,expected=[];
+const plainFactor=await loadSparseFactor(wasmBytes);
+const calculation=browserMotion(recipe,workerProfile?observeSparseFactor(plainFactor).factor:plainFactor),motion=calculation.motion,expected=[];
 const summarize=({constraintForce,hardForce,prediction,supportForceN,...rest})=>rest;
 function check(audit,positions,energies,reactions) {
   assert.deepEqual(Array.from(motion.pos),positions,'Движение отличается от прежнего полного опыта');
@@ -58,11 +65,13 @@ for(const frame of original.steps) {
 }
 assert.equal(expected.length,160);
 const action=original.config.strokeM===0?'held':original.config.strokeM>0?'inward':'outward';
-const paths=[...new Set([...Object.keys(original.sourceSha256),'scripts/cloth_support_browser_fixture.mjs','scripts/cloth_browser_report.mjs'])];
+const paths=[...new Set([...Object.keys(original.sourceSha256),'scripts/cloth_support_browser_fixture.mjs','scripts/cloth_browser_report.mjs',
+  'tests/lib/cloth-worker-timing.mjs'])];
 writeFileSync(output,JSON.stringify({schema:1,revision,dirty,baseline:{path:input,sha256:hash(bytes),revision:original.revision},
   physicsSha256:original.physicsSha256,wasm:original.wasm,tack:original.config.tack,recipe,sceneBuild,
   sourceSha256:Object.fromEntries(paths.map(p=>[p,hash(readFileSync(p))])),
   supportCommands:{action,node:original.command.node,strokeM:original.config.strokeM,profile:'sin4',durationS:1,holdS:1},
+  workerProfile,
   measurement:{warmupSteps:40,liveSteps:120,durationS:2},expected,
   nodeComparison:{maxDifferenceM:0,maxEnergyDifferenceJ:0,maxSupportDifferenceN:0,steps:160}},null,2)+'\n',{flag:'wx'});
 console.log(`Браузерный вход ${output}: все 160 шагов точны по координатам/энергии, реакции 120 рабочих шагов точны; команда ${action}.`);

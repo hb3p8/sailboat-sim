@@ -46,6 +46,31 @@ const series = paths.map(path => {
     assert.equal(r.replyLatency.count,totalSteps);
     assert(Number.isFinite(r.scheduler.maxResultDelayMs) && r.scheduler.maxResultDelayMs>=0);
   }
+  if(f.workerProfile!==undefined) {
+    assert.equal(r.workerProfile,f.workerProfile);assert.equal(r.execution,'worker');
+    const marks=r.preparation.timeline;
+    assert.deepEqual(marks?.map(m=>m.stage),['start','fixtureLoaded','sourceVerified','wasmFetched','wasmVerified',
+      'workerReady','sceneVerified','geometryReady','graphicsWarm','renderControlFinished','clothWarm'],
+      'Неполные стадии подготовки');
+    for(let i=0;i<marks.length;i++) {
+      assert(Number.isFinite(marks[i].atMs));if(i)assert(marks[i].atMs>=marks[i-1].atMs,'Нарушен порядок подготовки');
+    }
+    for(let i=0;i<totalSteps;i++) {
+      const s=r.allSteps[i];assert(Number.isFinite(s.validationMs) && s.validationMs>=0);
+      if(i<warmupSteps)assert(s.requestAtMs>=marks.at(-2).atMs && s.receivedAtMs<=marks.at(-1).atMs);
+      if(f.workerProfile) {
+        const t=s.timing;assert(t,'Нет стадий рабочего шага');
+        for(const k of ['factorMs','solveMs','snapshotMs','handlerMs'])assert(Number.isFinite(t[k]) && t[k]>=0,`Неверная стадия ${k}`);
+        for(const k of ['factorCalls','solveCalls'])assert(Number.isInteger(t[k]) && t[k]>=0);
+        assert(Number.isFinite(t.otherStepMs) && t.otherStepMs>=-Number.EPSILON*32*Math.max(1,s.timeMs));
+        assert.equal(t.otherStepMs,s.timeMs-t.factorMs-t.solveMs,'Неверный остаток стоимости шага');
+        assert.equal(t.handlerMs,s.timeMs+t.snapshotMs,'Неверная длительность обработчика');
+      } else assert.equal(s.timing,undefined,'Незапрошенные замеры рабочего шага');
+    }
+    if(f.workerProfile)assert.equal(r.allSteps.reduce((sum,s)=>sum+s.timing.factorCalls,0),
+      r.wasmMemory.numericFactorizations-r.preparation.workerInitialMemory.numericFactorizations,
+      'Число наблюдаемых разложений не совпадает со счётчиком WASM');
+  }
   if (f.supportCommands) {
     assert.equal(r.execution,'worker');assert(r.scene,'Нет полной сцены команд');
     const c=r.command;assert(c,'Нет метки экранной команды');
@@ -100,13 +125,18 @@ const series = paths.map(path => {
     assert.equal(r[name].p50Ms,s[Math.ceil(s.length*.5)-1]);
     assert.equal(r[name].p95Ms,s[Math.ceil(s.length*.95)-1]); assert.equal(r[name].maxMs,s.at(-1));
   }
+  const workerTiming=f.workerProfile?Object.fromEntries([['warmup',0,warmupSteps],['live',warmupSteps,totalSteps]].map(([name,a,b])=>{
+    const steps=r.allSteps.slice(a,b),sum=fn=>steps.reduce((n,s)=>n+fn(s),0);
+    return [name,{count:steps.length,stepMs:sum(s=>s.timeMs),roundTripMs:sum(s=>s.receivedAtMs-s.requestAtMs),
+      validationMs:sum(s=>s.validationMs),...Object.fromEntries(Object.keys(steps[0].timing).map(k=>[k,sum(s=>s.timing[k])]))}];
+  })):undefined;
   return { path, sha256: hash(bytes), tack: f.tack, fixture: r.fixture, environment: r.environment,
     execution: r.execution ?? 'main', reuseMemory: r.reuseMemory ?? null,
     wasmMemory: r.wasmMemory, replyLatency: r.replyLatency,
-    preparation: r.preparation, renderOnly: r.renderOnly, renderOnlyIntervals: r.renderOnlyIntervals,
+    workerProfile:r.workerProfile,preparation: r.preparation, renderOnly: r.renderOnly, renderOnlyIntervals: r.renderOnlyIntervals,
     warmup: r.warmup, live: r.live, liveFrameCost: r.liveFrameCost, liveFrameIntervals: r.liveFrameIntervals,
     scheduler: r.scheduler, comparison: r.comparison, measurement, ...(r.scene?{scene:r.scene}:{}),
-    ...(r.command?{command:r.command}:{}),scope:r.scope };
+    ...(r.command?{command:r.command}:{}),...(workerTiming?{workerTiming}:{}),scope:r.scope };
 });
 const result = { schema: 1, createdAt: new Date().toISOString(), series,
   interpretation: 'Достоверность записи и повторение модели проверены. Скорость измерена на коротком окне; это не приёмка интерактивного манёвра или всей сцены.' };

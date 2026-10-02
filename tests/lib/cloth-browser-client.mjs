@@ -1,6 +1,7 @@
 // Единственный ожидающий запрос: очередь шагов не скрывает отставание.
-export async function createMotionWorker(recipe, bytes, { reuse = true,
+export async function createMotionWorker(recipe, bytes, { reuse = true, profile = false,
   makeWorker = url => new Worker(url,{type:'module'}) } = {}) {
+  if(typeof profile!=='boolean')throw new Error('Измерение стадий задаётся логическим значением');
   const worker = makeWorker(new URL('./cloth-browser-worker.mjs',import.meta.url));
   let pending = null, sequence = 0, closed = false;
   const rejectPending = error => {
@@ -32,7 +33,7 @@ export async function createMotionWorker(recipe, bytes, { reuse = true,
   try {
     // Копия отделяет владение байтами от прочитанного/проверенного исходного модуля.
     const ownedBytes = bytes instanceof ArrayBuffer ? bytes.slice(0) : bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
-    const ready = await request('init',{recipe,bytes:ownedBytes,reuse},[ownedBytes]);
+    const ready = await request('init',{recipe,bytes:ownedBytes,reuse,profile},[ownedBytes]);
     return {ready,step:supportTargets=>request('step',{supportTargets}),terminate};
   } catch(e) { terminate(); throw e; }
 }

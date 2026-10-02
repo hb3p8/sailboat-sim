@@ -45,6 +45,18 @@ const cases=[
     f.timestamp=Math.min(f.timestamp,f.presentedAtMs-1);
   },/frame.presentedAtMs>=r.allSteps/]
 ];
+if(original.workerProfile!==undefined)cases.push(
+  ['подменённый режим наблюдения',r=>r.workerProfile=!r.workerProfile,difference(!original.workerProfile,original.workerProfile)],
+  ['нет стадий подготовки',r=>delete r.preparation.timeline,/Неполные стадии подготовки/],
+  ['обратный порядок подготовки',r=>r.preparation.timeline[2].atMs=r.preparation.timeline[1].atMs-1,/Нарушен порядок подготовки/]
+);
+if(original.workerProfile)cases.push(
+  ['нет стадий шага',r=>delete r.allSteps[warmup].timing,/Нет стадий рабочего шага/],
+  ['отрицательное время разложения',r=>r.allSteps[warmup].timing.factorMs=-1,/Неверная стадия factorMs/],
+  ['подменённый остаток стоимости',r=>r.allSteps[warmup].timing.otherStepMs++,/Неверный остаток стоимости шага/],
+  ['подменённая длительность обработчика',r=>r.allSteps[warmup].timing.handlerMs++,/Неверная длительность обработчика/],
+  ['подменённое число разложений',r=>r.allSteps[warmup].timing.factorCalls++,/Число наблюдаемых разложений не совпадает/]
+);
 try {
   run('исходный отчёт',bytes);
   for(const [name,mutate,diagnostic] of cases) {

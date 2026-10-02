@@ -21,6 +21,7 @@ const statistics = a => {
 export function mountClothReview(adapter = null) {
 const frame = adapter?.nextFrame ?? (() => new Promise(resolve => requestAnimationFrame(resolve)));
 const supportMode=new URLSearchParams(location.search).has('support-commands');
+const profileMode=new URLSearchParams(location.search).has('worker-profile');
 const controlIds=['run','tack','execution','reuse',...(supportMode?['motion']:[])];
 let THREE, renderer = adapter?.renderer, scene, camera, geometry;
 async function prepareScene(positions, rows, cols) {
@@ -56,6 +57,8 @@ function draw(pos) {
 }
 
 $('run').addEventListener('click', async () => {
+  const preparationTimeline=[{stage:'start',atMs:performance.now()}];
+  const mark=stage=>preparationTimeline.push({stage,atMs:performance.now()});
   for (const id of controlIds) $(id).disabled = true;
   $('download').hidden = true; $('report').textContent = '';
   let report, workerClient, drawTask, stopDrawing = false, drawFailure;
@@ -69,6 +72,9 @@ $('run').addEventListener('click', async () => {
     const fixturePath = `out/acceptance/${series}-${tack}${supportMode?'-'+action:''}.json`;
     $('status').textContent = 'Проверка сохранённого входа и исходников…';
     const fixtureBytes = await bytesAt(fixturePath), fixture = JSON.parse(new TextDecoder().decode(fixtureBytes));
+    mark('fixtureLoaded');
+    if(Boolean(fixture.workerProfile)!==profileMode)throw new Error('Режим измерения стадий не соответствует входу');
+    if(profileMode && $('execution').value!=='worker')throw new Error('Стадии измеряются в отдельном потоке');
     if (Boolean(fixture.supportCommands)!==supportMode || (supportMode && fixture.supportCommands.action!==action))
       throw new Error('Постановка не соответствует выбранной команде');
     const measurement = fixture.measurement ?? {warmupSteps:40,liveSteps:60,durationS:1};
@@ -79,25 +85,33 @@ $('run').addEventListener('click', async () => {
     // Проверка не входит в время физического шага; порядок чтения детерминирован.
     for (const [path, sha] of Object.entries(fixture.sourceSha256)) if (await digest(await bytesAt(path)) !== sha) changed.push(path);
     if (changed.length) throw new Error('После подготовки изменились исходники: '+changed.join(', '));
+    mark('sourceVerified');
     const loadStart = performance.now(), wasmBytes = await bytesAt(fixture.wasm.path), fetchedMs = performance.now()-loadStart;
+    mark('wasmFetched');
     if (await digest(wasmBytes) !== fixture.wasm.sha256) throw new Error('Изменился модуль WASM');
+    mark('wasmVerified');
     const execution = $('execution').value, reuseMemory = $('reuse').checked;
-    let factor, calculation, motion, positions, compileMs, setupMs, workerReadyMs;
+    let factor, calculation, motion, positions, compileMs, setupMs, workerReadyMs,workerInitialMemory;
     if (execution === 'worker') {
-      const start = performance.now(); workerClient = await createMotionWorker(fixture.recipe,wasmBytes,{reuse:reuseMemory});
+      const start = performance.now(); workerClient = await createMotionWorker(fixture.recipe,wasmBytes,{reuse:reuseMemory,profile:profileMode});
       workerReadyMs = performance.now()-start;
       ({compileMs,setupMs} = workerClient.ready); positions = workerClient.ready.positions;
+      workerInitialMemory=workerClient.ready.wasmMemory;
     } else {
       const compileStart = performance.now(); factor = await loadSparseFactor(wasmBytes,{reuse:reuseMemory}); compileMs = performance.now()-compileStart;
       const setupStart = performance.now(); calculation = browserMotion(fixture.recipe,factor); setupMs = performance.now()-setupStart;
       motion = calculation.motion; positions = motion.pos;
     }
+    mark('workerReady');
     await adapter?.verify(fixture);
+    mark('sceneVerified');
     const prepare = adapter?.prepareScene ?? prepareScene, drawScene = adapter?.draw ?? draw;
     const sceneStart = performance.now(); await prepare(positions,fixture.recipe.rows,fixture.recipe.cols,fixture.recipe);
+    mark('geometryReady');
     // Предварительные кадры исключают первую компиляцию графических программ.
     for (let i = 0; i < 20; i++) { await frame(); drawScene(positions,0); }
     const sceneWarmupMs = performance.now()-sceneStart;
+    mark('graphicsWarm');
     adapter?.beginVerification();
     const renderOnly = [], intervalsOnly = [];
     let previousFrame;
@@ -105,6 +119,7 @@ $('run').addEventListener('click', async () => {
       const t = await frame(); if (previousFrame !== undefined) intervalsOnly.push(t-previousFrame);
       previousFrame = t; renderOnly.push(drawScene(positions,0));
     }
+    mark('renderControlFinished');
     const warmSteps = [], liveSteps = [], frameCosts = [], liveIntervals = [], allSteps = [];
     let maxPositionDifferenceM = 0, maxEnergyDifferenceJ = 0, maxSupportDifferenceN=0;
     let maxForceN = 0, maxLengthM = 0, maxDualN = 0, maxComplementarityJ = 0;
@@ -114,6 +129,7 @@ $('run').addEventListener('click', async () => {
     visibility = () => { if (document.visibilityState !== 'visible') hidden = true; };
     document.addEventListener('visibilitychange',visibility);
     function checkStep(audit, dualViolationN, timeMs, times, trace={}) {
+      const checkStart=performance.now();
       visibility(); times.push(timeMs);
       const expected = fixture.expected[stepIndex++];
       for (let i = 0; i < positions.length/3; i++) maxPositionDifferenceM = Math.max(maxPositionDifferenceM,
@@ -136,6 +152,7 @@ $('run').addEventListener('click', async () => {
       const {supportForceN,...recordedTrace}=trace;
       allSteps.push({ timeMs: times.at(-1), iterations: audit.solver.iterations,...recordedTrace });
       if (liveDrawPhase) maxResultDelayMs = Math.max(maxResultDelayMs,performance.now()-liveStart-(stepIndex-warmupSteps)*hMs);
+      allSteps.at(-1).validationMs=performance.now()-checkStart;
     }
     function advance(times) {
       const t = performance.now(), audit = calculation.step(), timeMs = performance.now()-t;
@@ -148,7 +165,8 @@ $('run').addEventListener('click', async () => {
       if (reply.index !== stepIndex || reply.type !== 'step') throw new Error('Нарушен порядок шагов ткани');
       positions = reply.positions; wasmMemory = reply.wasmMemory;
       checkStep(reply.audit,reply.dualViolationN,reply.timeMs,times,supportMode
-        ? {requestAtMs:t,receivedAtMs,supportForceN:reply.supportForceN,...(supportTargets?{supportTargets}: {})}:{});
+        ? {requestAtMs:t,receivedAtMs,supportForceN:reply.supportForceN,...(supportTargets?{supportTargets}: {}),
+          ...(reply.timing?{timing:reply.timing}:{})}:{});
       if (adapter) drawScene(positions,stepIndex);
       if (drawFailure) throw drawFailure;
     }
@@ -173,6 +191,7 @@ $('run').addEventListener('click', async () => {
       if (workerClient) await advanceWorker(warmSteps);
       else { await frame(); advance(warmSteps); drawScene(positions,stepIndex); }
     }
+    mark('clothWarm');
     $('status').textContent = `Движение: ${liveStepCount} шагов за ${durationS} с, накопленное время сохраняется…`;
     const start = supportMode?await new Promise(resolve=>{
       const button=$('command');
@@ -227,8 +246,9 @@ $('run').addEventListener('click', async () => {
       scope: adapter?.scope ?? 'Один генакер и сетка пола; без лодки, воды и пересчёта воздуха. Время отрисовки — команды CPU, не завершение GPU.',
       ...(sceneReport ? { scene: sceneReport } : {}),
       ...(command?{command}:{}),
-      execution, reuseMemory,
-      preparation: { fetchedMs, compileMs, setupMs, sceneWarmupMs, ...(workerClient ? {workerReadyMs} : {}) },
+      execution, reuseMemory, workerProfile:profileMode,
+      preparation: { fetchedMs, compileMs, setupMs, sceneWarmupMs, timeline:preparationTimeline,
+        ...(workerClient ? {workerReadyMs,workerInitialMemory} : {}) },
       wasmMemory: workerClient ? wasmMemory : factor.statistics(),
       ...(workerClient ? {replyLatency:statistics(replyTimes)} : {}),
       renderOnly: statistics(renderOnly), renderOnlyIntervals: statistics(intervalsOnly),

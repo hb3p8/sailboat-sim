@@ -73,3 +73,29 @@ try {
   assert.equal(recovered.supportForceN,undefined,'Отклонённая команда не включает режим движения закреплений');
 } finally {await transactional.terminate();}
 console.log('ок: недоведённая подвижная команда в реальном Worker возвращает всю историю, следующий шаг пригоден');
+
+// Наблюдение не меняет арифметику. Деформированное полотно требует настоящих
+// линейных решений; сравниваются все поля двух последовательных расчётов.
+const deformed=structuredClone(recipe);deformed.positions[17]=.025;deformed.previous=deformed.positions.slice();
+const plain=await createMotionWorker(deformed,readFileSync(path),{makeWorker});
+const profiled=await createMotionWorker(deformed,readFileSync(path),{makeWorker,profile:true});
+let factors=0;
+try {
+  assert.deepEqual(plain.ready.positions,profiled.ready.positions);
+  for(let i=0;i<6;i++) {
+    const targets=i<3?undefined:[{node:3,positionM:[3+.001*(i-2),0,0]}];
+    const a=await plain.step(targets),b=await profiled.step(targets);
+    for(const key of ['positions','audit','supportForceN','dualViolationN','wasmMemory','index'])assert.deepEqual(a[key],b[key],key);
+    assert.equal(a.timing,undefined);assert(b.timing);
+    const t=b.timing;factors+=t.factorCalls;
+    assert(t.factorMs>=0 && t.solveMs>=0 && t.snapshotMs>=0);
+    assert(t.otherStepMs>=-Number.EPSILON*32*Math.max(1,b.timeMs));
+    assert.equal(t.handlerMs,b.timeMs+t.snapshotMs);
+  }
+  assert(factors>0,'Должен быть проверен реальный линейный расчёт');
+  await assert.rejects(profiled.step([{node:15,positionM:[10,0,0]}]),/команда закрепления/);
+  const a=await plain.step(),b=await profiled.step();
+  assert.equal(b.index,6);assert.deepEqual(a.positions,b.positions);assert.deepEqual(a.audit,b.audit);
+} finally {await plain.terminate();await profiled.terminate();}
+await assert.rejects(createMotionWorker(recipe,readFileSync(path),{makeWorker,profile:'да'}),/логическим/);
+console.log('ок: наблюдение реального Worker сохраняет все физические поля/счётчики точно, отдельные стадии и отказ');

@@ -4,6 +4,7 @@ import { browserMotion } from '../tests/lib/cloth-browser-motion.mjs';
 import { loadSparseFactor } from '../tests/lib/cloth-sparse-wasm.mjs';
 import { gridTriangles } from '../tests/lib/cloth-material.mjs';
 import { IMPLICIT_TOLERANCES } from '../tests/lib/cloth-implicit-motion.mjs';
+import { createMotionWorker } from '../tests/lib/cloth-browser-client.mjs';
 
 const $ = id => document.getElementById(id);
 const digest = async bytes => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2,'0')).join('');
@@ -50,8 +51,10 @@ function draw(pos) {
 }
 
 $('run').addEventListener('click', async () => {
-  $('run').disabled = true; $('tack').disabled = true; $('download').hidden = true; $('report').textContent = '';
-  let report;
+  for (const id of ['run','tack','execution','reuse']) $(id).disabled = true;
+  $('download').hidden = true; $('report').textContent = '';
+  let report, workerClient, drawTask, stopDrawing = false, drawFailure;
+  let visibility;
   try {
     if (document.visibilityState !== 'visible') throw new Error('Вкладка должна быть видима');
     const series = new URLSearchParams(location.search).get('series') || 'browser-cloth';
@@ -65,54 +68,98 @@ $('run').addEventListener('click', async () => {
     if (changed.length) throw new Error('После подготовки изменились исходники: '+changed.join(', '));
     const loadStart = performance.now(), wasmBytes = await bytesAt(fixture.wasm.path), fetchedMs = performance.now()-loadStart;
     if (await digest(wasmBytes) !== fixture.wasm.sha256) throw new Error('Изменился модуль WASM');
-    const compileStart = performance.now(), factor = await loadSparseFactor(wasmBytes), compileMs = performance.now()-compileStart;
-    const setupStart = performance.now(), calculation = browserMotion(fixture.recipe,factor), setupMs = performance.now()-setupStart;
-    const { motion } = calculation;
-    const sceneStart = performance.now(); await prepareScene(motion.pos,fixture.recipe.rows,fixture.recipe.cols);
+    const execution = $('execution').value, reuseMemory = $('reuse').checked;
+    let factor, calculation, motion, positions, compileMs, setupMs, workerReadyMs;
+    if (execution === 'worker') {
+      const start = performance.now(); workerClient = await createMotionWorker(fixture.recipe,wasmBytes,{reuse:reuseMemory});
+      workerReadyMs = performance.now()-start;
+      ({compileMs,setupMs} = workerClient.ready); positions = workerClient.ready.positions;
+    } else {
+      const compileStart = performance.now(); factor = await loadSparseFactor(wasmBytes,{reuse:reuseMemory}); compileMs = performance.now()-compileStart;
+      const setupStart = performance.now(); calculation = browserMotion(fixture.recipe,factor); setupMs = performance.now()-setupStart;
+      motion = calculation.motion; positions = motion.pos;
+    }
+    const sceneStart = performance.now(); await prepareScene(positions,fixture.recipe.rows,fixture.recipe.cols);
     // Предварительные кадры исключают первую компиляцию графических программ.
-    for (let i = 0; i < 20; i++) { await frame(); draw(motion.pos); }
+    for (let i = 0; i < 20; i++) { await frame(); draw(positions); }
     const sceneWarmupMs = performance.now()-sceneStart;
     const renderOnly = [], intervalsOnly = [];
     let previousFrame;
     for (let i = 0; i < 60; i++) {
       const t = await frame(); if (previousFrame !== undefined) intervalsOnly.push(t-previousFrame);
-      previousFrame = t; renderOnly.push(draw(motion.pos));
+      previousFrame = t; renderOnly.push(draw(positions));
     }
     const warmSteps = [], liveSteps = [], frameCosts = [], liveIntervals = [], allSteps = [];
     let maxPositionDifferenceM = 0, maxEnergyDifferenceJ = 0, maxForceN = 0, maxLengthM = 0, maxDualN = 0, maxComplementarityJ = 0;
-    let stepIndex = 0, hidden = false;
-    const visibility = () => { if (document.visibilityState !== 'visible') hidden = true; };
+    let stepIndex = 0, hidden = false, wasmMemory, liveDrawPhase = false, liveStart, maxResultDelayMs = 0;
+    const replyTimes = [];
+    visibility = () => { if (document.visibilityState !== 'visible') hidden = true; };
     document.addEventListener('visibilitychange',visibility);
-    function advance(times) {
-      visibility(); const t = performance.now(), audit = calculation.step(); times.push(performance.now()-t);
+    function checkStep(audit, dualViolationN, timeMs, times) {
+      visibility(); times.push(timeMs);
       const expected = fixture.expected[stepIndex++];
-      for (let i = 0; i < motion.mass.length; i++) maxPositionDifferenceM = Math.max(maxPositionDifferenceM,
-        Math.hypot(...Array.from(motion.pos.slice(3*i,3*i+3),(v,d) => v-expected.positionsM[3*i+d])));
+      for (let i = 0; i < positions.length/3; i++) maxPositionDifferenceM = Math.max(maxPositionDifferenceM,
+        Math.hypot(...Array.from(positions.slice(3*i,3*i+3),(v,d) => v-expected.positionsM[3*i+d])));
       for (const [key,value] of Object.entries(audit)) if (key.endsWith('J') && typeof value === 'number')
         maxEnergyDifferenceJ = Math.max(maxEnergyDifferenceJ,Math.abs(value-expected.audit[key]));
       maxForceN = Math.max(maxForceN,audit.solver.maxForceResidualN);
       maxLengthM = Math.max(maxLengthM,audit.solver.maxHardViolationM);
-      for (const c of motion.hard) if (c.unilateral)
-        maxDualN = Math.max(maxDualN,c.lambda/(fixture.recipe.hS**2));
+      maxDualN = Math.max(maxDualN,dualViolationN);
       maxComplementarityJ = Math.max(maxComplementarityJ,audit.solver.complementarityJ);
       allSteps.push({ timeMs: times.at(-1), iterations: audit.solver.iterations });
+      if (liveDrawPhase) maxResultDelayMs = Math.max(maxResultDelayMs,performance.now()-liveStart-(stepIndex-40)*1000/60);
+    }
+    function advance(times) {
+      const t = performance.now(), audit = calculation.step(), timeMs = performance.now()-t;
+      let dual = 0; for (const c of motion.hard) if (c.unilateral) dual = Math.max(dual,c.lambda/(fixture.recipe.hS**2));
+      checkStep(audit,dual,timeMs,times);
+    }
+    async function advanceWorker(times) {
+      const t = performance.now(), reply = await workerClient.step(); replyTimes.push(performance.now()-t);
+      if (reply.index !== stepIndex || reply.type !== 'step') throw new Error('Нарушен порядок шагов ткани');
+      positions = reply.positions; wasmMemory = reply.wasmMemory;
+      checkStep(reply.audit,reply.dualViolationN,reply.timeMs,times);
+      if (drawFailure) throw drawFailure;
+    }
+    if (workerClient) {
+      // Экран продолжает работать, пока единственный запрос ожидает расчёта.
+      drawTask = (async () => {
+        let previous;
+        while (!stopDrawing) {
+          const t = await frame(); if (stopDrawing) break;
+          visibility(); const begin = performance.now(); draw(positions);
+          if (liveDrawPhase) {
+            frameCosts.push(performance.now()-begin);
+            if (previous !== undefined) liveIntervals.push(t-previous);
+            previous = t;
+            maxResultDelayMs = Math.max(maxResultDelayMs,performance.now()-liveStart-(stepIndex-40)*1000/60);
+          }
+        }
+      })().catch(e => { drawFailure = e; stopDrawing = true; });
     }
     $('status').textContent = 'Начальная посадка: 40 шагов…';
-    for (let i = 0; i < 40; i++) { await frame(); advance(warmSteps); draw(motion.pos); }
+    for (let i = 0; i < 40; i++) {
+      if (workerClient) await advanceWorker(warmSteps);
+      else { await frame(); advance(warmSteps); draw(positions); }
+    }
     $('status').textContent = 'Движение: 60 шагов, накопленное время сохраняется…';
-    const start = await frame(); previousFrame = start;
+    const start = await frame(); liveStart = start; liveDrawPhase = true; previousFrame = start;
     let maxLagMs = 0, maxStepsPerFrame = 0;
     while (stepIndex < 100) {
-      const t = await frame(), costStart = performance.now(); liveIntervals.push(t-previousFrame); previousFrame = t;
+      const t = await frame(), costStart = performance.now();
+      if (!workerClient) { liveIntervals.push(t-previousFrame); previousFrame = t; }
       const due = Math.min(60,Math.floor((t-start)/(1000/60)));
       let steps = 0;
-      while (stepIndex-40 < due && steps < 4) { advance(liveSteps); steps++; }
-      draw(motion.pos); frameCosts.push(performance.now()-costStart);
+      while (stepIndex-40 < due && steps < 4) {
+        if (workerClient) await advanceWorker(liveSteps); else advance(liveSteps);
+        steps++;
+      }
+      if (!workerClient) { draw(positions); frameCosts.push(performance.now()-costStart); }
       maxStepsPerFrame = Math.max(maxStepsPerFrame,steps);
       maxLagMs = Math.max(maxLagMs, Math.max(0,t-start-(stepIndex-40)*1000/60));
     }
     const elapsedMs = performance.now()-start;
-    document.removeEventListener('visibilitychange',visibility);
+    if (workerClient) { stopDrawing = true; await drawTask; draw(positions); }
     const physicalMatches = maxPositionDifferenceM <= 1e-8 && maxEnergyDifferenceJ <= 1e-7 &&
       maxForceN <= IMPLICIT_TOLERANCES.forceToleranceN && maxLengthM <= IMPLICIT_TOLERANCES.lengthToleranceM &&
       maxDualN <= IMPLICIT_TOLERANCES.dualToleranceN && maxComplementarityJ <= IMPLICIT_TOLERANCES.complementarityToleranceJ;
@@ -122,19 +169,25 @@ $('run').addEventListener('click', async () => {
         renderer: renderer.backend.constructor.name, pixelRatio: devicePixelRatio,
         canvasPixels: [renderer.domElement.width,renderer.domElement.height], hiddenDuringCalculation: hidden },
       scope: 'Один генакер и сетка пола; без лодки, воды и пересчёта воздуха. Время отрисовки — команды CPU, не завершение GPU.',
-      preparation: { fetchedMs, compileMs, setupMs, sceneWarmupMs },
-      wasmMemory: factor.statistics?.(),
+      execution, reuseMemory,
+      preparation: { fetchedMs, compileMs, setupMs, sceneWarmupMs, ...(workerClient ? {workerReadyMs} : {}) },
+      wasmMemory: workerClient ? wasmMemory : factor.statistics(),
+      ...(workerClient ? {replyLatency:statistics(replyTimes)} : {}),
       renderOnly: statistics(renderOnly), renderOnlyIntervals: statistics(intervalsOnly),
       warmup: statistics(warmSteps), live: statistics(liveSteps), liveFrameCost: statistics(frameCosts), liveFrameIntervals: statistics(liveIntervals),
-      scheduler: { hS: fixture.recipe.hS, elapsedMs, simulationMs: 1000, maxLagMs, maxStepsPerFrame, discardedTimeMs: 0 },
+      scheduler: { hS: fixture.recipe.hS, elapsedMs, simulationMs: 1000, maxLagMs, maxResultDelayMs, maxStepsPerFrame, discardedTimeMs: 0 },
       comparison: { physicalMatches, maxPositionDifferenceM, maxEnergyDifferenceJ, maxForceN, maxLengthM, maxDualN, maxComplementarityJ,
         checkedSteps: stepIndex, tolerances: IMPLICIT_TOLERANCES }, allSteps,
       valid: physicalMatches && !hidden && !fixture.dirty };
     $('status').textContent = report.valid ? 'Измерение завершено; все 100 шагов совпали с проверенным расчётом.' : 'Измерение завершено с ограничением; см. результат.';
   } catch (e) { report = { complete: false, error: e.message }; $('status').textContent = 'Измерение отклонено: '+e.message; }
+  finally {
+    stopDrawing = true; await drawTask; workerClient?.terminate();
+    if (visibility) document.removeEventListener('visibilitychange',visibility);
+  }
   $('report').textContent = JSON.stringify(report,null,2);
   const blob = new Blob([JSON.stringify(report,null,2)+'\n'],{type:'application/json'});
   if ($('download').href.startsWith('blob:')) URL.revokeObjectURL($('download').href);
   $('download').href = URL.createObjectURL(blob); $('download').download = 'cloth-browser-result.json'; $('download').hidden = false;
-  $('run').disabled = false; $('tack').disabled = false;
+  for (const id of ['run','tack','execution','reuse']) $(id).disabled = false;
 });

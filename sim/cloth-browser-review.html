@@ -10,6 +10,8 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px monospace}#status{min-
 <p>Сетка 11×9, сохранённая нагрузка, неподвижные крепления. Лодка и воздух здесь не пересчитываются.
 Изображение показывает результат того же расчёта. Это отдельная сцена паруса; море и полная яхта не включены.</p>
 <label>Сторона ветра <select id="tack"><option value="plus">Первая</option><option value="minus">Другая</option></select></label>
+<label>Где считать <select id="execution"><option value="main">Вместе с экраном</option><option value="worker">В отдельном потоке</option></select></label>
+<label><input type="checkbox" id="reuse" checked>Повторно использовать память</label>
 <button id="run">Измерить</button><a id="download" hidden>Скачать результат</a>
 <p id="status">Готов к подготовке измерения.</p><div id="view"></div><pre id="report"></pre>
 <script type="module" src="../scripts/cloth_browser_review.mjs"></script></html>

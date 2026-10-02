@@ -40,6 +40,8 @@ const series = paths.map(path => {
     assert.equal(r[name].p95Ms,s[Math.ceil(s.length*.95)-1]); assert.equal(r[name].maxMs,s.at(-1));
   }
   return { path, sha256: hash(bytes), tack: f.tack, fixture: r.fixture, environment: r.environment,
+    execution: r.execution ?? 'main', reuseMemory: r.reuseMemory ?? null,
+    wasmMemory: r.wasmMemory, replyLatency: r.replyLatency,
     preparation: r.preparation, renderOnly: r.renderOnly, renderOnlyIntervals: r.renderOnlyIntervals,
     warmup: r.warmup, live: r.live, liveFrameCost: r.liveFrameCost, liveFrameIntervals: r.liveFrameIntervals,
     scheduler: r.scheduler, comparison: r.comparison };

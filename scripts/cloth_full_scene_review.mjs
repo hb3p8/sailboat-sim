@@ -19,6 +19,16 @@ export async function startClothSceneReview({renderer,genSail,boat,camera,Buffer
   const panel = document.createElement('section'); panel.id = 'cloth-review-panel';
   panel.innerHTML = '<b>Генакер в полной сцене: измерение</b><p>Лодка и время воды неподвижны. Ткань получает сохранённую нагрузку; воздух и движение лодки не пересчитываются.</p><label>Сторона ветра <select id="tack"><option value="plus">Первая</option><option value="minus">Другая</option></select></label><label>Где считать <select id="execution"><option value="worker">В отдельном потоке</option></select></label><label><input id="reuse" type="checkbox" checked>Повторно использовать память</label><button id="run">Измерить</button><a id="download" hidden>Скачать результат</a><p id="status">Готов к подготовке измерения.</p><details><summary>Числа и происхождение результата</summary><pre id="report"></pre></details>';
   document.body.append(panel);
+  const supportMode=new URLSearchParams(location.search).has('support-commands');
+  if (supportMode) {
+    panel.querySelector('b').textContent='Генакер: отклик на управление';
+    const label=document.createElement('label');
+    label.innerHTML='Действие <select id="motion"><option value="inward">Подтянуть угол на 5 см и вернуть</option><option value="outward">Отвести угол на 5 см и вернуть</option><option value="held">Удерживать угол</option></select>';
+    panel.insertBefore(label,document.getElementById('run'));
+    document.getElementById('run').textContent='Подготовить';
+    const command=document.createElement('button');command.id='command';command.textContent='Выполнить движение';command.disabled=true;
+    panel.insertBefore(command,document.getElementById('download'));
+  }
 
   let pending = [], positions, recipe, geometry, step = 0, shownStep = 0, lastFrame;
   let source, signature, liveStart, frames = [], errors = new Set(), verifying = false;
@@ -28,7 +38,9 @@ export async function startClothSceneReview({renderer,genSail,boat,camera,Buffer
   const nextFrame = () => new Promise(resolve => pending.push(resolve));
   const adapter = {
     renderer, nextFrame,
-    scope: 'Полная сцена яхты и воды, Worker ткани 11×9. Лодка, крепления и нагрузка неподвижны; воздух не пересчитывается. CPU кадра не является временем завершения GPU.',
+    scope: supportMode
+      ? 'Полная сцена яхты и воды, Worker ткани 11×9. Угол движется по проверенной заданной траектории; лодка и поле неподвижны. Это не закон верёвки. Метка кадра означает отправку отрисовки, не завершение GPU.'
+      : 'Полная сцена яхты и воды, Worker ткани 11×9. Лодка, крепления и нагрузка неподвижны; воздух не пересчитывается. CPU кадра не является временем завершения GPU.',
     async verify(fixture) {
       source = fixture.sceneBuild;
       if (!source || source.build.dirty || JSON.stringify(build)!==JSON.stringify(source.build) ||
@@ -82,7 +94,7 @@ export async function startClothSceneReview({renderer,genSail,boat,camera,Buffer
         if (JSON.stringify(composition())!==JSON.stringify(signature)) errors.add('Во время измерения изменились размеры или состав сцены');
         if (boat.x!==0 || boat.y!==0 || boat.psi!==0 || boat.phi!==recipe.boat.phi || boat.th!==0 || boat.zc!==0 || boat.u!==0 || boat.v!==0)
           errors.add('Лодка перестала быть неподвижной');
-        if (liveStart!==undefined) frames.push({...data,shownStep,
+        if (liveStart!==undefined) frames.push({...data,shownStep,...(supportMode?{presentedAtMs:performance.now()}:{}),
           visibleResultDelayMs:Math.max(0,performance.now()-liveStart-(shownStep-measurement.warmupSteps)*recipe.hS*1000)});
       }
       const ready = pending; pending = []; for (const resolve of ready) resolve(data.timestamp);

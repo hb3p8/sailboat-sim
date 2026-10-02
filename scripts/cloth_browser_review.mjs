@@ -20,6 +20,8 @@ const statistics = a => {
 // отдаёт завершённые кадры её собственного цикла, а не второй рендерер.
 export function mountClothReview(adapter = null) {
 const frame = adapter?.nextFrame ?? (() => new Promise(resolve => requestAnimationFrame(resolve)));
+const supportMode=new URLSearchParams(location.search).has('support-commands');
+const controlIds=['run','tack','execution','reuse',...(supportMode?['motion']:[])];
 let THREE, renderer = adapter?.renderer, scene, camera, geometry;
 async function prepareScene(positions, rows, cols) {
   if (!renderer) {
@@ -54,17 +56,21 @@ function draw(pos) {
 }
 
 $('run').addEventListener('click', async () => {
-  for (const id of ['run','tack','execution','reuse']) $(id).disabled = true;
+  for (const id of controlIds) $(id).disabled = true;
   $('download').hidden = true; $('report').textContent = '';
   let report, workerClient, drawTask, stopDrawing = false, drawFailure;
-  let visibility;
+  let visibility,detachCommand;
   try {
     if (document.visibilityState !== 'visible') throw new Error('Вкладка должна быть видима');
     const series = new URLSearchParams(location.search).get('series') || 'browser-cloth';
     if (!/^[a-z0-9-]+$/.test(series)) throw new Error('Недопустимое имя серии');
-    const tack = $('tack').value, fixturePath = `out/acceptance/${series}-${tack}.json`;
+    if (supportMode && (!adapter || !$('command'))) throw new Error('Команды доступны в измерении полной сцены');
+    const tack = $('tack').value, action=supportMode?$('motion').value:undefined;
+    const fixturePath = `out/acceptance/${series}-${tack}${supportMode?'-'+action:''}.json`;
     $('status').textContent = 'Проверка сохранённого входа и исходников…';
     const fixtureBytes = await bytesAt(fixturePath), fixture = JSON.parse(new TextDecoder().decode(fixtureBytes));
+    if (Boolean(fixture.supportCommands)!==supportMode || (supportMode && fixture.supportCommands.action!==action))
+      throw new Error('Постановка не соответствует выбранной команде');
     const measurement = fixture.measurement ?? {warmupSteps:40,liveSteps:60,durationS:1};
     const {warmupSteps,liveSteps:liveStepCount,durationS} = measurement, totalSteps = warmupSteps+liveStepCount, hMs=fixture.recipe.hS*1000;
     if (warmupSteps!==40 || !Number.isInteger(liveStepCount) || liveStepCount<60 || liveStepCount>1800 ||
@@ -100,23 +106,35 @@ $('run').addEventListener('click', async () => {
       previousFrame = t; renderOnly.push(drawScene(positions,0));
     }
     const warmSteps = [], liveSteps = [], frameCosts = [], liveIntervals = [], allSteps = [];
-    let maxPositionDifferenceM = 0, maxEnergyDifferenceJ = 0, maxForceN = 0, maxLengthM = 0, maxDualN = 0, maxComplementarityJ = 0;
+    let maxPositionDifferenceM = 0, maxEnergyDifferenceJ = 0, maxSupportDifferenceN=0;
+    let maxForceN = 0, maxLengthM = 0, maxDualN = 0, maxComplementarityJ = 0;
+    let inputCommand;
     let stepIndex = 0, hidden = false, wasmMemory, liveDrawPhase = false, liveStart, maxResultDelayMs = 0;
     const replyTimes = [];
     visibility = () => { if (document.visibilityState !== 'visible') hidden = true; };
     document.addEventListener('visibilitychange',visibility);
-    function checkStep(audit, dualViolationN, timeMs, times) {
+    function checkStep(audit, dualViolationN, timeMs, times, trace={}) {
       visibility(); times.push(timeMs);
       const expected = fixture.expected[stepIndex++];
       for (let i = 0; i < positions.length/3; i++) maxPositionDifferenceM = Math.max(maxPositionDifferenceM,
         Math.hypot(...Array.from(positions.slice(3*i,3*i+3),(v,d) => v-expected.positionsM[3*i+d])));
-      for (const [key,value] of Object.entries(audit)) if (key.endsWith('J') && typeof value === 'number')
+      for (const [key,value] of Object.entries(audit)) if (key.endsWith('J') && typeof value === 'number') {
+        if (!Number.isFinite(value) || !Number.isFinite(expected.audit[key])) throw new Error('Неизвестная или нечисловая энергия: '+key);
         maxEnergyDifferenceJ = Math.max(maxEnergyDifferenceJ,Math.abs(value-expected.audit[key]));
+      }
+      for (const [key,value] of Object.entries(IMPLICIT_TOLERANCES))
+        if (audit.solver[key]!==value) throw new Error('Изменён допуск решателя: '+key);
+      if (expected.supportForceN) {
+        if (trace.supportForceN?.length!==expected.supportForceN.length) throw new Error('Нет снимка реакций');
+        trace.supportForceN.forEach((v,k)=>{if(!Number.isFinite(v))throw new Error('Нечисловая реакция');
+          maxSupportDifferenceN=Math.max(maxSupportDifferenceN,Math.abs(v-expected.supportForceN[k]));});
+      }
       maxForceN = Math.max(maxForceN,audit.solver.maxForceResidualN);
       maxLengthM = Math.max(maxLengthM,audit.solver.maxHardViolationM);
       maxDualN = Math.max(maxDualN,dualViolationN);
       maxComplementarityJ = Math.max(maxComplementarityJ,audit.solver.complementarityJ);
-      allSteps.push({ timeMs: times.at(-1), iterations: audit.solver.iterations });
+      const {supportForceN,...recordedTrace}=trace;
+      allSteps.push({ timeMs: times.at(-1), iterations: audit.solver.iterations,...recordedTrace });
       if (liveDrawPhase) maxResultDelayMs = Math.max(maxResultDelayMs,performance.now()-liveStart-(stepIndex-warmupSteps)*hMs);
     }
     function advance(times) {
@@ -125,10 +143,12 @@ $('run').addEventListener('click', async () => {
       checkStep(audit,dual,timeMs,times);
     }
     async function advanceWorker(times) {
-      const t = performance.now(), reply = await workerClient.step(); replyTimes.push(performance.now()-t);
+      const supportTargets=fixture.expected[stepIndex].supportTargets;
+      const t = performance.now(), reply = await workerClient.step(supportTargets),receivedAtMs=performance.now(); replyTimes.push(receivedAtMs-t);
       if (reply.index !== stepIndex || reply.type !== 'step') throw new Error('Нарушен порядок шагов ткани');
       positions = reply.positions; wasmMemory = reply.wasmMemory;
-      checkStep(reply.audit,reply.dualViolationN,reply.timeMs,times);
+      checkStep(reply.audit,reply.dualViolationN,reply.timeMs,times,supportMode
+        ? {requestAtMs:t,receivedAtMs,supportForceN:reply.supportForceN,...(supportTargets?{supportTargets}: {})}:{});
       if (adapter) drawScene(positions,stepIndex);
       if (drawFailure) throw drawFailure;
     }
@@ -154,7 +174,19 @@ $('run').addEventListener('click', async () => {
       else { await frame(); advance(warmSteps); drawScene(positions,stepIndex); }
     }
     $('status').textContent = `Движение: ${liveStepCount} шагов за ${durationS} с, накопленное время сохраняется…`;
-    const start = await frame(); liveStart = start; liveDrawPhase = true; previousFrame = start;
+    const start = supportMode?await new Promise(resolve=>{
+      const button=$('command');
+      button.textContent={inward:'Подтянуть и вернуть',outward:'Отвести и вернуть',held:'Удерживать'}[action];
+      const click=event=>{
+        button.disabled=true;
+        inputCommand={...fixture.supportCommands,eventTimeMs:event.timeStamp,receivedAtMs:performance.now()};
+        $('status').textContent=`Команда принята; ${liveStepCount} шагов за ${durationS} с…`;
+        resolve(inputCommand.receivedAtMs);
+      };
+      button.addEventListener('click',click,{once:true});detachCommand=()=>button.removeEventListener('click',click);
+      button.disabled=false;$('status').textContent='Расчёт подготовлен. Нажмите «'+button.textContent+'».';
+    }):await frame();
+    liveStart = start; liveDrawPhase = true; previousFrame = start;
     adapter?.startLive(start,measurement);
     let maxLagMs = 0, maxStepsPerFrame = 0;
     while (stepIndex < totalSteps) {
@@ -173,9 +205,20 @@ $('run').addEventListener('click', async () => {
     const elapsedMs = performance.now()-start;
     if (workerClient) { stopDrawing = true; await drawTask; drawScene(positions,stepIndex); }
     const sceneReport = await adapter?.finish();
+    let command;
+    if (supportMode) {
+      const first=allSteps[warmupSteps],shown=sceneReport.frames.find(f=>f.shownStep>warmupSteps);
+      if (!shown) throw new Error('Результат команды не попал в кадр');
+      command={...inputCommand,firstRequestedAtMs:first.requestAtMs,firstReceivedAtMs:first.receivedAtMs,
+        firstShownAtMs:shown.presentedAtMs,firstShownStep:shown.shownStep,
+        requestDelayMs:first.requestAtMs-inputCommand.receivedAtMs,
+        replyDelayMs:first.receivedAtMs-inputCommand.receivedAtMs,
+        frameDelayMs:shown.presentedAtMs-inputCommand.receivedAtMs};
+    }
     const physicalMatches = maxPositionDifferenceM <= 1e-8 && maxEnergyDifferenceJ <= 1e-7 &&
       maxForceN <= IMPLICIT_TOLERANCES.forceToleranceN && maxLengthM <= IMPLICIT_TOLERANCES.lengthToleranceM &&
-      maxDualN <= IMPLICIT_TOLERANCES.dualToleranceN && maxComplementarityJ <= IMPLICIT_TOLERANCES.complementarityToleranceJ;
+      maxDualN <= IMPLICIT_TOLERANCES.dualToleranceN && maxComplementarityJ <= IMPLICIT_TOLERANCES.complementarityToleranceJ &&
+      maxSupportDifferenceN <= IMPLICIT_TOLERANCES.forceToleranceN;
     report = { schema: 1, complete: true, createdAt: new Date().toISOString(), measurement,
       fixture: { path: fixturePath, sha256: await digest(fixtureBytes), revision: fixture.revision, dirty: fixture.dirty },
       wasm: fixture.wasm, environment: { userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency,
@@ -183,6 +226,7 @@ $('run').addEventListener('click', async () => {
         canvasPixels: [renderer.domElement.width,renderer.domElement.height], hiddenDuringCalculation: hidden },
       scope: adapter?.scope ?? 'Один генакер и сетка пола; без лодки, воды и пересчёта воздуха. Время отрисовки — команды CPU, не завершение GPU.',
       ...(sceneReport ? { scene: sceneReport } : {}),
+      ...(command?{command}:{}),
       execution, reuseMemory,
       preparation: { fetchedMs, compileMs, setupMs, sceneWarmupMs, ...(workerClient ? {workerReadyMs} : {}) },
       wasmMemory: workerClient ? wasmMemory : factor.statistics(),
@@ -191,11 +235,13 @@ $('run').addEventListener('click', async () => {
       warmup: statistics(warmSteps), live: statistics(liveSteps), liveFrameCost: statistics(frameCosts), liveFrameIntervals: statistics(liveIntervals),
       scheduler: { hS: fixture.recipe.hS, elapsedMs, simulationMs:durationS*1000, maxLagMs, maxResultDelayMs, maxStepsPerFrame, discardedTimeMs: 0 },
       comparison: { physicalMatches, maxPositionDifferenceM, maxEnergyDifferenceJ, maxForceN, maxLengthM, maxDualN, maxComplementarityJ,
+        ...(supportMode?{maxSupportDifferenceN}:{}),
         checkedSteps: stepIndex, tolerances: IMPLICIT_TOLERANCES }, allSteps,
       valid: physicalMatches && !hidden && !fixture.dirty && (sceneReport?.valid ?? true) };
     $('status').textContent = report.valid ? `Измерение завершено; все ${totalSteps} шагов совпали с проверенным расчётом.` : 'Измерение завершено с ограничением; см. результат.';
   } catch (e) { report = { complete: false, error: e.message }; $('status').textContent = 'Измерение отклонено: '+e.message; }
   finally {
+    detachCommand?.();if($('command'))$('command').disabled=true;
     stopDrawing = true; await drawTask; workerClient?.terminate();
     adapter?.cancel();
     if (visibility) document.removeEventListener('visibilitychange',visibility);
@@ -204,7 +250,7 @@ $('run').addEventListener('click', async () => {
   const blob = new Blob([JSON.stringify(report,null,2)+'\n'],{type:'application/json'});
   if ($('download').href.startsWith('blob:')) URL.revokeObjectURL($('download').href);
   $('download').href = URL.createObjectURL(blob); $('download').download = 'cloth-browser-result.json'; $('download').hidden = false;
-  for (const id of ['run','tack','execution','reuse']) $(id).disabled = false;
+  for (const id of controlIds) $(id).disabled = false;
 });
 }
 

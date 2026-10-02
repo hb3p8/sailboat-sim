@@ -46,6 +46,31 @@ const series = paths.map(path => {
     assert.equal(r.replyLatency.count,totalSteps);
     assert(Number.isFinite(r.scheduler.maxResultDelayMs) && r.scheduler.maxResultDelayMs>=0);
   }
+  if (f.supportCommands) {
+    assert.equal(r.execution,'worker');assert(r.scene,'Нет полной сцены команд');
+    const c=r.command;assert(c,'Нет метки экранной команды');
+    for(const [key,value] of Object.entries(f.supportCommands))assert.deepEqual(c[key],value);
+    assert(Number.isFinite(r.comparison.maxSupportDifferenceN) && r.comparison.maxSupportDifferenceN>=0 &&
+      r.comparison.maxSupportDifferenceN<=IMPLICIT_TOLERANCES.forceToleranceN);
+    assert(Number.isFinite(c.receivedAtMs) && Number.isFinite(c.eventTimeMs));
+    for(let i=0;i<totalSteps;i++) {
+      const s=r.allSteps[i];assert(Number.isFinite(s.requestAtMs) && Number.isFinite(s.receivedAtMs));
+      assert(s.receivedAtMs>=s.requestAtMs);
+      if(i)assert(s.requestAtMs>=r.allSteps[i-1].receivedAtMs,'Запросы накопились');
+      assert.deepEqual(s.supportTargets,f.expected[i].supportTargets,'Команда не соответствует проверенной траектории');
+    }
+    const first=r.allSteps[warmupSteps],shown=r.scene.frames.find(f=>f.shownStep>warmupSteps);
+    assert.equal(c.firstRequestedAtMs,first.requestAtMs);assert.equal(c.firstReceivedAtMs,first.receivedAtMs);
+    assert.equal(c.firstShownAtMs,shown.presentedAtMs);assert.equal(c.firstShownStep,shown.shownStep);
+    assert(c.receivedAtMs<=c.firstRequestedAtMs && c.firstReceivedAtMs<=c.firstShownAtMs);
+    assert.equal(c.requestDelayMs,c.firstRequestedAtMs-c.receivedAtMs);
+    assert.equal(c.replyDelayMs,c.firstReceivedAtMs-c.receivedAtMs);
+    assert.equal(c.frameDelayMs,c.firstShownAtMs-c.receivedAtMs);
+    for(const frame of r.scene.frames) {
+      assert(Number.isFinite(frame.presentedAtMs) && frame.presentedAtMs>=frame.timestamp);
+      if(frame.shownStep>warmupSteps)assert(frame.presentedAtMs>=r.allSteps[frame.shownStep-1].receivedAtMs);
+    }
+  } else assert.equal(r.command,undefined,'Команда не имеет контрольного входа');
   if (r.scene) {
     assert.equal(r.execution,'worker'); assert.equal(r.scene.valid,true); assert.deepEqual(r.scene.errors,[]);
     assert.deepEqual(r.scene.build,f.sceneBuild);
@@ -80,7 +105,8 @@ const series = paths.map(path => {
     wasmMemory: r.wasmMemory, replyLatency: r.replyLatency,
     preparation: r.preparation, renderOnly: r.renderOnly, renderOnlyIntervals: r.renderOnlyIntervals,
     warmup: r.warmup, live: r.live, liveFrameCost: r.liveFrameCost, liveFrameIntervals: r.liveFrameIntervals,
-    scheduler: r.scheduler, comparison: r.comparison, measurement, ...(r.scene?{scene:r.scene}:{}), scope:r.scope };
+    scheduler: r.scheduler, comparison: r.comparison, measurement, ...(r.scene?{scene:r.scene}:{}),
+    ...(r.command?{command:r.command}:{}),scope:r.scope };
 });
 const result = { schema: 1, createdAt: new Date().toISOString(), series,
   interpretation: 'Достоверность записи и повторение модели проверены. Скорость измерена на коротком окне; это не приёмка интерактивного манёвра или всей сцены.' };

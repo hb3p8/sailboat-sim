@@ -265,6 +265,19 @@ node tests/cloth-body-board.test.mjs --linear-backend=kkt-wasm --wasm=out/accept
 Существующие файлы не перезаписываются. Опора по-прежнему не вращается;
 [условия приёмки планки](../research/cloth-material.md#совместная-масса-опоры-и-верхней-планки).
 
+Свободное вращение известной опоры проверяется отдельно, до полного паруса:
+
+```sh
+node tests/cloth-rigid-body-coupling.test.mjs --out=out/acceptance/новое-свободное-тело-js.json
+node tests/cloth-rigid-body-coupling.test.mjs --linear-backend=kkt-wasm --wasm=out/acceptance/cloth-sparse-20261002-simd.wasm --out=out/acceptance/новое-свободное-тело-wasm.json
+```
+
+Поддерживаются также `sparse-js` и `sparse-wasm`. Запись фиксирует заданные
+массы/инерции, известные ответы, уточнение h, малое полотно и отрицательный
+контроль буквального сохранения углового импульса. Выход создаётся без
+перезаписи. Этот расчёт не подключён к `Boat`;
+[границы и численное торможение](../research/cloth-material.md#свободное-вращение-тела-и-общая-работа-с-тканью).
+
 ## Экранные команды исследовательской ткани
 
 Из чистого коммита соберите сцену, сохраните новую копию `sim/index.html`

@@ -156,6 +156,10 @@ export class EnergyMotion {
 
   movingSupportsAllowed() { return false; }
 
+  decayAtNode(i,h,clothDecay) {
+    return i===this.translatingBody?.node?Math.exp(-this.translatingBody.dampingHz*h):clothDecay;
+  }
+
   // Команда применяется внутри подшага; внешняя перестановка pos не является
   // командой. Отказ возвращает и историю, и множители, и принятые закрепления.
   step(force, h, passes, supportTargets) {
@@ -219,14 +223,14 @@ export class EnergyMotion {
         (this.board && this.board.nodes.includes(i) && !this.fixed.has(i)) ||
         (this.supportMotionActive && this.fixed.has(i))) for (let d = 0; d < 3; d++) {
       const k = 3 * i + d;
-      const ownDecay = i===this.translatingBody?.node ? Math.exp(-this.translatingBody.dampingHz*h) : decay;
+      const ownDecay = this.decayAtNode(i,h,decay);
       dampingForce[k] = this.mass[i] * (ownDecay - 1) * (old[k] - prior[k]) / (priorDt * h);
     }
     for (const {node,positionM} of targets) this.pos.set(positionM,3*node);
     for (let i = 0; i < this.mass.length; i++) if (this.w[i] && i!==this.translatingBody?.node &&
         !(this.coupledBoardMass && i===this.board.end)) for (let d = 0; d < 3; d++) {
       const k = 3 * i + d;
-      this.pos[k] += decay * (old[k] - prior[k]) / priorDt * h + h * h * this.w[i] * reducedForce[k];
+      this.pos[k] += this.decayAtNode(i,h,decay) * (old[k] - prior[k]) / priorDt * h + h * h * this.w[i] * reducedForce[k];
     }
     if (this.translatingBody) {
       const node=this.translatingBody.node, reducedDamping=this.reduceField(dampingForce);
@@ -314,11 +318,13 @@ export class EnergyMotion {
     const supportForceN = new Float64Array(this.pos.length);
     const bodyAttachmentForceN = this.translatingBody ? new Float64Array(this.pos.length) : null;
     const bodyBalanceResidualN = this.translatingBody ? [0,0,0] : null;
+    const nodeBalanceResidualN = this.auditNodeBalance ? new Float64Array(this.pos.length) : null;
     let inertiaIncrementJ=0, materialIncrementJ=-softEnergyChangeJ;
     for (let i=0;i<this.mass.length;i++) for (let d=0;d<3;d++) {
       const k=3*i+d, displacement=this.pos[k]-old[k];
       const velocity=displacement/h, priorVelocity=(old[k]-prior[k])/priorDt;
       const residual=this.mass[i]*(velocity-priorVelocity)/h-force[k]-dampingForce[k]+materialGradient[k]-hardForce[k];
+      if (nodeBalanceResidualN) nodeBalanceResidualN[k]=residual;
       if (this.coupledBoardMass && this.board.nodes.includes(i)) {
         const weight=1-this.board.fractions[this.board.nodes.indexOf(i)];
         bodyAttachmentForceN[3*this.board.head+d]+=weight*residual;bodyBalanceResidualN[d]+=weight*residual;
@@ -355,6 +361,7 @@ export class EnergyMotion {
     }
     return {supportForceN,supportWorkJ,inertiaIncrementJ,materialIncrementJ,
       discreteBalanceResidualJ:kineticChangeJ+softEnergyChangeJ-appliedWorkJ-dampingWorkJ-hardWorkJ-supportWorkJ+inertiaIncrementJ+materialIncrementJ,
+      ...(nodeBalanceResidualN ? {nodeBalanceResidualN} : {}),
       ...bodyAudit};
   }
 }

@@ -92,13 +92,19 @@ export class ImplicitEnergyMotion extends EnergyMotion {
       const [i, vi] = g[a], [j, vj] = g[b]; add(i, j, vi * vj / c.alpha);
     }
     const solve = borderedBandFactor(matrix, coupling, border, core, band, size), unforced = solve(gradient);
-    const responses = hard.map(({ g }) => {
+    // Ненатянутая кромка проверяется по шагу без решения её реакции.
+    // Ответ нужен только при включении связи и сохраняется до смены матрицы.
+    const responses = new Array(hard.length); let responseSolves = 0;
+    const response = i => {
+      if (responses[i]) return responses[i];
+      const { g } = hard[i];
       const rhs = new Float64Array(n); for (const [i, v] of g) rhs[i] = v;
-      return solve(rhs);
-    });
+      responseSolves++; return responses[i] = solve(rhs);
+    };
     const active = new Set(hard.flatMap((a, i) => a.g.length && (!a.c.unilateral || priorMu[i] > this.dualToleranceN) ? [i] : []));
     for (let qp = 0; qp < 4 * hard.length + 10; qp++) {
       const indices = Array.from(active), m = indices.length, schur = new Float64Array(m * m);
+      for (const i of indices) response(i);
       const rhs = Float64Array.from(indices, i => hard[i].C - sparseDot(hard[i].g, unforced));
       for (let a = 0; a < m; a++) for (let b = 0; b <= a; b++)
         schur[a * m + a - b] = sparseDot(hard[indices[a]].g, responses[indices[b]]);
@@ -117,27 +123,28 @@ export class ImplicitEnergyMotion extends EnergyMotion {
         if (violation > worst) { worst = violation; add = i; }
       }
       if (add >= 0) { active.add(add); continue; }
-      return { step, mu, active: active.size, qpIterations: qp + 1 };
+      return { step, mu, active: active.size, qpIterations: qp + 1, responseSolves };
     }
     throw new Error('Не сошёлся выбор односторонних кромок');
   }
 
   solve(prediction, h, passes) {
-    let mu = new Float64Array(this.hard.length), lineSearchReductions = 0, qpIterations = 0;
+    let mu = new Float64Array(this.hard.length), lineSearchReductions = 0, qpIterations = 0, responseSolves = 0;
     let state = this.state(prediction, h, mu);
     for (let iteration = 0; iteration <= passes; iteration++) {
       if (state.maxForceN <= this.forceToleranceN && state.violationM <= this.lengthToleranceM &&
           state.dualViolationN <= this.dualToleranceN && state.complementarityJ <= this.complementarityToleranceJ) {
         for (const c of this.soft) c.lambda = -h * h * c.value(this.pos).C / c.alpha;
         this.hard.forEach((c, j) => c.lambda = -h * h * mu[j]);
-        return { method: 'полное уравнение энергии', converged: true, iterations: iteration, qpIterations,
+        return { method: 'полное уравнение энергии', converged: true, iterations: iteration, qpIterations, responseSolves,
           lineSearchReductions, bandwidth: state.band, borderCoordinates: this.free.length - this.coreDofs, maxForceResidualN: state.maxForceN,
           maxHardViolationM: state.violationM, complementarityJ: state.complementarityJ,
           forceToleranceN: this.forceToleranceN, lengthToleranceM: this.lengthToleranceM,
           dualToleranceN: this.dualToleranceN, complementarityToleranceJ: this.complementarityToleranceJ };
       }
       if (iteration === passes) break;
-      const { step, mu: nextMu, qpIterations: qp } = this.direction(state, h, mu); qpIterations += qp;
+      const { step, mu: nextMu, qpIterations: qp, responseSolves: rs } = this.direction(state, h, mu);
+      qpIterations += qp; responseSolves += rs;
       const old = this.pos.slice(), penaltyN = Math.max(1, 1.1 * Math.max(0, ...nextMu.map(Math.abs)));
       const meritJ = state.objectiveJ + penaltyN * state.violationL1M;
       const derivativeJ = dot(state.gradient, step) - penaltyN * state.violationL1M;

@@ -17,7 +17,7 @@ export function installEnergyExperiment(cloth, { implicit = false } = {}) {
   const reset = () => { totals = { substeps: 0, elapsedS: 0, appliedWorkJ: 0, dampingWorkJ: 0,
     hardWorkEstimateJ: 0, discreteEnergyDefectJ: 0, maxPhysicalResidualN: 0,
     maxMotionResidualN: 0, maxHardViolationM: 0, initialSoftEnergyJ: null, initialKineticJ: null,
-    ...(implicit ? { solverIterations: 0, maxSolverIterations: 0, qpIterations: 0, lineSearchReductions: 0 } : {}) }; };
+    ...(implicit ? { solverIterations: 0, maxSolverIterations: 0, qpIterations: 0, lineSearchReductions: 0, responseSolves: 0 } : {}) }; };
   reset();
   cloth.advance = function (boat, h, side, environment) {
     if (!motion) {
@@ -50,6 +50,7 @@ export function installEnergyExperiment(cloth, { implicit = false } = {}) {
       totals.maxSolverIterations = Math.max(totals.maxSolverIterations, last.solver.iterations);
       totals.qpIterations += last.solver.qpIterations;
       totals.lineSearchReductions += last.solver.lineSearchReductions;
+      totals.responseSolves += last.solver.responseSolves;
     }
   };
   return { reset, snapshot() {

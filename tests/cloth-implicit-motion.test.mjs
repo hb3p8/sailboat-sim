@@ -79,8 +79,10 @@ console.log('ок: многоточечный градиент через пла
 const tether = new ImplicitEnergyMotion({ positions: [0, 0, 0, 1, 0, 0], mass: [1, 1], fixed: [0], constraints: [distance(0, 1, 1, 0, true)], dampingHz: 0, ...options });
 let audit = tether.step([0, 0, 0, 10, 0, 0], h, 40);
 close(tether.pos[3], 1); close(audit.hardForce[3], -10); assert.ok(audit.maxPhysicalResidualN < 1e-9);
+assert.equal(audit.solver.responseSolves, 1);
 audit = tether.step([0, 0, 0, -10, 0, 0], h, 40);
 close(tether.pos[3], 1 - h * h * 10); close(audit.hardForce[3], 0); assert.ok(audit.maxPhysicalResidualN < 1e-9);
+assert.equal(audit.solver.responseSolves, 0, 'Свободная нить не требует решения реакции');
 
 // Точный первый шаг жёсткой планки — ближайшая точка окружности к предсказанию.
 const rigid = new ImplicitEnergyMotion({ positions: [0, 0, 0, 1, 0, 0], mass: [1, 1], fixed: [0], constraints: [distance(0, 1, 1, 0)], dampingHz: 0, ...options });

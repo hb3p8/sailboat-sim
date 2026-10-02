@@ -26,10 +26,14 @@ for (const {record:r} of sources) {
   r.steps.forEach((s,i)=>assert.equal(s.timeS,(i+1)*r.config.hS));
 }
 function cumulative(record) {let work=0;return record.steps.map(s=>work+=s.audit.supportWorkJ);}
+function impulses(record) {
+  const total=new Array(record.recipe.positions.length).fill(0);
+  return record.steps.map(s=>{s.supportForceN.forEach((v,k)=>total[k]+=v*record.config.hS);return total.slice();});
+}
 function compare(a,b,sampling=a) {
-  const wa=cumulative(a),wb=cumulative(b),nodeCount=a.recipe.rows*a.recipe.cols;
+  const wa=cumulative(a),wb=cumulative(b),ia=impulses(a),ib=impulses(b),nodeCount=a.recipe.rows*a.recipe.cols;
   const result={fromHz:Math.round(1/a.config.hS),toHz:Math.round(1/b.config.hS),samplingHz:Math.round(1/sampling.config.hS),
-    maxPositionM:0,maxSupportForceN:0,maxCumulativeWorkJ:0,maxKineticDifferenceJ:0,maxMaterialDifferenceJ:0,
+    maxPositionM:0,maxSupportForceN:0,maxCumulativeImpulseNs:0,maxCumulativeWorkJ:0,maxKineticDifferenceJ:0,maxMaterialDifferenceJ:0,
     positionTimeS:0,forceTimeS:0,workTimeS:0};
   for (const frame of sampling.steps) {
     const indexA=Math.round(frame.timeS/a.config.hS)-1,indexB=Math.round(frame.timeS/b.config.hS)-1;
@@ -42,6 +46,8 @@ function compare(a,b,sampling=a) {
     for (const i of a.recipe.fixed) {
       const difference=Math.hypot(...[0,1,2].map(d=>x.supportForceN[3*i+d]-y.supportForceN[3*i+d]));
       if (difference>result.maxSupportForceN) {result.maxSupportForceN=difference;result.forceTimeS=frame.timeS;}
+      result.maxCumulativeImpulseNs=Math.max(result.maxCumulativeImpulseNs,
+        Math.hypot(...[0,1,2].map(d=>ia[indexA][3*i+d]-ib[indexB][3*i+d])));
     }
     const work=Math.abs(wa[indexA]-wb[indexB]);
     if (work>result.maxCumulativeWorkJ) {result.maxCumulativeWorkJ=work;result.workTimeS=frame.timeS;}
@@ -55,6 +61,6 @@ const comparison={adjacent:[compare(coarse,medium),compare(medium,fine)],
 writeFileSync(output,JSON.stringify({schema:1,createdAt:new Date().toISOString(),
   toolSha256:hash(readFileSync(new URL(import.meta.url))),
   sources:sources.map(({path,sha256,record:r})=>({path,sha256,revision:r.revision})),
-  rule:'все узлы/закрепления, накопленная работа; совпадающие времена без интерполяции; отдельно времена каждой пары и общий набор 60 Гц; это измерение различий, не приёмка G4',
+  rule:'все узлы/закрепления, накопленные работа и импульс реакций; совпадающие времена без интерполяции; отдельно времена каждой пары и общий набор 60 Гц; это измерение различий, не приёмка G4',
   comparison},null,2)+'\n',{flag:'wx'});
 console.log(JSON.stringify({output,comparison},null,2));

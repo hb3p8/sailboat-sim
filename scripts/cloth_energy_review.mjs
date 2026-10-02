@@ -83,7 +83,8 @@ ${cutOnly ? `${twoAxis ? '<li>При переходе A → B → C меняет
 const records=${encoded};
 const cutOnly=${cutOnly},cutComparison=${cutComparison},key=r=>cutOnly?r.config.designSide+':'+(r.config.cutModel||'original'):r.config.tack;
 const sideSelect=document.querySelector('#side'),cards=document.querySelector('#cards'),height=document.querySelector('#height'),frame=document.querySelector('#frame');
-for(const r of records){const option=document.createElement('option');option.value=key(r);const side=cutOnly?r.config.designSide:r.config.tack;option.textContent=(cutComparison?(r.config.cutModel==='continuous'?'Новый крой':'Прежний крой')+' · ':'')+(side===1?'С первой стороны':'С другой стороны');sideSelect.append(option)}
+const cutNames={'original':'Прежний крой','continuous':'Согласованные границы','continuous-analytic':'Непрерывный профиль'};
+for(const r of records){const option=document.createElement('option');option.value=key(r);const side=cutOnly?r.config.designSide:r.config.tack;option.textContent=(cutComparison?(cutNames[r.config.cutModel||'original']||r.config.cutModel)+' · ':'')+(side===1?'С первой стороны':'С другой стороны');sideSelect.append(option)}
 let azimuth=-.8,elevation=.08,zoom=1,views=[],timer=null;
 const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
 const sub=(a,b)=>a.map((x,k)=>x-b[k]);

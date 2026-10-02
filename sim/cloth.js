@@ -34,7 +34,7 @@ import { edgeFn, sailSagAt, STRIPS, NCHORD, gennakerClew,
          gennakerSheetLen, designAt,
          DESIGN_DRAFT, DESIGN_ENTRY, DESIGN_EXIT } from './aero.js';
 import { localPressureForRow, pressureToNodes } from './local-pressure.js';
-import { matchedCutSurface } from './cloth-cut.js';
+import { matchedCutSurface, bezierSectionPeak } from './cloth-cut.js';
 
 // Сетка ткани. Строк — как у отрисовки (SAIL_ROWS), чтобы полотно и обвод резались
 // по одним и тем же высотам; столбцов девять при трёх панелях решётки, то есть
@@ -357,7 +357,7 @@ function bezAt(P, s, out) {
 }
 // Пузо, место пуза и длина кривой при данных ручках.
 const BEZ_TMP = [0, 0];
-function bezShape(P) {
+function bezShape(P, analyticPeak = false) {
   let cam = 0, at = 0.5, len = 0, px = P[0], pz = P[1];
   for (let i = 0; i <= BEZ_N; i++) {
     bezAt(P, i / BEZ_N, BEZ_TMP);
@@ -366,23 +366,27 @@ function bezShape(P) {
     if (i) len += Math.hypot(x - px, z - pz);
     px = x; pz = z;
   }
+  if (analyticPeak) ({ cam, at } = bezierSectionPeak(P));
   return { cam, at, len };
 }
 // Подбор ручек под объявленные пузо и место пуза: вложенные деления пополам.
 // Пузо растёт с суммой ручек, место пуза уезжает назад с долей задней.
-function bezSolve(cam, at, fin, fex, exactKey = false) {
-  const key = exactKey ? ['точный', cam, at, fin, fex].join(',')
+function bezSolve(cam, at, fin, fex, exactKey = false, analyticPeak = false) {
+  const key = exactKey || analyticPeak ? [analyticPeak ? 'аналитический' : 'точный', cam, at, fin, fex].join(',')
     : cam.toFixed(4) + ',' + at.toFixed(3) + ',' + fin.toFixed(3) + ',' + fex.toFixed(3);
   const hit = BEZ_CACHE.get(key);
   if (hit) return hit;
   let rLo = 0.05, rHi = 0.95, P = null, sh = null;
-  for (let i = 0; i < 24; i++) {
+  // 6 / 2^40 в единицах ручки даёт субнанометровый запас на размере паруса.
+  // Старый опыт и основной вариант сохраняют прежние 24 деления.
+  const divisions = analyticPeak ? 40 : 24;
+  for (let i = 0; i < divisions; i++) {
     const r = 0.5 * (rLo + rHi);
     let kLo = 0.01, kHi = 6;
-    for (let j = 0; j < 24; j++) {
+    for (let j = 0; j < divisions; j++) {
       const k = 0.5 * (kLo + kHi);
       P = bezPts(k * (1 - r), k * r, fin, fex);
-      sh = bezShape(P);
+      sh = bezShape(P, analyticPeak);
       if (sh.cam < cam) kLo = k; else kHi = k;
     }
     if (sh.at < at) rLo = r; else rHi = r;
@@ -546,6 +550,9 @@ export class Cloth {
     this.freeClew = opts && opts.freeClew != null ? opts.freeClew : FREE_CLEW;
     this.cut3d = opts && opts.cut3d != null ? opts.cut3d : CUT3D;
     this.continuousCut = opts && opts.continuousCut === true;
+    this.analyticCutProfile = opts && opts.analyticCutProfile === true;
+    if (this.analyticCutProfile && !this.continuousCut)
+      throw new Error('Аналитический профиль требует отдельного непрерывного кроя');
     this.rigidBoard = opts && opts.rigidBoard === true;
     this.boardMaterial = this.rigidBoard || (opts && opts.boardMaterial === true);
     this.attachmentPaths = opts && opts.attachmentPaths === true;
@@ -790,8 +797,8 @@ export class Cloth {
     const dft = DESIGN_DRAFT[kind] || DESIGN_DRAFT.main;
     const ent = DESIGN_ENTRY[kind] || DESIGN_ENTRY.main;
     const exi = (DESIGN_EXIT[kind] || DESIGN_EXIT.main) * Math.PI / 180;
-    const solAt = (f) => bezSolve(designAt(dsg, f), designAt(dft, f),
-                                  designAt(ent, f) * Math.PI / 180, exi, this.continuousCut);
+    const solAt = (f, analytic = this.analyticCutProfile) => bezSolve(designAt(dsg, f), designAt(dft, f),
+                                  designAt(ent, f) * Math.PI / 180, exi, this.continuousCut, analytic);
     // ЦЕЛЬ ПОДБОРА — ОБМЕРНАЯ ШИРИНА НА ПОЛУВЫСОТЕ. Пузо теперь задаёт длину
     // строки само, поэтому развёртке серпа осталось ровно одно дело: развести
     // шкаторины так, чтобы парус вышел нужной ШИРИНЫ. Каждое измерение
@@ -808,7 +815,9 @@ export class Cloth {
       roundAtZ(T, H, gen.luff_round_m, gen.luff_round_at, nL, z, A);
       arcAtZ(C, HA, gen.leech_m, nB, z, B);
       const c = Math.max(0.02, Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]));
-      return c * solAt(0.5).ratio;
+      // Отдельный контроль меняет только внутренний профиль. Развёртка
+      // граничных кривых сохраняет прежнюю калибровку, в том числе её погрешность.
+      return c * solAt(0.5, false).ratio;
     };
     // Ширина растёт с углом монотонно: чем больше шкаторины врозь, тем длиннее
     // хорда и тем шире парус. Деление пополам, двадцати шагов хватает.

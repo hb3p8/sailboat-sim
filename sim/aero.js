@@ -1006,8 +1006,14 @@ export class Rig {
         });
       }
     }
-    this.sailOut = { fx: 0, fy: 0, fz: 0, mx: 0, mz: 0,
+    this.sailOut = { fx: 0, fy: 0, fz: 0, mx: 0, my: 0, mz: 0,
                      ceX: 0, ceY: 0, ceZ: 0,
+                     // Те же приложенные силы, отдельно по парусам. Реакции
+                     // креплений должны заменить нагрузку генакера, поэтому
+                     // нельзя терять его вклад внутри общей суммы рига.
+                     phase: 'aero-after-cloth', frame: 'body-horizontal',
+                     originM: [0, 0, 0],
+                     bySail: this.sails.map(() => ({ forceN: [0, 0, 0], momentNm: [0, 0, 0] })),
                      // Отдельно по гроту: ими гик и перекидывается. Стаксель на
                      // гик не действует, и складывать их было бы неправдой.
                      fyMain: 0, setMain: 0,
@@ -1104,7 +1110,9 @@ export class Rig {
     const cgx = m.cg_m[0], cgz = m.cg_m[2];
     const scale = b.o.sailScale;
     const out = this.sailOut;
-    out.fx = 0; out.fy = 0; out.fz = 0; out.mx = 0; out.mz = 0;
+    out.fx = 0; out.fy = 0; out.fz = 0; out.mx = 0; out.my = 0; out.mz = 0;
+    out.originM[0] = cgx; out.originM[1] = 0; out.originM[2] = cgz;
+    for (const part of out.bySail) { part.forceN.fill(0); part.momentNm.fill(0); }
     out.awa = Math.PI - Math.abs(aw.angle);
     out.awaEff = 0; out.alpha = 0; out.cl = 0; out.area = 0;
     out.ceX = 0; out.ceY = 0; out.ceZ = 0;
@@ -2040,8 +2048,13 @@ export class Rig {
       }
       // Моменты собираются сразу по полоскам: у каждой своё плечо, и общий
       // центр парусности больше не нужно назначать — он получается сам.
-      out.mx += g.yi * fzi - (g.zi - cgz) * fyi;
-      out.mz += (g.xi - cgx) * fyi - g.yi * fxi;
+      const mxi = g.yi * fzi - (g.zi - cgz) * fyi;
+      const myi = (g.zi - cgz) * fxi - (g.xi - cgx) * fzi;
+      const mzi = (g.xi - cgx) * fyi - g.yi * fxi;
+      out.mx += mxi; out.my += myi; out.mz += mzi;
+      const part = out.bySail[this.strips[i].sail];
+      part.forceN[0] += fxi; part.forceN[1] += fyi; part.forceN[2] += fzi;
+      part.momentNm[0] += mxi; part.momentNm[1] += myi; part.momentNm[2] += mzi;
 
       out.area += g.area;
       out.awaEff += g.awa * g.area; out.alpha += -rigSide * alpha * g.area;

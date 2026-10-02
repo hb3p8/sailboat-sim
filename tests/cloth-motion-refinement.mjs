@@ -44,14 +44,23 @@ function main() {
   const condition=record=>{const {grids,cols,...rest}=record.config;return rest;};
   assert.ok(physicalSource && Object.keys(physicalSource).length && first.sharedInputField,
     'Нужны отпечатки модели и заданный общий вход');
-  const results=[];
+  const results=[],verifiedCommits=new Set();
   for(const {record:d} of sources) {
-    assert.ok(d.phase==='complete' && d.inputsVerified===true && d.dirty===false,
-      'Нужна завершённая чистая запись с проверенными входами');
+    assert.ok(d.phase==='complete' && d.inputsVerified===true && typeof d.dirty==='boolean',
+      'Нужна завершённая запись с проверенными входами и отметкой состояния репозитория');
     assert.ok(d.config?.implicitMotion && d.config.energyMaterial && d.config.sharedInput &&
       d.config.fixedLoad && d.config.holdCutClew && !d.config.auditInput,'Нужен полный опыт движения с одним заданным входом');
     assert.equal(d.physicsSha256,first.physicsSha256,'Пакеты различаются');
     assert.deepEqual(d.sourceSha256,physicalSource,'Источники модели различаются: нужен контроль одной версии');
+    assert.ok(/^[0-9a-f]{40}$/.test(d.revision),'Нужна полная записанная ревизия Git');
+    // Общая отметка dirty включает независимые правки документации/стенда.
+    // Проверяем каждый физический исходник по коммиту, не принимая незакоммиченную модель.
+    if(!verifiedCommits.has(d.revision)) {
+      for(const [path,hash] of Object.entries(physicalSource))
+        assert.equal(sha(execFileSync('git',['show',`${d.revision}:${path}`])),hash,
+          'Записанные исходники модели не соответствуют её коммиту');
+      verifiedCommits.add(d.revision);
+    }
     assert.deepEqual(condition(d),condition(first),'Условия движения различаются');
     assert.deepEqual(d.sharedInputField,first.sharedInputField,'Заданные поля различаются');
     for(const r of d.results) {
@@ -92,7 +101,8 @@ function main() {
     dirty:!!execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim(),
     provenanceKind:'сравнение завершённых записей; не отдельный физический прогон',
     sourceSha256:{[toolPath]:sha(readFileSync(toolPath))},physicalSourceSha256:physicalSource,
-    sourceRecords:sources.map(({path,bytes,record:d})=>({file:path,sha256:sha(bytes),revision:d.revision,dirty:d.dirty})),
+    sourceRecords:sources.map(({path,bytes,record:d})=>({file:path,sha256:sha(bytes),revision:d.revision,
+      dirty:d.dirty,modelCommitVerified:true})),
     physicsSha256:first.physicsSha256,phase:'complete',inputsVerified:true,physicalAcceptance:false,
     config:{...first.config,grids:results.map(r=>({rows:r.rows,cols:r.cols})),cols:results.map(r=>r.cols)},
     rule:'евклидовы расстояния в общих узлах и сохранённых кадрах; без переноса, поворота или интерполяции времени; '+

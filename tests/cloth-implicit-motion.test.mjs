@@ -4,9 +4,15 @@ import { ImplicitEnergyMotion, bandFactor } from './lib/cloth-implicit-motion.mj
 import { materialSurface } from './lib/cloth-material.mjs';
 import { distance } from './cloth-compliance.mjs';
 import { borderedBandFactor } from './lib/cloth-linear-solve.mjs';
+import { readFileSync } from 'node:fs';
+import { loadSparseFactor } from './lib/cloth-sparse-wasm.mjs';
 
 const close = (a, b, tolerance = 2e-10) => assert.ok(Math.abs(a - b) < tolerance * Math.max(1, Math.abs(b)), `${a} != ${b}`);
-const options = { forceToleranceN: 1e-9, lengthToleranceM: 1e-11, dualToleranceN: 1e-10, complementarityToleranceJ: 1e-10 };
+const args = process.argv.slice(2), backendArg = args.find(a => a.startsWith('--linear-backend=')), wasmArg = args.find(a => a.startsWith('--wasm='));
+if (args.some(a => a !== backendArg && a !== wasmArg)) throw new Error('Допустимы --linear-backend=способ и --wasm=путь');
+const backend = backendArg?.slice(17) ?? 'band-js';
+const backendOptions = { linearBackend: backend, ...(wasmArg ? { wasmSparseFactor: await loadSparseFactor(readFileSync(wasmArg.slice(7))) } : {}) };
+const options = { ...backendOptions, forceToleranceN: 1e-9, lengthToleranceM: 1e-11, dualToleranceN: 1e-10, complementarityToleranceJ: 1e-10 };
 // Независимая A=L Lᵀ: диагональ, узкие/широкая полосы, несколько правых частей.
 // Ширины 161/305 соответствуют парусу 21×17/41×33; есть обе границы полосы.
 for (const [n, band] of [[9, 0], [9, 1], [9, 3], [257, 161], [401, 305], [9, 12]]) {
@@ -79,7 +85,7 @@ console.log('ок: многоточечный градиент через пла
 const tether = new ImplicitEnergyMotion({ positions: [0, 0, 0, 1, 0, 0], mass: [1, 1], fixed: [0], constraints: [distance(0, 1, 1, 0, true)], dampingHz: 0, ...options });
 let audit = tether.step([0, 0, 0, 10, 0, 0], h, 40);
 close(tether.pos[3], 1); close(audit.hardForce[3], -10); assert.ok(audit.maxPhysicalResidualN < 1e-9);
-assert.equal(audit.solver.responseSolves, 1);
+assert.equal(audit.solver.responseSolves, backend === 'kkt-wasm' ? 0 : 1);
 audit = tether.step([0, 0, 0, -10, 0, 0], h, 40);
 close(tether.pos[3], 1 - h * h * 10); close(audit.hardForce[3], 0); assert.ok(audit.maxPhysicalResidualN < 1e-9);
 assert.equal(audit.solver.responseSolves, 0, 'Свободная нить не требует решения реакции');

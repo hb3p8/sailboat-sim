@@ -34,16 +34,17 @@ export function bandFactor(matrix, n, band) {
 
 // [A B; Bᵀ D]. A ленточная; малый D содержит координаты конца общей планки.
 // Блоки исключаются точно, без замены жёсткости или отбрасывания связей.
-export function borderedBandFactor(matrix, coupling, border, n, band, size) {
-  const coreSolve = bandFactor(matrix, n, band);
-  const responses = Array.from({ length: size }, (_, a) => coreSolve(
-    Float64Array.from({ length: n }, (_, i) => coupling[i * size + a])));
+export function borderedBandFactor(matrix, coupling, border, n, band, size, coreFactor = bandFactor) {
+  const coreSolve = coreFactor(matrix, n, band);
+  const borderRightSides = Array.from({ length: size }, (_, a) =>
+    Float64Array.from({ length: n }, (_, i) => coupling[i * size + a]));
+  const responses = coreSolve.many ? coreSolve.many(borderRightSides) : borderRightSides.map(coreSolve);
   const schur = border.slice();
   for (let a = 0; a < size; a++) for (let b = 0; b <= a; b++)
     for (let i = 0; i < n; i++) schur[a * size + a - b] -= coupling[i * size + a] * responses[b][i];
   const borderSolve = bandFactor(schur, size, Math.max(0, size - 1));
-  return rhs => {
-    const x = coreSolve(rhs.slice(0, n)), reduced = Float64Array.from(rhs.slice(n));
+  const finish = (rhs, x) => {
+    const reduced = Float64Array.from(rhs.slice(n));
     for (let a = 0; a < size; a++) for (let i = 0; i < n; i++) reduced[a] -= coupling[i * size + a] * x[i];
     const end = borderSolve(reduced), result = new Float64Array(n + size);
     for (let i = 0; i < n; i++) {
@@ -52,4 +53,10 @@ export function borderedBandFactor(matrix, coupling, border, n, band, size) {
     }
     result.set(end, n); return result;
   };
+  const solve = rhs => finish(rhs, coreSolve(rhs.slice(0, n)));
+  if (coreSolve.many) solve.many = rightSides => {
+    const solved = coreSolve.many(rightSides.map(rhs => rhs.slice(0, n)));
+    return rightSides.map((rhs, i) => finish(rhs, solved[i]));
+  };
+  return solve;
 }

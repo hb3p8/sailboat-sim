@@ -171,6 +171,16 @@ LLVM := /opt/homebrew/opt/llvm/bin
 LLD  := /opt/homebrew/opt/lld/bin
 CFLAGS_FP := -O3 -ffp-contract=off -fno-fast-math
 
+# Явный вычислительный вариант исследовательского материала; пакет сил не собирает.
+.PHONY: cloth-solver
+cloth-solver: out/acceptance/cloth-sparse.wasm
+
+out/acceptance/cloth-sparse.wasm: tests/lib/cloth-sparse-kernel.c
+	mkdir -p out/acceptance
+	PATH=$(LLVM):$(LLD):$$PATH $(LLVM)/clang --target=wasm32 $(CFLAGS_FP) -msimd128 \
+	  -nostdlib -Wl,--no-entry -Wl,--export-dynamic -Wl,--export=__heap_base \
+	  -Wl,--initial-memory=131072 -o $@ $<
+
 .PHONY: kernel
 kernel: sim/biotwasm.js kernel/biot.dylib kernel/lattice.wasm
 

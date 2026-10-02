@@ -3,10 +3,15 @@ import assert from 'node:assert/strict';
 import { ImplicitEnergyMotion, IMPLICIT_TOLERANCES } from './lib/cloth-implicit-motion.mjs';
 import { materialSurface, gridTriangles, MODEL_MATERIAL } from './lib/cloth-material.mjs';
 import { distance } from './cloth-compliance.mjs';
+import { readFileSync } from 'node:fs';
+import { loadSparseFactor } from './lib/cloth-sparse-wasm.mjs';
 
 const args = process.argv.slice(2);
-if (args.some(a => a !== '--straight-control') || args.length > 1)
-  throw new Error('Допустим только отдельный --straight-control');
+const backendArg = args.find(a => a.startsWith('--linear-backend=')), wasmArg = args.find(a => a.startsWith('--wasm='));
+if (args.some(a => a !== '--straight-control' && a !== backendArg && a !== wasmArg) || new Set(args).size !== args.length)
+  throw new Error('Допустимы --straight-control, --linear-backend=способ и --wasm=путь');
+const backendOptions = { linearBackend: backendArg?.slice(17) ?? 'band-js',
+  ...(wasmArg ? { wasmSparseFactor: await loadSparseFactor(readFileSync(wasmArg.slice(7))) } : {}) };
 const straight = args.includes('--straight-control');
 const rows = 4, cols = 7, reference = [];
 for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
@@ -40,6 +45,7 @@ for (const variant of variants) {
   const head = (rows - 1) * cols, end = rows * cols - 1;
   hard.push(distance(head, end, length(head, end), 0));
   const motion = new ImplicitEnergyMotion({ positions: transformed,
+    ...backendOptions,
     mass: new Float64Array(rows * cols).fill(.3), fixed: [0, cols - 1, head],
     constraints: [...material.constraints, ...hard], gridRows: rows, gridCols: cols,
     board: { head, end, nodes: Array.from({ length: cols }, (_, c) => head + c),
@@ -79,6 +85,7 @@ const mass = Float64Array.from({ length: rows * cols }, (_, i) => .2 + .01 * i);
 const freeMaterial = materialSurface(reference, gridTriangles(rows, cols), MODEL_MATERIAL,
   { bendingModel: 'curvature', rows, cols });
 const freeMotion = new ImplicitEnergyMotion({ positions: reference, mass,
+  ...backendOptions,
   constraints: freeMaterial.constraints, gridRows: rows, gridCols: cols, forceToleranceN: 1e-9 });
 const force = new Float64Array(reference.length);
 force.set(referenceForce, 3 * 10);

@@ -5,7 +5,7 @@ import { ImplicitEnergyMotion } from './cloth-implicit-motion.mjs';
 import { distance } from '../cloth-compliance.mjs';
 import { constraintFamily } from './cloth-mechanics.mjs';
 
-export function installEnergyExperiment(cloth, { implicit = false } = {}) {
+export function installEnergyExperiment(cloth, { implicit = false, linearBackend = 'band-js', wasmSparseFactor } = {}) {
   if (!cloth.rigidBoard || cloth.freeClew) throw new Error('Нужны неподвижные углы и исключённая верхняя планка');
   const kept = [], counts = {};
   for (let k = 0; k < cloth.ci.length; k++) {
@@ -33,7 +33,7 @@ export function installEnergyExperiment(cloth, { implicit = false } = {}) {
       motion = new Motion({ positions: this.pos, mass: this.mass,
         fixed: [this.tack, this.head, this.clew],
         board: { head: this.head, end: this.boardEnd, nodes, fractions: nodes.map(i => this.boardFraction[i]) },
-        ...(implicit ? { gridRows: this.rows, gridCols: this.cols } : {}),
+        ...(implicit ? { gridRows: this.rows, gridCols: this.cols, linearBackend, wasmSparseFactor } : {}),
         constraints: [...surface.constraints.map(c => ({ ...c, unit: c.family === 'bending' ? '1/м' : '1' })), ...hard], dampingHz: 6 });
       // Общие массивы: форма, нормали давления и измерители читают один результат.
       motion.pos = this.pos; motion.prev = this.prev;

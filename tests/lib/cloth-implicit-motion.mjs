@@ -5,6 +5,8 @@ import { EnergyMotion } from './cloth-energy-motion.mjs';
 
 export { bandFactor } from './cloth-linear-solve.mjs';
 import { bandFactor, borderedBandFactor } from './cloth-linear-solve.mjs';
+import { gridDissection, sparsePattern, sparseFactor } from './cloth-sparse-solve.mjs';
+import { kktDirection } from './cloth-kkt-direction.mjs';
 
 const dot = (a, b) => a.reduce((sum, x, i) => sum + x * b[i], 0);
 const sparseDot = (g, x) => g.reduce((sum, [i, v]) => sum + v * x[i], 0);
@@ -33,6 +35,13 @@ export class ImplicitEnergyMotion extends EnergyMotion {
       for (let d = 0; d < 3; d++) this.free.push(3 * i + d);
     }
     this.coreDofs = this.free.length - (this.board ? 3 : 0);
+    this.linearBackend = options.linearBackend ?? 'band-js';
+    if (!['band-js', 'sparse-js', 'sparse-wasm', 'kkt-wasm'].includes(this.linearBackend) ||
+        (['sparse-wasm', 'kkt-wasm'].includes(this.linearBackend) && typeof options.wasmSparseFactor !== 'function'))
+      throw new Error('Неизвестный или не загруженный способ линейного решения');
+    this.coreFactor = options.wasmSparseFactor ?? sparseFactor;
+    this.kktFactor = options.wasmSparseFactor?.ldl;
+    this.sparseOrder = gridRows ? gridDissection(gridRows, gridCols, this.offset, this.coreDofs) : undefined;
     this.soft = this.constraints.filter(c => c.alpha > 0);
     this.hard = this.constraints.filter(c => c.alpha === 0);
     if (this.soft.some(c => c.unilateral)) throw new Error('Односторонняя упругая энергия требует отдельного закона');
@@ -78,12 +87,24 @@ export class ImplicitEnergyMotion extends EnergyMotion {
   }
 
   direction(state, h, priorMu) {
+    if (this.linearBackend === 'kkt-wasm') return kktDirection(this, state, h, priorMu);
     const { gradient, soft, hard, band } = state, n = this.free.length, stride = band + 1;
-    const core = this.coreDofs, size = n - core, matrix = new Float64Array(core * stride);
+    const core = this.coreDofs, size = n - core;
+    let pattern;
+    if (this.linearBackend !== 'band-js') {
+      this.pattern ??= sparsePattern(core, soft.map(({ g }) => g.map(([i]) => i)), this.sparseOrder);
+      pattern = this.pattern;
+    }
+    const matrix = new Float64Array(pattern ? pattern.cols.length : core * stride);
     const coupling = new Float64Array(core * size), border = new Float64Array(size * size);
     const add = (i, j, v) => {
+      if (pattern) { if (i < core) i = pattern.inverse[i]; if (j < core) j = pattern.inverse[j]; }
       const row = Math.max(i, j), col = Math.min(i, j);
-      if (row < core) matrix[row * stride + row - col] += v;
+      if (row < core) {
+        const entry = pattern ? pattern.locations[row].get(col) : row * stride + row - col;
+        if (entry === undefined) throw new Error('Изменилась структура градиента разреженной матрицы');
+        matrix[entry] += v;
+      }
       else if (col < core) coupling[col * size + row - core] += v;
       else border[(row - core) * size + row - col] += v;
     };
@@ -91,20 +112,36 @@ export class ImplicitEnergyMotion extends EnergyMotion {
     for (const { c, g } of soft) for (let a = 0; a < g.length; a++) for (let b = 0; b <= a; b++) {
       const [i, vi] = g[a], [j, vj] = g[b]; add(i, j, vi * vj / c.alpha);
     }
-    const solve = borderedBandFactor(matrix, coupling, border, core, band, size), unforced = solve(gradient);
+    const permutedSolve = borderedBandFactor(matrix, coupling, border, core, band, size,
+      pattern ? a => this.coreFactor(a, pattern) : bandFactor);
+    const permute = rhs => {
+      const permuted = new Float64Array(n);
+      for (let i = 0; i < core; i++) permuted[i] = rhs[pattern.order[i]];
+      permuted.set(rhs.slice(core), core); return permuted;
+    };
+    const restore = x => {
+      const result = new Float64Array(n);
+      for (let i = 0; i < core; i++) result[pattern.order[i]] = x[i];
+      result.set(x.slice(core), core); return result;
+    };
+    const solve = pattern ? rhs => restore(permutedSolve(permute(rhs))) : permutedSolve;
+    if (pattern && permutedSolve.many) solve.many = rightSides => permutedSolve.many(rightSides.map(permute)).map(restore);
+    const unforced = solve(gradient);
     // Ненатянутая кромка проверяется по шагу без решения её реакции.
     // Ответ нужен только при включении связи и сохраняется до смены матрицы.
     const responses = new Array(hard.length); let responseSolves = 0;
-    const response = i => {
-      if (responses[i]) return responses[i];
-      const { g } = hard[i];
-      const rhs = new Float64Array(n); for (const [i, v] of g) rhs[i] = v;
-      responseSolves++; return responses[i] = solve(rhs);
+    const prepareResponses = indices => {
+      const missing = indices.filter(i => !responses[i]);
+      const rightSides = missing.map(i => {
+        const rhs = new Float64Array(n); for (const [j, v] of hard[i].g) rhs[j] = v; return rhs;
+      });
+      const solved = solve.many ? solve.many(rightSides) : rightSides.map(solve);
+      missing.forEach((i, j) => responses[i] = solved[j]); responseSolves += missing.length;
     };
     const active = new Set(hard.flatMap((a, i) => a.g.length && (!a.c.unilateral || priorMu[i] > this.dualToleranceN) ? [i] : []));
     for (let qp = 0; qp < 4 * hard.length + 10; qp++) {
       const indices = Array.from(active), m = indices.length, schur = new Float64Array(m * m);
-      for (const i of indices) response(i);
+      prepareResponses(indices);
       const rhs = Float64Array.from(indices, i => hard[i].C - sparseDot(hard[i].g, unforced));
       for (let a = 0; a < m; a++) for (let b = 0; b <= a; b++)
         schur[a * m + a - b] = sparseDot(hard[indices[a]].g, responses[indices[b]]);
@@ -129,14 +166,17 @@ export class ImplicitEnergyMotion extends EnergyMotion {
   }
 
   solve(prediction, h, passes) {
-    let mu = new Float64Array(this.hard.length), lineSearchReductions = 0, qpIterations = 0, responseSolves = 0;
+    let mu = this.linearBackend === 'kkt-wasm' && this.lastMu ? this.lastMu.slice() : new Float64Array(this.hard.length);
+    let lineSearchReductions = 0, qpIterations = 0, responseSolves = 0;
     let state = this.state(prediction, h, mu);
     for (let iteration = 0; iteration <= passes; iteration++) {
       if (state.maxForceN <= this.forceToleranceN && state.violationM <= this.lengthToleranceM &&
           state.dualViolationN <= this.dualToleranceN && state.complementarityJ <= this.complementarityToleranceJ) {
         for (const c of this.soft) c.lambda = -h * h * c.value(this.pos).C / c.alpha;
         this.hard.forEach((c, j) => c.lambda = -h * h * mu[j]);
+        if (this.linearBackend === 'kkt-wasm') this.lastMu = mu.slice();
         return { method: 'полное уравнение энергии', converged: true, iterations: iteration, qpIterations, responseSolves,
+          linearBackend: this.linearBackend, factorEntries: this.kktPattern?.cols.length ?? this.pattern?.cols.length ?? this.coreDofs * (state.band + 1),
           lineSearchReductions, bandwidth: state.band, borderCoordinates: this.free.length - this.coreDofs, maxForceResidualN: state.maxForceN,
           maxHardViolationM: state.violationM, complementarityJ: state.complementarityJ,
           forceToleranceN: this.forceToleranceN, lengthToleranceM: this.lengthToleranceM,

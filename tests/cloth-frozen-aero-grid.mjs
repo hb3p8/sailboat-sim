@@ -13,6 +13,7 @@ import { gennakerClew } from '../sim/aero.js';
 import { constraintFamily, constraintErrorsOf, observeClothMechanics } from './lib/cloth-mechanics.mjs';
 import { installEnergyExperiment } from './lib/cloth-energy-experiment.mjs';
 import { IMPLICIT_TOLERANCES } from './lib/cloth-implicit-motion.mjs';
+import { loadSparseFactor } from './lib/cloth-sparse-wasm.mjs';
 import { wrenchOf } from './lib/gennaker-observables.mjs';
 import { sharedInputFromCloth, installSharedInput } from './lib/cloth-shared-input.mjs';
 
@@ -24,13 +25,16 @@ const sourcePaths = [...readdirSync(resolve(root, 'sim')).filter(f => f.endsWith
   'tests/cloth-frozen-aero-grid.mjs', 'tests/lib/cloth-mechanics.mjs',
   'tests/lib/cloth-energy-experiment.mjs', 'tests/lib/cloth-energy-motion.mjs',
   'tests/lib/cloth-material.mjs', 'tests/cloth-compliance.mjs', 'tests/lib/cloth-implicit-motion.mjs', 'tests/lib/cloth-linear-solve.mjs',
+  'tests/lib/cloth-sparse-solve.mjs',
+  'tests/lib/cloth-sparse-wasm.mjs', 'tests/lib/cloth-sparse-kernel.c',
+  'tests/lib/cloth-kkt-direction.mjs',
   'tests/lib/gennaker-observables.mjs', 'tests/lib/cloth-shared-input.mjs'];
 const sourceSha256 = Object.fromEntries(sourcePaths.map(p => [p, hash(readFileSync(resolve(root, p)))]));
 const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
 const dirty = Boolean(execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim());
 const startedAt = new Date().toISOString();
 const numericFlags = ['tack', 'sheet', 'iter', 'cloth-hz', 'load-scale', 'gravity-scale',
-  'sheet-ramp', 'bend', 'seconds', 'cols', 'grids', 'out'];
+  'sheet-ramp', 'bend', 'seconds', 'cols', 'grids', 'out', 'linear-backend', 'linear-wasm'];
 const booleanFlags = ['fixed-load', 'fixed-normals', 'edges', 'cells', 'cut-nesting',
   'board-material', 'attachment-paths', 'rigid-board', 'mechanics', 'without-shear',
   'without-bend', 'corner-gap', 'hold-cut-clew', 'energy-material', 'implicit-motion', 'audit-input', 'shared-input', 'continuous-cut', 'analytic-cut-profile', 'joined-cut-profile'];
@@ -65,6 +69,13 @@ const withoutShear = process.argv.includes('--without-shear');
 const withoutBend = process.argv.includes('--without-bend');
 const energyMaterial = process.argv.includes('--energy-material');
 const implicitMotion = process.argv.includes('--implicit-motion');
+const linearBackend = process.argv.find(s => s.startsWith('--linear-backend='))?.slice('--linear-backend='.length) ?? 'band-js';
+const wasmPath = process.argv.find(s => s.startsWith('--linear-wasm='))?.slice('--linear-wasm='.length);
+if (!['band-js', 'sparse-js', 'sparse-wasm', 'kkt-wasm'].includes(linearBackend) || (seenFlags.has('linear-backend') && !implicitMotion) ||
+    ['sparse-wasm', 'kkt-wasm'].includes(linearBackend) !== Boolean(wasmPath))
+  throw new Error('--linear-backend: нужен band-js, sparse-js, sparse-wasm или kkt-wasm и --implicit-motion; WASM требует --linear-wasm=путь');
+const wasmBytes = wasmPath ? readFileSync(resolve(root, wasmPath)) : null;
+const wasmSparseFactor = wasmBytes ? await loadSparseFactor(wasmBytes) : undefined;
 const auditInput = process.argv.includes('--audit-input');
 const sharedInput = process.argv.includes('--shared-input');
 const continuousCut = process.argv.includes('--continuous-cut');
@@ -236,6 +247,7 @@ const verifyInputs = () => {
   for (const path of sourcePaths) assert.equal(hash(readFileSync(resolve(root, path))), sourceSha256[path],
     `Исходник изменился во время опыта: ${path}`);
   assert.equal(hash(readFileSync(packPath)), hash(packBytes), 'Пакет изменился во время опыта');
+  if (wasmBytes) assert.equal(hash(readFileSync(resolve(root, wasmPath))), hash(wasmBytes), 'Модуль WASM изменился во время опыта');
   assert.equal(frozenInput(), inputBefore, 'Замороженный вход изменился');
 };
 const saveOutcome = extra => {
@@ -243,9 +255,10 @@ const saveOutcome = extra => {
   const path = resolve(root, outArg); mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify({ schema: 1, startedAt, createdAt: new Date().toISOString(),
     revision, dirty, physicsSha256: hash(packBytes), sourceSha256,
+    ...(wasmBytes ? { linearWasm: { path: wasmPath, sha256: hash(wasmBytes) } } : {}),
     config: { tack, sheet, iter, clothHz, seconds, cols: grids.map(g => g.cols), grids, auditInput, loadScale, gravityScale, sheetRamp,
       fixedLoad, fixedNormals, bend, boardMaterial, attachmentPaths, rigidBoard, mechanics,
-      withoutShear, withoutBend, holdCutClew, energyMaterial, implicitMotion, sharedInput, continuousCut, analyticCutProfile, joinedCutProfile },
+      withoutShear, withoutBend, holdCutClew, energyMaterial, implicitMotion, linearBackend, sharedInput, continuousCut, analyticCutProfile, joinedCutProfile },
     ...(sharedInput ? { sharedInputField: { ...sharedInputField, values: Array.from(sharedInputField.values),
       parameterDomain: 'доли высоты/ширины [0,1]×[0,1]',
       rule: 'билинейные плотности из исходных узловых интегралов 11×9; точное распределение 2×2 точками на вложенных ячейках',
@@ -268,7 +281,7 @@ for (const { rows, cols: n } of grids) {
     if ((withoutShear && family === 'shear') || (withoutBend && family === 'bend')) cl.ck[k] = 0;
   }
   if (sharedInput) installSharedInput(cl,sharedInputField);
-  const energy = energyMaterial ? installEnergyExperiment(cl, { implicit: implicitMotion }) : null;
+  const energy = energyMaterial ? installEnergyExperiment(cl, { implicit: implicitMotion, linearBackend, wasmSparseFactor }) : null;
   const observer = mechanics ? observeClothMechanics(cl) : null;
   let warmup = null;
   const samples = [], wallStart = performance.now();

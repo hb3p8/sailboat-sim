@@ -7,23 +7,26 @@ import {execFileSync} from 'node:child_process';
 import {resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-export function commonNodeDistances(coarse,fine,a,b) {
-  assert.ok([coarse.rows,coarse.cols,fine.rows,fine.cols].every(n=>Number.isInteger(n)&&n>=2),
+export function commonNodeDistances(coarse,fine,a,b,sampling=coarse) {
+  assert.ok([coarse.rows,coarse.cols,fine.rows,fine.cols,sampling.rows,sampling.cols].every(n=>Number.isInteger(n)&&n>=2),
     'Нужны целые размеры сеток не менее двух');
   const sr=(fine.rows-1)/(coarse.rows-1),sc=(fine.cols-1)/(coarse.cols-1);
   assert.ok(sr>=1 && sc>=1 && Number.isInteger(sr) && Number.isInteger(sc),
     'Нужны вложенные сетки');
+  const ar=(coarse.rows-1)/(sampling.rows-1),ac=(coarse.cols-1)/(sampling.cols-1);
+  assert.ok(ar>=1 && ac>=1 && Number.isInteger(ar) && Number.isInteger(ac),
+    'Опорная сетка должна входить в обе измеряемые');
   for(const [grid,p] of [[coarse,a],[fine,b]])
     assert.ok(p.length===3*grid.rows*grid.cols && p.every(Number.isFinite),'Нужны конечные координаты всех узлов');
   let maximumM=0,squaredSumM2=0,location=null;
-  for(let r=0;r<coarse.rows;r++)for(let c=0;c<coarse.cols;c++) {
-    const i=3*(r*coarse.cols+c),j=3*(r*sr*fine.cols+c*sc);
+  for(let r=0;r<sampling.rows;r++)for(let c=0;c<sampling.cols;c++) {
+    const i=3*(r*ar*coarse.cols+c*ac),j=3*(r*ar*sr*fine.cols+c*ac*sc);
     const distanceM=Math.hypot(...[0,1,2].map(k=>b[j+k]-a[i+k]));
     squaredSumM2+=distanceM*distanceM;
-    if(distanceM>maximumM){maximumM=distanceM;location={row:r,col:c,u:c/(coarse.cols-1),v:r/(coarse.rows-1)};}
+    if(distanceM>maximumM){maximumM=distanceM;location={row:r,col:c,u:c/(sampling.cols-1),v:r/(sampling.rows-1)};}
   }
-  return {from:[coarse.rows,coarse.cols],to:[fine.rows,fine.cols],nodeCount:coarse.rows*coarse.cols,
-    maximumM,rmsM:Math.sqrt(squaredSumM2/(coarse.rows*coarse.cols)),location};
+  return {from:[coarse.rows,coarse.cols],to:[fine.rows,fine.cols],samplingGrid:[sampling.rows,sampling.cols],
+    nodeCount:sampling.rows*sampling.cols,maximumM,rmsM:Math.sqrt(squaredSumM2/(sampling.rows*sampling.cols)),location};
 }
 
 function main() {
@@ -66,11 +69,18 @@ function main() {
     const rest=commonNodeDistances(results[i-1],results[i],results[i-1].referencePositionsM,results[i].referencePositionsM);
     assert.equal(rest.maximumM,0,'Исходный крой различается в общих узлах');
   }
-  const comparison=times.map(timeS=>({timeS,pairs:results.slice(1).map((r,i)=>
-    commonNodeDistances(results[i],r,results[i].samples.find(s=>s.timeS===timeS).positionsM,
-      r.samples.find(s=>s.timeS===timeS).positionsM))}));
+  const comparison=times.map(timeS=>{
+    const measure=(r,i,sampling)=>commonNodeDistances(results[i],r,
+      results[i].samples.find(s=>s.timeS===timeS).positionsM,
+      r.samples.find(s=>s.timeS===timeS).positionsM,sampling);
+    return {timeS,pairs:results.slice(1).map((r,i)=>measure(r,i,results[i])),
+      fixedGridPairs:results.slice(1).map((r,i)=>measure(r,i,results[0]))};
+  });
   for(const {timeS,pairs} of comparison)for(const p of pairs)
     console.log(`${timeS.toFixed(3)} с, ${p.from.join('×')}→${p.to.join('×')}: максимум ${(1e3*p.maximumM).toFixed(6)} мм, RMS ${(1e3*p.rmsM).toFixed(6)} мм`);
+  for(const {timeS,fixedGridPairs} of comparison)for(const p of fixedGridPairs)
+    console.log(`${timeS.toFixed(3)} с, опорная ${p.samplingGrid.join('×')}, ${p.from.join('×')}→${p.to.join('×')}: `+
+      `максимум ${(1e3*p.maximumM).toFixed(6)} мм, RMS ${(1e3*p.rmsM).toFixed(6)} мм`);
   for(const {path,bytes} of sources)assert.equal(sha(readFileSync(path)),sha(bytes),'Запись изменилась во время сравнения');
   for(const [path,hash] of Object.entries(physicalSource))assert.equal(sha(readFileSync(path)),hash,'Текущая модель отличается от записанной');
   assert.equal(sha(readFileSync('out/export/physics.json')),first.physicsSha256,'Текущий пакет отличается от записанного');
@@ -86,7 +96,8 @@ function main() {
     physicsSha256:first.physicsSha256,phase:'complete',inputsVerified:true,physicalAcceptance:false,
     config:{...first.config,grids:results.map(r=>({rows:r.rows,cols:r.cols})),cols:results.map(r=>r.cols)},
     rule:'евклидовы расстояния в общих узлах и сохранённых кадрах; без переноса, поворота или интерполяции времени; '+
-      'RMS по общим узлам, не по всей площади; совпавший вход и модель не принимают физику',comparison,results};
+      'RMS по общим узлам, не по всей площади; отдельно один фиксированный набор на самой малой сетке; '+
+      'совпавший вход и модель не принимают физику',comparison,results};
   mkdirSync(dirname(destination),{recursive:true});writeFileSync(destination,JSON.stringify(output,null,2)+'\n');
 }
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url))main();

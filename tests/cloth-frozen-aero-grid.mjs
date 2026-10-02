@@ -33,7 +33,7 @@ const numericFlags = ['tack', 'sheet', 'iter', 'cloth-hz', 'load-scale', 'gravit
   'sheet-ramp', 'bend', 'seconds', 'cols', 'grids', 'out'];
 const booleanFlags = ['fixed-load', 'fixed-normals', 'edges', 'cells', 'cut-nesting',
   'board-material', 'attachment-paths', 'rigid-board', 'mechanics', 'without-shear',
-  'without-bend', 'corner-gap', 'hold-cut-clew', 'energy-material', 'implicit-motion', 'audit-input', 'shared-input'];
+  'without-bend', 'corner-gap', 'hold-cut-clew', 'energy-material', 'implicit-motion', 'audit-input', 'shared-input', 'continuous-cut'];
 const seenFlags = new Set();
 for (const argument of process.argv.slice(2)) {
   const equals = argument.indexOf('='), name = argument.slice(2, equals < 0 ? undefined : equals);
@@ -67,6 +67,7 @@ const energyMaterial = process.argv.includes('--energy-material');
 const implicitMotion = process.argv.includes('--implicit-motion');
 const auditInput = process.argv.includes('--audit-input');
 const sharedInput = process.argv.includes('--shared-input');
+const continuousCut = process.argv.includes('--continuous-cut');
 const seconds = arg('seconds', 30);
 const outArg = process.argv.find(s => s.startsWith('--out='))?.slice('--out='.length);
 if (process.argv.includes('--out') || outArg === '') throw new Error('--out: требуется путь после =');
@@ -100,6 +101,8 @@ if (sharedInput && (!fixedLoad || !rigidBoard || !holdCutClew || sheetRamp ||
   throw new Error('--shared-input: нужны --fixed-load --rigid-board --hold-cut-clew и полное движение или --audit-input');
 if (sharedInput && grids.some(g => (g.rows-1)%10 || (g.cols-1)%8))
   throw new Error('--shared-input: сетки должны быть вложены в исходную 11×9');
+if (continuousCut && (!fixedLoad || !rigidBoard || !holdCutClew || (!auditInput && !implicitMotion)))
+  throw new Error('--continuous-cut: нужен отдельный опыт --fixed-load --rigid-board --hold-cut-clew с аудитом входа или полным движением');
 const wrap = x => ((x + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
 
 const b = new Boat(pack);
@@ -138,7 +141,7 @@ const frozenInput = () => JSON.stringify({
 const inputBefore = frozenInput();
 let sharedInputField = null;
 if (sharedInput) {
-  const source = new Cloth(b.rig.sails[2],2,{rows:11,cols:9,rigidBoard:true});
+  const source = new Cloth(b.rig.sails[2],2,{rows:11,cols:9,rigidBoard:true,continuousCut});
   source.advance = function (...args) { this.forcesAt(...args); };
   if (!source.step(b,1/clothHz)) throw new Error('Не удалось подготовить общий вход');
   sharedInputField = sharedInputFromCloth(source,b);
@@ -236,7 +239,7 @@ const saveOutcome = extra => {
     revision, dirty, physicsSha256: hash(packBytes), sourceSha256,
     config: { tack, sheet, iter, clothHz, seconds, cols: grids.map(g => g.cols), grids, auditInput, loadScale, gravityScale, sheetRamp,
       fixedLoad, fixedNormals, bend, boardMaterial, attachmentPaths, rigidBoard, mechanics,
-      withoutShear, withoutBend, holdCutClew, energyMaterial, implicitMotion, sharedInput },
+      withoutShear, withoutBend, holdCutClew, energyMaterial, implicitMotion, sharedInput, continuousCut },
     ...(sharedInput ? { sharedInputField: { ...sharedInputField, values: Array.from(sharedInputField.values),
       parameterDomain: 'доли высоты/ширины [0,1]×[0,1]',
       rule: 'билинейные плотности из исходных узловых интегралов 11×9; точное распределение 2×2 точками на вложенных ячейках',
@@ -252,7 +255,7 @@ for (const { rows, cols: n } of grids) {
   b.p.rig.gennaker.clew_arc_r = clewArc;
   b.o.genSheetLen = sheetRamp ? designSheet : sheet;
   const cl = new Cloth(b.rig.sails[2], 2, { rows, cols: n, iter,
-    ...(bend == null ? {} : { bend }), boardMaterial, attachmentPaths, rigidBoard });
+    ...(bend == null ? {} : { bend }), boardMaterial, attachmentPaths, rigidBoard, continuousCut });
   // Топология и крой сохраняются: исключается только действие выбранной семьи.
   for (let k = 0; k < cl.ck.length; k++) {
     const family = constraintFamily(cl, k);

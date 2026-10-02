@@ -46,7 +46,7 @@ Makefile — источник состава наборов: обновляйт�
 | Движение нового материала | `cloth-energy-motion.test.mjs`; затем `--energy-material` в замороженном стенде, контроль податливости, уравнения движения и физического силового остатка по отдельности |
 | Полное уравнение энергии | `cloth-implicit-motion.test.mjs`, `cloth-implicit-invariants.test.mjs`; замороженный стенд с `--energy-material --implicit-motion`, ошибка сил и длины на каждом подшаге, затем сетка/время/итерации |
 | Один вход для уточнения ткани | `cloth-shared-input.test.mjs`; `--shared-input --audit-input` проверяет общие силы/массу, затем `--shared-input --implicit-motion` проверяет движение на вложенных сетках |
-| Исходный крой по высоте | `cloth-cut-height.mjs`; общие узлы и зеркало проверяются, расстояние от границы до ближайшего ряда сохраняется отдельно; успешная запись не означает непрерывности кроя |
+| Исходный крой | `cloth-cut.test.mjs` — известная поверхность, границы и пределы; `cloth-cut-height.mjs --cut=original\|continuous` — расстояния от границ, площадь и края, `--grids` уточняет оба направления; успешная запись не принимает физический крой |
 | Подшаг и история скорости ткани | `cloth-time-step.test.mjs`, cloth и replay; обе стороны перехода времени, снимок, затем затронутые замороженный/совместный прогоны |
 | Местное давление | local-pressure, local-pressure-coupling; замороженная форма, оба направления ветра и связанная ткань |
 | Корпус, экипаж и плавучесть | buoyancy, physics; planing/stability при затронутом поведении |
@@ -190,6 +190,14 @@ node tests/cloth-cut-height.mjs --out=out/acceptance/cut-height-continuity.json
 node tests/cloth-cut-height.mjs --rows=11,41,161 --out=out/acceptance/cut-height-review.json
 node scripts/cloth_energy_review.mjs --input=out/acceptance/cut-height-review.json --out=out/acceptance/cut-height-review.html
 ```
+
+Явный новый крой задаётся `--cut=continuous`; команды чистого аудита и
+сравнения с прежним вариантом — в [исследовании материала](../research/cloth-material.md#непрерывное-согласование-границ-исходного-кроя).
+На замороженном стенде соответствующий флаг — `--continuous-cut`.
+Он требует неподвижных углов, постоянной нагрузки, жёсткой планки и либо
+`--audit-input`, либо `--implicit-motion`. При `--shared-input` исходное поле
+11×9 также строится на новом крое. Поэтому это отдельная постановка,
+её нагрузку нельзя подменять входом прежней серии.
 
 Генератор распознаёт `config.cutOnly`: он показывает только исходный крой,
 без фиктивного движения или нагрузки. Вопросы и подписи отличаются от

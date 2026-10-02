@@ -34,6 +34,7 @@ import { edgeFn, sailSagAt, STRIPS, NCHORD, gennakerClew,
          gennakerSheetLen, designAt,
          DESIGN_DRAFT, DESIGN_ENTRY, DESIGN_EXIT } from './aero.js';
 import { localPressureForRow, pressureToNodes } from './local-pressure.js';
+import { matchedCutSurface } from './cloth-cut.js';
 
 // Сетка ткани. Строк — как у отрисовки (SAIL_ROWS), чтобы полотно и обвод резались
 // по одним и тем же высотам; столбцов девять при трёх панелях решётки, то есть
@@ -369,8 +370,9 @@ function bezShape(P) {
 }
 // Подбор ручек под объявленные пузо и место пуза: вложенные деления пополам.
 // Пузо растёт с суммой ручек, место пуза уезжает назад с долей задней.
-function bezSolve(cam, at, fin, fex) {
-  const key = cam.toFixed(4) + ',' + at.toFixed(3) + ',' + fin.toFixed(3) + ',' + fex.toFixed(3);
+function bezSolve(cam, at, fin, fex, exactKey = false) {
+  const key = exactKey ? ['точный', cam, at, fin, fex].join(',')
+    : cam.toFixed(4) + ',' + at.toFixed(3) + ',' + fin.toFixed(3) + ',' + fex.toFixed(3);
   const hit = BEZ_CACHE.get(key);
   if (hit) return hit;
   let rLo = 0.05, rHi = 0.95, P = null, sh = null;
@@ -543,6 +545,7 @@ export class Cloth {
     this.iter = opts && opts.iter ? opts.iter : ITER;
     this.freeClew = opts && opts.freeClew != null ? opts.freeClew : FREE_CLEW;
     this.cut3d = opts && opts.cut3d != null ? opts.cut3d : CUT3D;
+    this.continuousCut = opts && opts.continuousCut === true;
     this.rigidBoard = opts && opts.rigidBoard === true;
     this.boardMaterial = this.rigidBoard || (opts && opts.boardMaterial === true);
     this.attachmentPaths = opts && opts.attachmentPaths === true;
@@ -788,7 +791,7 @@ export class Cloth {
     const ent = DESIGN_ENTRY[kind] || DESIGN_ENTRY.main;
     const exi = (DESIGN_EXIT[kind] || DESIGN_EXIT.main) * Math.PI / 180;
     const solAt = (f) => bezSolve(designAt(dsg, f), designAt(dft, f),
-                                  designAt(ent, f) * Math.PI / 180, exi);
+                                  designAt(ent, f) * Math.PI / 180, exi, this.continuousCut);
     // ЦЕЛЬ ПОДБОРА — ОБМЕРНАЯ ШИРИНА НА ПОЛУВЫСОТЕ. Пузо теперь задаёт длину
     // строки само, поэтому развёртке серпа осталось ровно одно дело: развести
     // шкаторины так, чтобы парус вышел нужной ШИРИНЫ. Каждое измерение
@@ -861,6 +864,59 @@ export class Cloth {
     const nF = [nx * Math.cos(lo) + dxF * Math.sin(lo),
                 ny * Math.cos(lo) + dyF * Math.sin(lo),
                 nz * Math.cos(lo) + dzF * Math.sin(lo)];
+    if (this.continuousCut) {
+      // Явный опыт. Каждая боковая кромка проходит собственный диапазон высот
+      // от нижнего до верхнего угла. Кривые и их развёртка остаются прежними.
+      // Линейная по v поправка согласует внутреннее семейство с обеими
+      // границами без выбранной на глаз ширины переходной полосы.
+      // Полнота промежуточных сечений после поправки — следствие этой гипотезы;
+      // совпадение с проектными станциями и площадью требует отдельного аудита.
+      const a = [0, 0, 0], b = [0, 0, 0], p = [0, 0, 0], last = [0, 0, 0];
+      const section = (u, v, out) => {
+        if (v === 0 || v === 1) {
+          const front = v === 0 ? T : H, back = v === 0 ? C : HA;
+          for (let k = 0; k < 3; k++) { a[k] = front[k]; b[k] = back[k]; }
+        } else {
+          roundAtZ(T, H, gen.luff_round_m, gen.luff_round_at, nL,
+            T[2] + v * (H[2] - T[2]), a);
+          arcAtZ(C, HA, gen.leech_m, nB, C[2] + v * (HA[2] - C[2]), b);
+        }
+        if (u === 0 || u === 1) {
+          for (let k = 0; k < 3; k++) out[k] = (u === 0 ? a : b)[k];
+          return out;
+        }
+        let ox = b[1] - a[1], oy = a[0] - b[0];
+        if (oy * side < 0) { ox = -ox; oy = -oy; }
+        const length = Math.hypot(ox, oy);
+        const n = length < 1e-9 ? [0, side, 0] : [ox / length, oy / length, 0];
+        // Ключ без округления: результат не зависит от порядка запросов
+        // соседних станций на разных сетках. Основной вариант не меняется.
+        const sol = solAt(v);
+        return profAtPar(a, b, n, u, sol, out);
+      };
+      const bottom = (u, out) => profAt(T, C, gen.foot_cloth_m || gen.foot_m, nF, u, out);
+      const top = (u, out) => profAt(H, HA, gen.head_width_m, [0, side, 0], u, out);
+      this.cutAt = matchedCutSurface(section, bottom, top);
+      for (let r = 0; r < this.rows; r++) {
+        const v = this.rowF(r);
+        // Длина согласованной строки измеряется по той же поверхности,
+        // независимо от количества столбцов. Границы сохраняют заданные длины.
+        let length = 0;
+        for (let c = 0; c <= 256; c++) {
+          this.cutAt(c / 256, v, p);
+          if (c) length += Math.hypot(...p.map((x, k) => x - last[k]));
+          for (let k = 0; k < 3; k++) last[k] = p[k];
+        }
+        this.rowW[r] = r === 0 ? (gen.foot_cloth_m || gen.foot_m)
+          : r === this.rows - 1 ? gen.head_width_m : length;
+        for (let c = 0; c < this.cols; c++) {
+          this.cutAt(c / (this.cols - 1), v, p);
+          const i = this.ix(r, c);
+          this.dx[i] = p[0]; this.dy[i] = p[1]; this.dz[i] = p[2];
+        }
+      }
+      return;
+    }
     for (let r = 0; r < this.rows; r++) {
       // СТРОКИ СТОЯТ ПО ВЫСОТЕ, а не по равной доле длины шкаторин. Ширина
       // паруса объявлена обводом НА ВЫСОТЕ, и снимать её надо там же: по доле

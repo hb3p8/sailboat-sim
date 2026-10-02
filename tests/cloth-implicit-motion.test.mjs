@@ -7,15 +7,18 @@ import { borderedBandFactor } from './lib/cloth-linear-solve.mjs';
 
 const close = (a, b, tolerance = 2e-10) => assert.ok(Math.abs(a - b) < tolerance * Math.max(1, Math.abs(b)), `${a} != ${b}`);
 const options = { forceToleranceN: 1e-9, lengthToleranceM: 1e-11, dualToleranceN: 1e-10, complementarityToleranceJ: 1e-10 };
-// Независимая линейная система A=L Lᵀ с заданным решением; две ширины и несколько правых частей.
-for (const band of [1, 3]) {
-  const n = 9, lower = Array.from({ length: n }, () => new Float64Array(n));
-  for (let i = 0; i < n; i++) for (let j = Math.max(0, i - band); j <= i; j++) lower[i][j] = i === j ? 2 + i / 10 : .13 * (i - j);
+// Независимая A=L Lᵀ: диагональ, узкие/широкая полосы, несколько правых частей.
+// Ширины 161/305 соответствуют парусу 21×17/41×33; есть обе границы полосы.
+for (const [n, band] of [[9, 0], [9, 1], [9, 3], [257, 161], [401, 305], [9, 12]]) {
+  const lower = Array.from({ length: n }, () => new Float64Array(n));
+  // Нормировка сохраняет диагональное преобладание L при росте полосы;
+  // иначе широкий контроль проверяет потерю точности плохой матрицы.
+  for (let i = 0; i < n; i++) for (let j = Math.max(0, i - band); j <= i; j++) lower[i][j] = i === j ? 2 + i / 10 : .13 * (i - j) / (n > 9 ? band : 1);
   const dense = lower.map((a, i) => Float64Array.from({ length: n }, (_, j) => a.reduce((sum, v, k) => sum + v * lower[j][k], 0)));
   const packed = new Float64Array(n * (band + 1));
   for (let i = 0; i < n; i++) for (let j = Math.max(0, i - band); j <= i; j++) packed[i * (band + 1) + i - j] = dense[i][j];
   const solve = bandFactor(packed, n, band);
-  for (const x of [Float64Array.from({ length: n }, (_, i) => i - 2), new Float64Array(n).fill(1)]) {
+  for (const x of [Float64Array.from({ length: n }, (_, i) => n > 9 ? Math.sin(i) : i - 2), new Float64Array(n).fill(1)]) {
     const rhs = dense.map(row => row.reduce((sum, v, j) => sum + v * x[j], 0)), result = solve(rhs);
     result.forEach((v, i) => close(v, x[i], 1e-12));
   }

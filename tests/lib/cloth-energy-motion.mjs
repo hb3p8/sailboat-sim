@@ -12,6 +12,7 @@ export class EnergyMotion {
     this.mass = Float64Array.from(mass); this.w = Float64Array.from(mass, m => 1 / m);
     this.constraints = constraints.map(c => ({ ...c, lambda: 0 })); this.dampingHz = dampingHz;
     this.fixed = new Set(fixed); this.board = board;
+    this.supportMotionActive = false;
     this.fixedPositions = new Map(fixed.map(i => [i, Array.from(this.pos.slice(3 * i, 3 * i + 3))]));
     this.target = Int32Array.from(mass, (_, i) => i); this.fraction = new Float64Array(mass.length).fill(1);
     for (const i of fixed) {
@@ -29,13 +30,15 @@ export class EnergyMotion {
         throw new Error('Некорректное аффинное верхнее крепление');
       // Копия постановки: внешняя правка fractions не меняет текущую механику.
       this.board = { ...board, nodes: nodes.slice(), fractions: fractions.slice() };
-      let effectiveMass = 0;
+      let effectiveMass = 0, crossMass = 0;
       for (let k = 0; k < nodes.length; k++) {
         const i = nodes[k], t = fractions[k];
         this.target[i] = end; this.fraction[i] = t; this.w[i] = 0;
         effectiveMass += mass[i] * t * t;
+        crossMass += mass[i] * t * (1 - t);
       }
       this.w[end] = 1 / effectiveMass; this.boardMass = effectiveMass;
+      this.boardCrossMass = crossMass;
       this.reconstruct(); this.prev.set(this.pos);
     }
     for (const c of this.constraints) if (!(Number.isFinite(c.alpha) && c.alpha >= 0) || typeof c.value !== 'function')
@@ -72,7 +75,8 @@ export class EnergyMotion {
     if (!(h > 0)) return 0;
     let energy = 0;
     for (let i = 0; i < this.mass.length; i++) if (this.w[i] > 0 ||
-        (this.board && this.board.nodes.includes(i) && !this.fixed.has(i)))
+        (this.board && this.board.nodes.includes(i) && !this.fixed.has(i)) ||
+        (this.supportMotionActive && this.fixed.has(i)))
       for (let d = 0; d < 3; d++) energy += .5 * this.mass[i] *
         ((this.pos[3 * i + d] - this.prev[3 * i + d]) / h) ** 2;
     return energy;
@@ -94,33 +98,68 @@ export class EnergyMotion {
     for (let pass = 0; pass < passes; pass++) for (const c of this.constraints) this.project(c, h);
   }
 
-  step(force, h, passes) {
+  movingSupportsAllowed() { return false; }
+
+  // Команда применяется внутри подшага; внешняя перестановка pos не является
+  // командой. Отказ возвращает и историю, и множители, и принятые закрепления.
+  step(force, h, passes, supportTargets) {
     if (force?.length !== this.pos.length || !Array.from(force).every(Number.isFinite) ||
         !Number.isFinite(h) || !(h > 0) || !Number.isInteger(passes) || passes < 1)
       throw new Error('Некорректные сила, подшаг или число проходов');
     for (const [i, fixedPosition] of this.fixedPositions) for (let d = 0; d < 3; d++)
       if (this.pos[3 * i + d] !== fixedPosition[d])
         throw new Error('Подвижное закрепление требует отдельного учёта работы');
-    const old = this.pos.slice(), prior = this.prev.slice(), priorDt = this.prevDt || h;
+    if (supportTargets !== undefined && (!this.movingSupportsAllowed() || !Array.isArray(supportTargets)))
+      throw new Error('Перемещение закреплений требует полного уравнения и массива команд');
+    const targets = (supportTargets ?? []).map(target => {
+      if (!target || !this.fixed.has(target.node) || !Array.isArray(target.positionM) ||
+          target.positionM.length !== 3 || !target.positionM.every(Number.isFinite))
+        throw new Error('Некорректная команда закрепления');
+      return { node:target.node, positionM:target.positionM.slice() };
+    });
+    if (new Set(targets.map(t => t.node)).size !== targets.length) throw new Error('Закрепление задано дважды');
+    const old = this.pos.slice(), prior = this.prev.slice(), previousDt = this.prevDt;
+    const lambdas = this.constraints.map(c => c.lambda), priorMu = this.lastMu, active = this.supportMotionActive;
+    try {
+      if (supportTargets !== undefined) this.supportMotionActive = true;
+      const result = this.advanceStep(force,h,passes,targets,old,prior);
+      for (const target of targets) this.fixedPositions.set(target.node,target.positionM);
+      return result;
+    } catch (error) {
+      this.pos.set(old); this.prev.set(prior); this.prevDt = previousDt;
+      this.constraints.forEach((c,i) => { c.lambda = lambdas[i]; });
+      if (priorMu === undefined) delete this.lastMu; else this.lastMu = priorMu;
+      this.supportMotionActive = active;
+      throw error;
+    }
+  }
+
+  advanceStep(force,h,passes,targets,old,prior) {
+    const priorDt = this.prevDt || h;
     const initialKineticJ = this.kinetic(), reducedForce = this.reduceField(force), decay = Math.exp(-this.dampingHz * h);
     let initialSoftEnergyJ = 0;
     for (const c of this.constraints) if (c.alpha > 0) initialSoftEnergyJ += .5 * c.value(old).C ** 2 / c.alpha;
     const dampingForce = new Float64Array(this.pos.length);
     for (let i = 0; i < this.mass.length; i++) if (this.w[i] ||
-        (this.board && this.board.nodes.includes(i) && !this.fixed.has(i))) for (let d = 0; d < 3; d++) {
+        (this.board && this.board.nodes.includes(i) && !this.fixed.has(i)) ||
+        (this.supportMotionActive && this.fixed.has(i))) for (let d = 0; d < 3; d++) {
       const k = 3 * i + d; dampingForce[k] = this.mass[i] * (decay - 1) * (old[k] - prior[k]) / (priorDt * h);
     }
+    for (const {node,positionM} of targets) this.pos.set(positionM,3*node);
     for (let i = 0; i < this.mass.length; i++) if (this.w[i]) for (let d = 0; d < 3; d++) {
       const k = 3 * i + d;
       this.pos[k] += decay * (old[k] - prior[k]) / priorDt * h + h * h * this.w[i] * reducedForce[k];
     }
+    if (this.board && this.supportMotionActive) for (let d=0;d<3;d++) {
+      const k=3*this.board.head+d, delta=this.pos[k]-old[k]-decay*(old[k]-prior[k])/priorDt*h;
+      // В полной массе планки есть смешанный член Σ m t(1−t).
+      // Движение головы меняет предсказание свободного конца даже без силы.
+      if (delta!==0) this.pos[3*this.board.end+d] -= this.boardCrossMass/this.boardMass*delta;
+    }
     this.reconstruct(); const prediction = this.pos.slice();
     for (const c of this.constraints) c.lambda = 0;
-    let solver;
-    try {
-      solver = this.solve(prediction, h, passes);
-      if (!Array.from(this.pos).every(Number.isFinite)) throw new Error('Не-конечная позиция ткани');
-    } catch (error) { this.pos.set(old); this.prev.set(prior); throw error; }
+    const solver = this.solve(prediction, h, passes);
+    if (!Array.from(this.pos).every(Number.isFinite)) throw new Error('Не-конечная позиция ткани');
     this.prev.set(old); this.prevDt = h;
     const kineticJ = this.kinetic(), predictedResidual = new Float64Array(this.pos.length);
     const materialResidual = new Float64Array(this.pos.length), constraintForce = new Float64Array(this.pos.length);
@@ -158,16 +197,44 @@ export class EnergyMotion {
       workJ += force[k] * displacement; dampingWorkJ += dampingForce[k] * displacement;
       hardWorkEstimateJ += hardForce[k] * displacement;
     }
-    // Закрепления неподвижны, поэтому их фактическая работа равна нулю.
+    const support = this.supportMotionActive
+      ? this.supportAudit(force,h,priorDt,old,prior,dampingForce,materialResidual,hardForce,
+          kineticJ-initialKineticJ,softEnergyJ-initialSoftEnergyJ,workJ,dampingWorkJ,hardWorkEstimateJ)
+      : null;
+    // Без явной команды закрепления неподвижны и их работа равна нулю.
     // constraintForce — оценка из множителей, не реакция, принятая для лодки.
     return { hS: h, passes, initialKineticJ, kineticJ, kineticChangeJ: kineticJ - initialKineticJ,
       initialSoftEnergyJ, softEnergyJ, softEnergyChangeJ: softEnergyJ - initialSoftEnergyJ,
-      appliedWorkJ: workJ, dampingWorkJ, hardWorkEstimateJ, supportWorkJ: 0, complianceResiduals, maxHardViolationM,
-      discreteEnergyDefectJ: kineticJ - initialKineticJ + softEnergyJ - initialSoftEnergyJ - workJ - dampingWorkJ - hardWorkEstimateJ,
+      appliedWorkJ: workJ, dampingWorkJ, hardWorkEstimateJ, supportWorkJ: support?.supportWorkJ ?? 0, complianceResiduals, maxHardViolationM,
+      discreteEnergyDefectJ: kineticJ - initialKineticJ + softEnergyJ - initialSoftEnergyJ - workJ - dampingWorkJ - hardWorkEstimateJ - (support?.supportWorkJ ?? 0),
       maxMotionResidualN, rmsMotionResidualN: Math.sqrt(rmsMotionResidualN / Math.max(1, dofs)),
       maxPhysicalResidualN, rmsPhysicalResidualN: Math.sqrt(rmsPhysicalResidualN / Math.max(1, dofs)),
       constraintForce, hardForce, prediction,
+      ...(support ?? {}),
       ...(solver ? { solver } : {}),
       interpretation: 'остатки податливости, множителей и физического уравнения измерены отдельно; реакции не приняты' };
+  }
+
+  supportAudit(force,h,priorDt,old,prior,dampingForce,materialGradient,hardForce,
+      kineticChangeJ,softEnergyChangeJ,appliedWorkJ,dampingWorkJ,hardWorkJ) {
+    const supportForceN = new Float64Array(this.pos.length);
+    let inertiaIncrementJ=0, materialIncrementJ=-softEnergyChangeJ;
+    for (let i=0;i<this.mass.length;i++) for (let d=0;d<3;d++) {
+      const k=3*i+d, displacement=this.pos[k]-old[k];
+      const velocity=displacement/h, priorVelocity=(old[k]-prior[k])/priorDt;
+      const residual=this.mass[i]*(velocity-priorVelocity)/h-force[k]-dampingForce[k]+materialGradient[k]-hardForce[k];
+      inertiaIncrementJ += .5*this.mass[i]*(velocity-priorVelocity)**2;
+      materialIncrementJ += materialGradient[k]*displacement;
+      if (this.board?.nodes.includes(i)) {
+        const weight=1-this.board.fractions[this.board.nodes.indexOf(i)];
+        supportForceN[3*this.board.head+d] += weight*residual;
+      } else if (this.fixed.has(i)) supportForceN[k] += residual;
+    }
+    let supportWorkJ=0;
+    for (const i of this.fixed) for (let d=0;d<3;d++) {
+      const k=3*i+d; supportWorkJ += supportForceN[k]*(this.pos[k]-old[k]);
+    }
+    return {supportForceN,supportWorkJ,inertiaIncrementJ,materialIncrementJ,
+      discreteBalanceResidualJ:kineticChangeJ+softEnergyChangeJ-appliedWorkJ-dampingWorkJ-hardWorkJ-supportWorkJ+inertiaIncrementJ+materialIncrementJ};
   }
 }

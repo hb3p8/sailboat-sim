@@ -14,6 +14,7 @@ export const IMPLICIT_TOLERANCES = Object.freeze({ forceToleranceN: 1e-6,
   lengthToleranceM: 1e-9, dualToleranceN: 1e-8, complementarityToleranceJ: 1e-8 });
 
 export class ImplicitEnergyMotion extends EnergyMotion {
+  movingSupportsAllowed() { return true; }
   constructor(options) {
     super(options);
     const { forceToleranceN, lengthToleranceM, dualToleranceN, complementarityToleranceJ } = { ...IMPLICIT_TOLERANCES, ...options };

@@ -92,7 +92,7 @@ for (let i = 0; i < 30; i++) assert(cloth.step(b, 1/30));
 assert(error(cloth.pos, baseline.positionsM ?? baseline.samples.at(-1).positionsM) <= 1e-8);
 assert.equal(expected.length, 100);
 const paths = [...Object.keys(original.sourceSha256), 'scripts/cloth_browser_fixture.mjs', 'tests/lib/cloth-browser-motion.mjs',
-  'sim/cloth-browser-review.js', 'sim/cloth-browser-review.html', 'viewer/vendor/three.webgpu.js'];
+  'scripts/cloth_browser_review.mjs', 'sim/cloth-browser-review.html', 'viewer/vendor/three.webgpu.js'];
 const sourceSha256 = Object.fromEntries(paths.map(p => [p, hash(readFileSync(p))]));
 writeFileSync(output, JSON.stringify({ schema: 1, revision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   dirty: Boolean(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim()),

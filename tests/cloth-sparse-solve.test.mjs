@@ -87,3 +87,31 @@ const mixed = wasm.ldl(entries, interleaved, Int32Array.of(1, 1, -1, 1));
 const x = Float64Array.of(1, -2, .5, 3), b = A.map(row => row.reduce((s, v, i) => s + v * x[i], 0));
 mixed(b).forEach((v, i) => close(v, x[i]));
 console.log('ок: известное совместное решение и отрицательные диагонали ограничений');
+
+// Явное освобождение: второй фактор получает своё место, первый сохраняется.
+// Числа независимы: для матрицы [a] ответ равен b/a.
+for (const diagonal of [false, true]) {
+  const pool = await loadSparseFactor(readFileSync(wasmArg.slice(7)));
+  const pattern = sparsePattern(1, [[0]]), rhs = Float64Array.of(7);
+  const factor = a => diagonal ? pool.ldl(Float64Array.of(a), pattern, Int32Array.of(1)) : pool(Float64Array.of(a),pattern);
+  const kept = factor(2), temporary = factor(5), answer = temporary(rhs);
+  temporary.release(); temporary.release();
+  assert.equal(pool.statistics().releases, 1, 'Повторное освобождение не кладёт место в запас дважды');
+  const next = factor(8);
+  assert.equal(pool.statistics().instancesCreated, 2); assert.equal(pool.statistics().instancesReused, 1);
+  assert.equal(pool.statistics().symbolicUploads, 2);
+  assert.throws(() => temporary(rhs), /освобождён/); assert.throws(() => temporary.many([]), /освобождён/);
+  close(kept(rhs)[0], 3.5); close(next(rhs)[0], .875); close(answer[0], 1.4);
+  // Рост переиспользуемого места не затрагивает удерживаемый решатель/ответ.
+  const wide = next.many(Array.from({length:20001}, () => rhs));
+  assert(pool.statistics().grownPages > 0); wide.forEach(a => close(a[0],.875));
+  close(kept(rhs)[0], 3.5); close(answer[0],1.4);
+  next.release(); assert.throws(() => factor(0), /не положительна/);
+  const afterFailure = factor(4); close(afterFailure(rhs)[0], 1.75); afterFailure.release();
+  assert.equal(pool.statistics().instancesCreated,2, 'Отказ возвращает место для следующего корректного фактора');
+  kept.release();
+}
+const independent = await loadSparseFactor(readFileSync(wasmArg.slice(7)),{reuse:false});
+for (let i=0;i<3;i++) { const a=independent(Float64Array.of(2),p); close(a(Float64Array.of(7))[0],3.5); a.release(); }
+assert.equal(independent.statistics().instancesCreated,3); assert.equal(independent.statistics().instancesReused,0);
+console.log('ок: повторное использование, сохранённые решатели/ответы, освобождение, отказ, рост памяти и отдельный контроль без запаса');

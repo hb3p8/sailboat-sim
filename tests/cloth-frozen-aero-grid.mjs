@@ -275,6 +275,7 @@ for (const { rows, cols: n } of grids) {
   b.o.genSheetLen = sheetRamp ? designSheet : sheet;
   const cl = new Cloth(b.rig.sails[2], 2, { rows, cols: n, iter,
     ...(bend == null ? {} : { bend }), boardMaterial, attachmentPaths, rigidBoard, continuousCut, analyticCutProfile, joinedCutProfile });
+  const wasmBefore = wasmSparseFactor?.statistics();
   // Топология и крой сохраняются: исключается только действие выбранной семьи.
   for (let k = 0; k < cl.ck.length; k++) {
     const family = constraintFamily(cl, k);
@@ -401,6 +402,7 @@ for (const { rows, cols: n } of grids) {
   results.push({ rows, cols: n, initialInput, warmup, mechanics: measured, samples,
     ...(energy ? { energyMotion: energy.snapshot() } : {}),
     constraints: constraintErrorsOf(cl), finalPositionsM: Array.from(cl.pos), referencePositionsM,
+    ...(wasmBefore ? { wasmMemory: Object.fromEntries(Object.entries(wasmSparseFactor.statistics()).map(([k,v]) => [k,v-wasmBefore[k]])) } : {}),
     wallSeconds: (performance.now() - wallStart) / 1000 });
   observer?.detach();
 }

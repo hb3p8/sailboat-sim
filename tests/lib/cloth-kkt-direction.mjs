@@ -53,7 +53,9 @@ export function kktDirection(motion, state, h, priorMu) {
         rhs[p.inverse[n + j]] = -C; signs[p.inverse[n + j]] = -1;
       } else add(n + j, n + j, 1, coefficients);
     });
-    const solve = motion.kktFactor(coefficients, p, signs), result = solve(rhs);
+    const solve = motion.kktFactor(coefficients, p, signs);
+    let result;
+    try { result = solve(rhs); } finally { solve.release?.(); }
     const step = Float64Array.from({ length: n }, (_, i) => result[p.inverse[i]]);
     const mu = Float64Array.from({ length: hard.length }, (_, i) => result[p.inverse[n + i]]);
     let remove = -1, mostNegative = -motion.dualToleranceN;

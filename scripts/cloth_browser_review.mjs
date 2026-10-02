@@ -123,6 +123,7 @@ $('run').addEventListener('click', async () => {
         canvasPixels: [renderer.domElement.width,renderer.domElement.height], hiddenDuringCalculation: hidden },
       scope: 'Один генакер и сетка пола; без лодки, воды и пересчёта воздуха. Время отрисовки — команды CPU, не завершение GPU.',
       preparation: { fetchedMs, compileMs, setupMs, sceneWarmupMs },
+      wasmMemory: factor.statistics?.(),
       renderOnly: statistics(renderOnly), renderOnlyIntervals: statistics(intervalsOnly),
       warmup: statistics(warmSteps), live: statistics(liveSteps), liveFrameCost: statistics(frameCosts), liveFrameIntervals: statistics(liveIntervals),
       scheduler: { hS: fixture.recipe.hS, elapsedMs, simulationMs: 1000, maxLagMs, maxStepsPerFrame, discardedTimeMs: 0 },

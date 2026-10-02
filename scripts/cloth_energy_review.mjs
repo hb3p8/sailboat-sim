@@ -27,7 +27,8 @@ const data = paths.map(path => {
   if (displayGrids && displayGrids.some(g=>!record.results.some(r=>gridKey(r)===g)))
     throw new Error('Запись не содержит все сетки из --display-grids');
   return { file: path, sha256: createHash('sha256').update(bytes).digest('hex'), revision: record.revision,
-    dirty: record.dirty, cutOnly, config: record.config, physicsSha256: record.physicsSha256,
+    dirty: record.dirty, provenanceKind: record.provenanceKind, sourceRecords: record.sourceRecords,
+    cutOnly, config: record.config, physicsSha256: record.physicsSha256,
     results: record.results.filter(r=>!displayGrids || displayGrids.includes(gridKey(r))).sort((a,b) => a.referencePositionsM.length-b.referencePositionsM.length).map(r => ({ cols: r.cols, rows: r.referencePositionsM.length / (3 * r.cols),
       reference: r.referencePositionsM, final: cutOnly ? r.referencePositionsM : r.finalPositionsM,
       frames: cutOnly ? [] : r.samples.filter(s => s.positionsM).map(s => ({ timeS: s.timeS, positions: s.positionsM })) })) };
@@ -74,10 +75,10 @@ ${cutOnly ? `${twoAxis ? '<li>При переходе A → B → C меняет
 <li>У переднего края и в середине нижней части видна ли «полка», которая выглядит неестественно для сшитого паруса? Укажите букву и место.</li>
 <li>Есть ли похожий резкий переход у верхнего крепления, если выбрать весь парус? Это сравнение кроя, а не складок под нагрузкой.</li>` : `
 <li>Есть ли неестественный резкий залом, складка или натяжение? Укажите букву паруса и место: верх, середина, передний край или нижний угол.</li>
-<li>При переходе B → C → D меняется характер всей формы или лишь её гладкость? Какие различия вы считаете существенными?</li>
+<li>При уплотнении сетки меняется характер всей формы или лишь её гладкость? Какие различия вы считаете существенными?</li>
 <li>Если доступны кадры во времени: есть ли резкое изменение между сохранёнными формами? Укажите время; по этим кадрам нельзя оценить быстрые движения между ними.</li>
 `}
-</ol><p class="muted">Можно отвечать свободным текстом. Полезно указать выбранные сторону, ракурс и сечение. ${cutOnly ? 'Карточки показывают выбранный крой с растущим числом точек.' : 'A — исходный крой, B/C/D — расчёт с растущим числом точек.'}</p></section>
+</ol><p class="muted">Можно отвечать свободным текстом. Полезно указать выбранные сторону, ракурс и сечение. ${cutOnly ? 'Карточки показывают выбранный крой с растущим числом точек.' : 'A — исходный крой, остальные карточки — расчёт с растущим числом точек.'}</p></section>
 <details><summary>Условия и происхождение</summary><pre id="provenance"></pre></details></main>
 <script type="module">
 const records=${encoded};
@@ -104,7 +105,7 @@ function build(){if(timer){clearInterval(timer);timer=null;document.querySelecto
  frame.max=Math.max(0,...record.results.map(r=>r.frames.length-1));frame.value=frame.max;document.querySelector('#timeTools').hidden=!record.results.some(r=>r.frames.length);
  entries.forEach((entry,i)=>{const card=document.createElement('article');card.className='card';const label=document.createElement('div');label.className='label';const title=document.createElement('strong');title.textContent=String.fromCharCode(65+i)+' · '+(cutOnly?'Сетка '+entry.result.rows+'×'+entry.result.cols:entry.reference?'Исходный крой':i===1?'Меньше точек':i===entries.length-1?'Больше точек':'Среднее');const subtitle=document.createElement('span');subtitle.textContent=(entry.reference?'Без приложенной нагрузки':'Та же нагрузка, те же закрепления')+' · '+entry.result.rows+'×'+entry.result.cols;label.append(title,subtitle);const canvas=document.createElement('canvas'),section=document.createElement('canvas');section.className='sections';const caption=document.createElement('div');caption.className='caption';caption.textContent='Сечение сверху';card.append(label,canvas,caption,section);cards.append(card);const v={...entry,canvas,section,center,bottomCenterZ};views.push(v);let drag;
  canvas.addEventListener('pointerdown',e=>{drag=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId)});canvas.addEventListener('pointermove',e=>{if(!drag)return;azimuth+=(e.clientX-drag[0])*.007;elevation=Math.max(-1.5,Math.min(1.5,elevation+(e.clientY-drag[1])*.006));drag=[e.clientX,e.clientY];redraw()});canvas.addEventListener('pointerup',()=>drag=null);canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.55,Math.min(2.3,zoom*Math.exp(-e.deltaY*.001)));redraw()},{passive:false})});
- document.querySelector('#provenance').textContent=JSON.stringify(records.map(r=>({file:r.file,sha256:r.sha256,revision:r.revision,dirty:r.dirty,config:r.config,displayedGrids:r.results.map(g=>g.rows+'x'+g.cols),physicsSha256:r.physicsSha256})),null,2);redraw()}
+ document.querySelector('#provenance').textContent=JSON.stringify(records.map(r=>({file:r.file,sha256:r.sha256,revision:r.revision,dirty:r.dirty,provenanceKind:r.provenanceKind,sourceRecords:r.sourceRecords,config:r.config,displayedGrids:r.results.map(g=>g.rows+'x'+g.cols),physicsSha256:r.physicsSha256})),null,2);redraw()}
 document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b===button));[azimuth,elevation]=button.dataset.view==='front'?[.8,0]:button.dataset.view==='top'?[-.8,1.5]:[-.8,.08];zoom=1;redraw()}));
 sideSelect.addEventListener('change',build);height.addEventListener('input',redraw);frame.addEventListener('input',redraw);document.querySelector('#mesh').addEventListener('change',redraw);window.addEventListener('resize',redraw);
 document.querySelector('#region')?.addEventListener('change',redraw);

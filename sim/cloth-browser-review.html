@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Генакер — стоимость расчёта в браузере</title>
+<style>
+body{font:16px system-ui;background:#eef4f7;color:#183c50;margin:24px;max-width:1200px}h1{font-size:24px}
+button,select{font:inherit;padding:8px;margin:4px}canvas{width:100%;height:520px;display:block;background:#dce9f0}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px monospace}#status{min-height:2em}
+</style>
+<h1>Генакер: расчёт и изображение</h1>
+<p>Сетка 11×9, сохранённая нагрузка, неподвижные крепления. Лодка и воздух здесь не пересчитываются.
+Изображение показывает результат того же расчёта. Это отдельная сцена паруса; море и полная яхта не включены.</p>
+<label>Сторона ветра <select id="tack"><option value="plus">Первая</option><option value="minus">Другая</option></select></label>
+<button id="run">Измерить</button><a id="download" hidden>Скачать результат</a>
+<p id="status">Готов к подготовке измерения.</p><div id="view"></div><pre id="report"></pre>
+<script type="module" src="./cloth-browser-review.js"></script></html>

@@ -1,7 +1,6 @@
 // Изолированная проверка податливых связей XPBD до переноса в полотно.
 // Числа податливости — модельные, не заявленные свойства ткани SV20.
 // Формула: Macklin, Müller, Chentanez (2016), уравнение (18).
-import { pathToFileURL } from 'node:url';
 const vec = (x, y = 0, z = 0) => [x, y, z];
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1],
@@ -177,7 +176,9 @@ function scenario(kind) {
   };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Командные примеры доступны в Node; сами ограничения работают и в браузере.
+if (typeof process !== 'undefined' && process.argv[1] &&
+    import.meta.url === (await import('node:url')).pathToFileURL(process.argv[1]).href) {
 for (const kind of ['растяжение', 'сдвиг', 'площадь', 'изгиб']) {
   console.log(`${kind}: модельная податливость, не ткань SV20`);
   const reactionUnit = kind === 'растяжение' ? 'Н' :

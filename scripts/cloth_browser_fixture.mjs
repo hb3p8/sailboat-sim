@@ -13,8 +13,19 @@ import { browserMotion } from '../tests/lib/cloth-browser-motion.mjs';
 
 const hash = x => createHash('sha256').update(x).digest('hex');
 const args = process.argv.slice(2);
-assert(args.length === 3, 'Нужны исходный JSON, модуль WASM и новый путь JSON');
-const [input, wasmPath, output] = args;
+assert(args.length === 3 || args.length === 4, 'Нужны исходный JSON, модуль WASM, новый путь JSON и необязательный снимок сборки');
+const [input, wasmPath, output, scenePath] = args;
+let sceneBuild;
+if (scenePath) {
+  const bytes = readFileSync(scenePath);
+  const build = JSON.parse(bytes.toString().match(/^const BUILD = (.+);$/m)[1]);
+  assert(!build.dirty && execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim().startsWith(build.commit),'Нужна чистая сборка текущей ревизии');
+  assert.equal(hash(bytes),hash(readFileSync('sim/index.html')));
+  const assets = ['assets/sky.jpg','assets/crew.glb'];
+  if (JSON.parse(bytes.toString().match(/^const TERRAIN_PACK = (.+);$/m)[1])) assets.push('assets/terrain.glb');
+  assets.push('viewer/vendor/draco/draco_wasm_wrapper.js','viewer/vendor/draco/draco_decoder.wasm');
+  sceneBuild = {path:scenePath,sha256:hash(bytes),build,assets:Object.fromEntries(assets.map(p=>[p,hash(readFileSync(p))]))};
+}
 const originalBytes = readFileSync(input), original = JSON.parse(originalBytes);
 const config = original.config;
 assert(config.seconds === 1 && config.iter === 80 && config.clothHz === 30 && config.sharedInput &&
@@ -94,10 +105,12 @@ assert.equal(expected.length, 100);
 const paths = [...Object.keys(original.sourceSha256), 'scripts/cloth_browser_fixture.mjs', 'tests/lib/cloth-browser-motion.mjs',
   'scripts/cloth_browser_review.mjs', 'sim/cloth-browser-review.html', 'viewer/vendor/three.webgpu.js'];
 paths.push('tests/lib/cloth-browser-client.mjs','tests/lib/cloth-browser-worker.mjs');
+paths.push('scripts/cloth_full_scene_review.mjs','scripts/build_sim.py','sim/template.html');
 const sourceSha256 = Object.fromEntries(paths.map(p => [p, hash(readFileSync(p))]));
 writeFileSync(output, JSON.stringify({ schema: 1, revision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   dirty: Boolean(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim()),
   baseline: { path: input, sha256: hash(originalBytes), revision: original.revision },
   physicsSha256: hash(packBytes), wasm: { path: wasmPath, sha256: hash(wasmBytes) }, sourceSha256,
+  ...(sceneBuild ? {sceneBuild} : {}),
   tack, recipe, expected, nodeComparison: { maxDifferenceM, steps: expected.length } }, null, 2) + '\n', { flag: 'wx' });
 console.log(`Браузерный вход ${output}: ${expected.length} шагов, отличие от штатного подключения ${maxDifferenceM.toExponential(3)} м; прежние кадры 0/1 с совпали.`);

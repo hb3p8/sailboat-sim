@@ -17,6 +17,8 @@
 const D = Math.PI / 180;
 const HZ = 30;
 const DT = 1 / HZ;
+// Включается только для отдельного замера: Boat не заменяется новой тканью.
+let clothSceneReview = null;
 
 const stage = document.getElementById('stage');
 const hud = document.getElementById('hud');
@@ -3161,6 +3163,7 @@ function frame() {
   // это органы ВИДА, и смотреть замороженный кадр без них незачем. Порядок
   // важен: поза ставится после чтения и перебивает ветер с ползунка.
   if (benchFrozen()) { readControls(DT); benchPose(boat, prev); acc = 0; }
+  clothSceneReview?.pose(boat, prev);
 
   // Догон шагов ограничен ВРЕМЕНЕМ, а не только их числом.
   //
@@ -3419,6 +3422,7 @@ function frame() {
   // Уровень детализации берега — по нынешнему месту камеры. Кусков полсотни, и
   // считать это каждый кадр дешевле, чем городить расписание.
   terrainLod();
+  clothSceneReview?.update();
   const tDraw = performance.now();
   perf.scene = smooth(perf.scene, tDraw - tScene);
   if (orthoView) renderOrtho(bx, bz, fx, fz, sx, sz);
@@ -3468,6 +3472,7 @@ function frame() {
       .catch(() => {})
       .finally(() => { perfBusy = false; });
   }
+  clothSceneReview?.frame({ timestamp: tFrame, cpuMs: performance.now() - tFrame });
   tick++;
   requestAnimationFrame(frame);
 }
@@ -3702,7 +3707,16 @@ window.sv20perf = () => ({
 shapeSails(rigSideZ(1));
 // WebGPU поднимается асинхронно: устройство запрашивается у системы. До этого
 // рисовать нечем, поэтому цикл запускается после init.
-renderer.init().then(() => { resize(); frame(); }).catch(err => {
+renderer.init().then(async () => {
+  resize();
+  if (new URLSearchParams(location.search).has('cloth-review')) {
+    if (!benchFrozen() || BENCH_N !== 0) throw new Error('Замер ткани требует ?bench=0');
+    const { startClothSceneReview } = await import('../scripts/cloth_full_scene_review.mjs');
+    clothSceneReview = await startClothSceneReview({ renderer, genSail, boat, camera,
+      BufferGeometry, BufferAttribute, build: BUILD });
+  }
+  frame();
+}).catch(err => {
   const box = document.getElementById('crash');
   box.hidden = false;
   box.textContent = gpuTrouble() ||

@@ -1,5 +1,4 @@
 // Только измерительный стенд: основная физика Boat не переключается.
-import * as THREE from '../viewer/vendor/three.webgpu.js';
 import { browserMotion } from '../tests/lib/cloth-browser-motion.mjs';
 import { loadSparseFactor } from '../tests/lib/cloth-sparse-wasm.mjs';
 import { gridTriangles } from '../tests/lib/cloth-material.mjs';
@@ -17,10 +16,14 @@ const statistics = a => {
   return { count: a.length, meanMs: a.reduce((t,x) => t+x,0)/a.length,
     p50Ms: s[Math.ceil(s.length*.5)-1], p95Ms: s[Math.ceil(s.length*.95)-1], maxMs: s.at(-1) };
 };
-const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
-let renderer, scene, camera, geometry;
+// Один измеритель для отдельного паруса и основной сцены. Адаптер сцены
+// отдаёт завершённые кадры её собственного цикла, а не второй рендерер.
+export function mountClothReview(adapter = null) {
+const frame = adapter?.nextFrame ?? (() => new Promise(resolve => requestAnimationFrame(resolve)));
+let THREE, renderer = adapter?.renderer, scene, camera, geometry;
 async function prepareScene(positions, rows, cols) {
   if (!renderer) {
+    THREE = await import('../viewer/vendor/three.webgpu.js');
     renderer = new THREE.WebGPURenderer({ antialias: true });
     renderer.setPixelRatio(devicePixelRatio);
     renderer.setSize($('view').clientWidth, 520);
@@ -79,15 +82,18 @@ $('run').addEventListener('click', async () => {
       const setupStart = performance.now(); calculation = browserMotion(fixture.recipe,factor); setupMs = performance.now()-setupStart;
       motion = calculation.motion; positions = motion.pos;
     }
-    const sceneStart = performance.now(); await prepareScene(positions,fixture.recipe.rows,fixture.recipe.cols);
+    await adapter?.verify(fixture);
+    const prepare = adapter?.prepareScene ?? prepareScene, drawScene = adapter?.draw ?? draw;
+    const sceneStart = performance.now(); await prepare(positions,fixture.recipe.rows,fixture.recipe.cols,fixture.recipe);
     // Предварительные кадры исключают первую компиляцию графических программ.
-    for (let i = 0; i < 20; i++) { await frame(); draw(positions); }
+    for (let i = 0; i < 20; i++) { await frame(); drawScene(positions,0); }
     const sceneWarmupMs = performance.now()-sceneStart;
+    adapter?.beginVerification();
     const renderOnly = [], intervalsOnly = [];
     let previousFrame;
     for (let i = 0; i < 60; i++) {
       const t = await frame(); if (previousFrame !== undefined) intervalsOnly.push(t-previousFrame);
-      previousFrame = t; renderOnly.push(draw(positions));
+      previousFrame = t; renderOnly.push(drawScene(positions,0));
     }
     const warmSteps = [], liveSteps = [], frameCosts = [], liveIntervals = [], allSteps = [];
     let maxPositionDifferenceM = 0, maxEnergyDifferenceJ = 0, maxForceN = 0, maxLengthM = 0, maxDualN = 0, maxComplementarityJ = 0;
@@ -119,6 +125,7 @@ $('run').addEventListener('click', async () => {
       if (reply.index !== stepIndex || reply.type !== 'step') throw new Error('Нарушен порядок шагов ткани');
       positions = reply.positions; wasmMemory = reply.wasmMemory;
       checkStep(reply.audit,reply.dualViolationN,reply.timeMs,times);
+      if (adapter) drawScene(positions,stepIndex);
       if (drawFailure) throw drawFailure;
     }
     if (workerClient) {
@@ -127,9 +134,9 @@ $('run').addEventListener('click', async () => {
         let previous;
         while (!stopDrawing) {
           const t = await frame(); if (stopDrawing) break;
-          visibility(); const begin = performance.now(); draw(positions);
+          visibility(); const frameCost = drawScene(positions,stepIndex);
           if (liveDrawPhase) {
-            frameCosts.push(performance.now()-begin);
+            frameCosts.push(frameCost);
             if (previous !== undefined) liveIntervals.push(t-previous);
             previous = t;
             maxResultDelayMs = Math.max(maxResultDelayMs,performance.now()-liveStart-(stepIndex-40)*1000/60);
@@ -140,10 +147,11 @@ $('run').addEventListener('click', async () => {
     $('status').textContent = 'Начальная посадка: 40 шагов…';
     for (let i = 0; i < 40; i++) {
       if (workerClient) await advanceWorker(warmSteps);
-      else { await frame(); advance(warmSteps); draw(positions); }
+      else { await frame(); advance(warmSteps); drawScene(positions,stepIndex); }
     }
     $('status').textContent = 'Движение: 60 шагов, накопленное время сохраняется…';
     const start = await frame(); liveStart = start; liveDrawPhase = true; previousFrame = start;
+    adapter?.startLive(start);
     let maxLagMs = 0, maxStepsPerFrame = 0;
     while (stepIndex < 100) {
       const t = await frame(), costStart = performance.now();
@@ -154,12 +162,13 @@ $('run').addEventListener('click', async () => {
         if (workerClient) await advanceWorker(liveSteps); else advance(liveSteps);
         steps++;
       }
-      if (!workerClient) { draw(positions); frameCosts.push(performance.now()-costStart); }
+      if (!workerClient) { drawScene(positions,stepIndex); frameCosts.push(performance.now()-costStart); }
       maxStepsPerFrame = Math.max(maxStepsPerFrame,steps);
       maxLagMs = Math.max(maxLagMs, Math.max(0,t-start-(stepIndex-40)*1000/60));
     }
     const elapsedMs = performance.now()-start;
-    if (workerClient) { stopDrawing = true; await drawTask; draw(positions); }
+    if (workerClient) { stopDrawing = true; await drawTask; drawScene(positions,stepIndex); }
+    const sceneReport = await adapter?.finish();
     const physicalMatches = maxPositionDifferenceM <= 1e-8 && maxEnergyDifferenceJ <= 1e-7 &&
       maxForceN <= IMPLICIT_TOLERANCES.forceToleranceN && maxLengthM <= IMPLICIT_TOLERANCES.lengthToleranceM &&
       maxDualN <= IMPLICIT_TOLERANCES.dualToleranceN && maxComplementarityJ <= IMPLICIT_TOLERANCES.complementarityToleranceJ;
@@ -168,7 +177,8 @@ $('run').addEventListener('click', async () => {
       wasm: fixture.wasm, environment: { userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency,
         renderer: renderer.backend.constructor.name, pixelRatio: devicePixelRatio,
         canvasPixels: [renderer.domElement.width,renderer.domElement.height], hiddenDuringCalculation: hidden },
-      scope: 'Один генакер и сетка пола; без лодки, воды и пересчёта воздуха. Время отрисовки — команды CPU, не завершение GPU.',
+      scope: adapter?.scope ?? 'Один генакер и сетка пола; без лодки, воды и пересчёта воздуха. Время отрисовки — команды CPU, не завершение GPU.',
+      ...(sceneReport ? { scene: sceneReport } : {}),
       execution, reuseMemory,
       preparation: { fetchedMs, compileMs, setupMs, sceneWarmupMs, ...(workerClient ? {workerReadyMs} : {}) },
       wasmMemory: workerClient ? wasmMemory : factor.statistics(),
@@ -178,11 +188,12 @@ $('run').addEventListener('click', async () => {
       scheduler: { hS: fixture.recipe.hS, elapsedMs, simulationMs: 1000, maxLagMs, maxResultDelayMs, maxStepsPerFrame, discardedTimeMs: 0 },
       comparison: { physicalMatches, maxPositionDifferenceM, maxEnergyDifferenceJ, maxForceN, maxLengthM, maxDualN, maxComplementarityJ,
         checkedSteps: stepIndex, tolerances: IMPLICIT_TOLERANCES }, allSteps,
-      valid: physicalMatches && !hidden && !fixture.dirty };
+      valid: physicalMatches && !hidden && !fixture.dirty && (sceneReport?.valid ?? true) };
     $('status').textContent = report.valid ? 'Измерение завершено; все 100 шагов совпали с проверенным расчётом.' : 'Измерение завершено с ограничением; см. результат.';
   } catch (e) { report = { complete: false, error: e.message }; $('status').textContent = 'Измерение отклонено: '+e.message; }
   finally {
     stopDrawing = true; await drawTask; workerClient?.terminate();
+    adapter?.cancel();
     if (visibility) document.removeEventListener('visibilitychange',visibility);
   }
   $('report').textContent = JSON.stringify(report,null,2);
@@ -191,3 +202,6 @@ $('run').addEventListener('click', async () => {
   $('download').href = URL.createObjectURL(blob); $('download').download = 'cloth-browser-result.json'; $('download').hidden = false;
   for (const id of ['run','tack','execution','reuse']) $(id).disabled = false;
 });
+}
+
+if (document.getElementById('view')) mountClothReview();

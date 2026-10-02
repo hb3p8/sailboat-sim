@@ -20,8 +20,8 @@ export function browserMotion(recipe, wasmSparseFactor) {
     nrm: new Float64Array(positions.length), pattern() {},
     velocityDt(h) { return motion.prevDt > 0 ? motion.prevDt : h; } };
   installSharedInput(cloth, field);
-  return { motion, surface, step() {
+  return { motion, surface, forceN:cloth.frc, step(supportTargets) {
     cloth.forcesAt(boat, recipe.hS);
-    return motion.step(cloth.frc, recipe.hS, recipe.iterations);
+    return motion.step(cloth.frc, recipe.hS, recipe.iterations,supportTargets);
   } };
 }

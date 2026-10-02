@@ -33,6 +33,6 @@ export async function createMotionWorker(recipe, bytes, { reuse = true,
     // Копия отделяет владение байтами от прочитанного/проверенного исходного модуля.
     const ownedBytes = bytes instanceof ArrayBuffer ? bytes.slice(0) : bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
     const ready = await request('init',{recipe,bytes:ownedBytes,reuse},[ownedBytes]);
-    return {ready,step:()=>request('step'),terminate};
+    return {ready,step:supportTargets=>request('step',{supportTargets}),terminate};
   } catch(e) { terminate(); throw e; }
 }

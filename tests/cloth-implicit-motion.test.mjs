@@ -102,10 +102,12 @@ const before = failed.pos.slice(), previous = failed.prev.slice();
 assert.throws(() => failed.step(force, 1 / 30, 1), /не доведено/);
 assert.deepEqual(failed.pos, before); assert.deepEqual(failed.prev, previous); assert.equal(failed.prevDt, 0);
 if (backend === 'kkt-wasm') {
-  failed.step(force, 1 / 30, 40);
-  const acceptedMu = failed.lastMu.slice(), acceptedPos = failed.pos.slice(), acceptedPrev = failed.prev.slice();
+  const bounded = new ImplicitEnergyMotion({ positions: reference, mass: [1, 1, 1], fixed: [0, 2],
+    constraints: [...materialSurface(reference, [[0, 1, 2]], parameters).constraints, distance(0, 1, 1.005, 0, true)], ...options });
+  bounded.step(force, 1 / 30, 40); assert.ok(bounded.lastMu[0] > 0);
+  const acceptedMu = bounded.lastMu.slice(), acceptedPos = bounded.pos.slice(), acceptedPrev = bounded.prev.slice();
   const largeForce = force.map(v => v * 50);
-  assert.throws(() => failed.step(largeForce, 1 / 60, 1), /не доведено/);
-  assert.deepEqual(failed.lastMu, acceptedMu); assert.deepEqual(failed.pos, acceptedPos); assert.deepEqual(failed.prev, acceptedPrev);
+  assert.throws(() => bounded.step(largeForce, 1 / 60, 1), /не доведено/);
+  assert.deepEqual(bounded.lastMu, acceptedMu); assert.deepEqual(bounded.pos, acceptedPos); assert.deepEqual(bounded.prev, acceptedPrev);
 }
 console.log('ок: недоведённый шаг отклонён, координаты и история восстановлены');

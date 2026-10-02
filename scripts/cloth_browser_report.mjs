@@ -31,6 +31,15 @@ const series = paths.map(path => {
     assert(Number.isFinite(r.comparison[name]) && r.comparison[name] >= 0 && r.comparison[name] <= limit, `Нарушена проверка ${name}`);
   assert.equal(r.allSteps.length, 100); assert.equal(r.scheduler.discardedTimeMs, 0);
   assert.equal(r.scheduler.hS, f.recipe.hS);
+  for (const name of ['renderOnly','renderOnlyIntervals','liveFrameCost','liveFrameIntervals',...(r.execution==='worker'?['replyLatency']:[])]) {
+    const s=r[name]; assert(Number.isInteger(s?.count) && s.count>0,`Нет временных отсчётов ${name}`);
+    for (const k of ['meanMs','p50Ms','p95Ms','maxMs']) assert(Number.isFinite(s[k]) && s[k]>=0,`Неверное время ${name}.${k}`);
+    assert(s.p50Ms<=s.p95Ms && s.p95Ms<=s.maxMs && s.meanMs<=s.maxMs);
+  }
+  if (r.execution==='worker') {
+    assert.equal(r.replyLatency.count,100);
+    assert(Number.isFinite(r.scheduler.maxResultDelayMs) && r.scheduler.maxResultDelayMs>=0);
+  }
   for (const [name, first, last] of [['warmup', 0, 40], ['live', 40, 100]]) {
     const a = r.allSteps.slice(first,last).map(s => s.timeMs), s = a.slice().sort((x,y) => x-y);
     assert(a.every(v => Number.isFinite(v) && v > 0));

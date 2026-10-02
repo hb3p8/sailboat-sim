@@ -101,4 +101,11 @@ const failed = new ImplicitEnergyMotion({ positions: reference, mass: [1, 1, 1],
 const before = failed.pos.slice(), previous = failed.prev.slice();
 assert.throws(() => failed.step(force, 1 / 30, 1), /не доведено/);
 assert.deepEqual(failed.pos, before); assert.deepEqual(failed.prev, previous); assert.equal(failed.prevDt, 0);
+if (backend === 'kkt-wasm') {
+  failed.step(force, 1 / 30, 40);
+  const acceptedMu = failed.lastMu.slice(), acceptedPos = failed.pos.slice(), acceptedPrev = failed.prev.slice();
+  const largeForce = force.map(v => v * 50);
+  assert.throws(() => failed.step(largeForce, 1 / 60, 1), /не доведено/);
+  assert.deepEqual(failed.lastMu, acceptedMu); assert.deepEqual(failed.pos, acceptedPos); assert.deepEqual(failed.prev, acceptedPrev);
+}
 console.log('ок: недоведённый шаг отклонён, координаты и история восстановлены');

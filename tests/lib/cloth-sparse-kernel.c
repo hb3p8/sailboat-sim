@@ -7,14 +7,25 @@
 // диагонали множителей ожидаемы; нулевой/нечисловой или неверный знак — отказ.
 EXPORTED int sparse_ldl_factor(double *L, double *work, int n,
     const int *rp, const int *col, const int *cp, const int *cr, const int *ce,
-    const int *signs) {
+    const int *row_to_col, double *column_values, const int *signs) {
   for (int i = 0; i < n; i++) {
     int end = rp[i + 1] - 1;
     for (int a = rp[i]; a <= end; a++) work[col[a]] = L[a];
     for (int a = rp[i]; a < end; a++) {
       int j = col[a]; double D = L[rp[j + 1] - 1], v = work[j] / D; L[a] = v;
+      column_values[row_to_col[a]] = v;
       double scaled = v * D;
-      for (int b = cp[j]; b < cp[j + 1] && cr[b] < i; b++) work[cr[b]] -= scaled * L[ce[b]];
+      int b = cp[j], end_col = cp[j + 1];
+      v128_t scale_pair = wasm_f64x2_splat(scaled);
+      while (b < end_col && cr[b] < i) {
+        // Три координаты одного узла обычно соседние: две обновляются вместе.
+        if (b + 1 < end_col && cr[b + 1] == cr[b] + 1 && cr[b + 1] < i) {
+          v128_t current = wasm_v128_load(work + cr[b]);
+          v128_t factors = wasm_v128_load(column_values + b);
+          wasm_v128_store(work + cr[b], wasm_f64x2_sub(current, wasm_f64x2_mul(scale_pair, factors)));
+          b += 2;
+        } else { work[cr[b]] -= scaled * column_values[b]; b++; }
+      }
       work[i] -= v * v * D;
     }
     if (!(work[i] * signs[i] > 0 && __builtin_isfinite(work[i]))) return i + 1;

@@ -22,6 +22,7 @@ for (const n of [0, 1, 13, 201]) {
     for (let i = 0; i < n; i++) for (let a = p.rowPtr[i]; a < p.rowPtr[i + 1]; a++)
       matrix[a] = dense[p.order[i]][p.order[p.cols[a]]];
     const saved = matrix.slice(), js = sparseFactor(matrix, p), accelerated = wasm(matrix, p);
+    const diagonalFactor = wasm.ldl(matrix, p, new Int32Array(n).fill(1));
     assert.deepEqual(matrix, saved);
     for (const count of [1, 2, 3, 57]) {
       const expected = Array.from({ length: count }, (_, r) => Float64Array.from({ length: n }, (_, i) => Math.cos(i + r / 3)));
@@ -30,6 +31,7 @@ for (const n of [0, 1, 13, 201]) {
       for (let r = 0; r < count; r++) {
         assert.deepEqual(results[r], js(rhs[r]), 'SIMD сохраняет порядок арифметики скалярного разреженного решения');
         results[r].forEach((v, i) => close(v, expected[r][p.order[i]]));
+        diagonalFactor(rhs[r]).forEach((v, i) => close(v, expected[r][p.order[i]]));
       }
     }
     assert.deepEqual(accelerated.many([]), []);

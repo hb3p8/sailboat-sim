@@ -57,12 +57,16 @@ export function sparsePattern(n, groups, order = Int32Array.from({ length: n }, 
     cols.push(...lower[i]); rowPtr[i + 1] = cols.length;
   }
   const colPtr = new Int32Array(n + 1), colRows = [], colEntries = [];
+  const rowToCol = new Int32Array(cols.length);
   for (let j = 0; j < n; j++) {
-    for (const i of columnRows[j]) { colRows.push(i); colEntries.push(locations[i].get(j)); }
+    for (const i of columnRows[j]) {
+      const entry = locations[i].get(j); rowToCol[entry] = colRows.length;
+      colRows.push(i); colEntries.push(entry);
+    }
     colPtr[j + 1] = colRows.length;
   }
   return { n, order, inverse, rowPtr, cols: Int32Array.from(cols), colPtr,
-    colRows: Int32Array.from(colRows), colEntries: Int32Array.from(colEntries), locations };
+    colRows: Int32Array.from(colRows), colEntries: Int32Array.from(colEntries), rowToCol, locations };
 }
 
 export function sparseFactor(matrix, p) {

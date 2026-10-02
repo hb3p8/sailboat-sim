@@ -65,6 +65,10 @@ $('run').addEventListener('click', async () => {
     const tack = $('tack').value, fixturePath = `out/acceptance/${series}-${tack}.json`;
     $('status').textContent = 'Проверка сохранённого входа и исходников…';
     const fixtureBytes = await bytesAt(fixturePath), fixture = JSON.parse(new TextDecoder().decode(fixtureBytes));
+    const measurement = fixture.measurement ?? {warmupSteps:40,liveSteps:60,durationS:1};
+    const {warmupSteps,liveSteps:liveStepCount,durationS} = measurement, totalSteps = warmupSteps+liveStepCount, hMs=fixture.recipe.hS*1000;
+    if (warmupSteps!==40 || !Number.isInteger(liveStepCount) || liveStepCount<60 || liveStepCount>1800 ||
+        durationS!==liveStepCount*fixture.recipe.hS || fixture.expected.length!==totalSteps) throw new Error('Несогласованное окно измерения');
     const changed = [];
     // Проверка не входит в время физического шага; порядок чтения детерминирован.
     for (const [path, sha] of Object.entries(fixture.sourceSha256)) if (await digest(await bytesAt(path)) !== sha) changed.push(path);
@@ -113,7 +117,7 @@ $('run').addEventListener('click', async () => {
       maxDualN = Math.max(maxDualN,dualViolationN);
       maxComplementarityJ = Math.max(maxComplementarityJ,audit.solver.complementarityJ);
       allSteps.push({ timeMs: times.at(-1), iterations: audit.solver.iterations });
-      if (liveDrawPhase) maxResultDelayMs = Math.max(maxResultDelayMs,performance.now()-liveStart-(stepIndex-40)*1000/60);
+      if (liveDrawPhase) maxResultDelayMs = Math.max(maxResultDelayMs,performance.now()-liveStart-(stepIndex-warmupSteps)*hMs);
     }
     function advance(times) {
       const t = performance.now(), audit = calculation.step(), timeMs = performance.now()-t;
@@ -139,32 +143,32 @@ $('run').addEventListener('click', async () => {
             frameCosts.push(frameCost);
             if (previous !== undefined) liveIntervals.push(t-previous);
             previous = t;
-            maxResultDelayMs = Math.max(maxResultDelayMs,performance.now()-liveStart-(stepIndex-40)*1000/60);
+            maxResultDelayMs = Math.max(maxResultDelayMs,performance.now()-liveStart-(stepIndex-warmupSteps)*hMs);
           }
         }
       })().catch(e => { drawFailure = e; stopDrawing = true; });
     }
-    $('status').textContent = 'Начальная посадка: 40 шагов…';
-    for (let i = 0; i < 40; i++) {
+    $('status').textContent = `Начальная посадка: ${warmupSteps} шагов…`;
+    for (let i = 0; i < warmupSteps; i++) {
       if (workerClient) await advanceWorker(warmSteps);
       else { await frame(); advance(warmSteps); drawScene(positions,stepIndex); }
     }
-    $('status').textContent = 'Движение: 60 шагов, накопленное время сохраняется…';
+    $('status').textContent = `Движение: ${liveStepCount} шагов за ${durationS} с, накопленное время сохраняется…`;
     const start = await frame(); liveStart = start; liveDrawPhase = true; previousFrame = start;
-    adapter?.startLive(start);
+    adapter?.startLive(start,measurement);
     let maxLagMs = 0, maxStepsPerFrame = 0;
-    while (stepIndex < 100) {
+    while (stepIndex < totalSteps) {
       const t = await frame(), costStart = performance.now();
       if (!workerClient) { liveIntervals.push(t-previousFrame); previousFrame = t; }
-      const due = Math.min(60,Math.floor((t-start)/(1000/60)));
+      const due = Math.min(liveStepCount,Math.floor((t-start)/hMs));
       let steps = 0;
-      while (stepIndex-40 < due && steps < 4) {
+      while (stepIndex-warmupSteps < due && steps < 4) {
         if (workerClient) await advanceWorker(liveSteps); else advance(liveSteps);
         steps++;
       }
       if (!workerClient) { drawScene(positions,stepIndex); frameCosts.push(performance.now()-costStart); }
       maxStepsPerFrame = Math.max(maxStepsPerFrame,steps);
-      maxLagMs = Math.max(maxLagMs, Math.max(0,t-start-(stepIndex-40)*1000/60));
+      maxLagMs = Math.max(maxLagMs, Math.max(0,t-start-(stepIndex-warmupSteps)*hMs));
     }
     const elapsedMs = performance.now()-start;
     if (workerClient) { stopDrawing = true; await drawTask; drawScene(positions,stepIndex); }
@@ -172,7 +176,7 @@ $('run').addEventListener('click', async () => {
     const physicalMatches = maxPositionDifferenceM <= 1e-8 && maxEnergyDifferenceJ <= 1e-7 &&
       maxForceN <= IMPLICIT_TOLERANCES.forceToleranceN && maxLengthM <= IMPLICIT_TOLERANCES.lengthToleranceM &&
       maxDualN <= IMPLICIT_TOLERANCES.dualToleranceN && maxComplementarityJ <= IMPLICIT_TOLERANCES.complementarityToleranceJ;
-    report = { schema: 1, complete: true, createdAt: new Date().toISOString(),
+    report = { schema: 1, complete: true, createdAt: new Date().toISOString(), measurement,
       fixture: { path: fixturePath, sha256: await digest(fixtureBytes), revision: fixture.revision, dirty: fixture.dirty },
       wasm: fixture.wasm, environment: { userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency,
         renderer: renderer.backend.constructor.name, pixelRatio: devicePixelRatio,
@@ -185,11 +189,11 @@ $('run').addEventListener('click', async () => {
       ...(workerClient ? {replyLatency:statistics(replyTimes)} : {}),
       renderOnly: statistics(renderOnly), renderOnlyIntervals: statistics(intervalsOnly),
       warmup: statistics(warmSteps), live: statistics(liveSteps), liveFrameCost: statistics(frameCosts), liveFrameIntervals: statistics(liveIntervals),
-      scheduler: { hS: fixture.recipe.hS, elapsedMs, simulationMs: 1000, maxLagMs, maxResultDelayMs, maxStepsPerFrame, discardedTimeMs: 0 },
+      scheduler: { hS: fixture.recipe.hS, elapsedMs, simulationMs:durationS*1000, maxLagMs, maxResultDelayMs, maxStepsPerFrame, discardedTimeMs: 0 },
       comparison: { physicalMatches, maxPositionDifferenceM, maxEnergyDifferenceJ, maxForceN, maxLengthM, maxDualN, maxComplementarityJ,
         checkedSteps: stepIndex, tolerances: IMPLICIT_TOLERANCES }, allSteps,
       valid: physicalMatches && !hidden && !fixture.dirty && (sceneReport?.valid ?? true) };
-    $('status').textContent = report.valid ? 'Измерение завершено; все 100 шагов совпали с проверенным расчётом.' : 'Измерение завершено с ограничением; см. результат.';
+    $('status').textContent = report.valid ? `Измерение завершено; все ${totalSteps} шагов совпали с проверенным расчётом.` : 'Измерение завершено с ограничением; см. результат.';
   } catch (e) { report = { complete: false, error: e.message }; $('status').textContent = 'Измерение отклонено: '+e.message; }
   finally {
     stopDrawing = true; await drawTask; workerClient?.terminate();

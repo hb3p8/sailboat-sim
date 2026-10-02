@@ -15,6 +15,11 @@ const series = paths.map(path => {
   const fixtureBytes = readFileSync(r.fixture.path), f = JSON.parse(fixtureBytes);
   assert.equal(hash(fixtureBytes), r.fixture.sha256);
   assert.equal(f.revision, r.fixture.revision); assert.equal(f.dirty, false);
+  const measurement=f.measurement??{warmupSteps:40,liveSteps:60,durationS:1};
+  const {warmupSteps,liveSteps,durationS}=measurement,totalSteps=warmupSteps+liveSteps;
+  assert.equal(warmupSteps,40); assert(Number.isInteger(liveSteps) && liveSteps>=60 && liveSteps<=1800);
+  assert.equal(durationS,liveSteps*f.recipe.hS); assert.equal(f.expected.length,totalSteps);
+  if(f.measurement)assert.deepEqual(r.measurement,measurement);
   assert.deepEqual(r.wasm, f.wasm); assert.equal(hash(readFileSync(f.wasm.path)), f.wasm.sha256);
   assert.equal(hash(readFileSync(f.baseline.path)), f.baseline.sha256);
   assert.equal(hash(readFileSync('out/export/physics.json')), f.physicsSha256);
@@ -23,21 +28,22 @@ const series = paths.map(path => {
     if (!sourceCache.has(key)) sourceCache.set(key,hash(execFileSync('git', ['show',key],{maxBuffer:16*1024*1024})));
     assert.equal(sourceCache.get(key),sha, `Исходник не соответствует ревизии: ${p}`);
   }
-  assert.equal(r.comparison.checkedSteps, 100); assert.equal(r.comparison.physicalMatches, true);
+  assert.equal(r.comparison.checkedSteps,totalSteps); assert.equal(r.comparison.physicalMatches, true);
   assert.deepEqual(r.comparison.tolerances, IMPLICIT_TOLERANCES);
   for (const [name, limit] of Object.entries({ maxPositionDifferenceM: 1e-8, maxEnergyDifferenceJ: 1e-7,
     maxForceN: IMPLICIT_TOLERANCES.forceToleranceN, maxLengthM: IMPLICIT_TOLERANCES.lengthToleranceM,
     maxDualN: IMPLICIT_TOLERANCES.dualToleranceN, maxComplementarityJ: IMPLICIT_TOLERANCES.complementarityToleranceJ }))
     assert(Number.isFinite(r.comparison[name]) && r.comparison[name] >= 0 && r.comparison[name] <= limit, `Нарушена проверка ${name}`);
-  assert.equal(r.allSteps.length, 100); assert.equal(r.scheduler.discardedTimeMs, 0);
+  assert.equal(r.allSteps.length,totalSteps); assert.equal(r.scheduler.discardedTimeMs, 0);
   assert.equal(r.scheduler.hS, f.recipe.hS);
+  assert.equal(r.scheduler.simulationMs,durationS*1000);
   for (const name of ['renderOnly','renderOnlyIntervals','liveFrameCost','liveFrameIntervals',...(r.execution==='worker'?['replyLatency']:[])]) {
     const s=r[name]; assert(Number.isInteger(s?.count) && s.count>0,`Нет временных отсчётов ${name}`);
     for (const k of ['meanMs','p50Ms','p95Ms','maxMs']) assert(Number.isFinite(s[k]) && s[k]>=0,`Неверное время ${name}.${k}`);
     assert(s.p50Ms<=s.p95Ms && s.p95Ms<=s.maxMs && s.meanMs<=s.maxMs);
   }
   if (r.execution==='worker') {
-    assert.equal(r.replyLatency.count,100);
+    assert.equal(r.replyLatency.count,totalSteps);
     assert(Number.isFinite(r.scheduler.maxResultDelayMs) && r.scheduler.maxResultDelayMs>=0);
   }
   if (r.scene) {
@@ -51,17 +57,17 @@ const series = paths.map(path => {
     assert.deepEqual(r.scene.stationaryBoat,{x:0,y:0,psi:0,phi:f.recipe.boat.phi,th:0,zc:0});
     assert.deepEqual(r.scene.composition.canvasPixels,r.environment.canvasPixels);
     const frames=r.scene.frames; assert(frames.length>=2);
-    assert.equal(r.scene.presentation.lastShownStep,100); assert.equal(frames.at(-1).shownStep,100);
-    assert(Number.isFinite(r.scene.presentation.elapsedMs) && r.scene.presentation.elapsedMs>=1000);
+    assert.equal(r.scene.presentation.lastShownStep,totalSteps); assert.equal(frames.at(-1).shownStep,totalSteps);
+    assert(Number.isFinite(r.scene.presentation.elapsedMs) && r.scene.presentation.elapsedMs>=durationS*1000);
     for (let i=0;i<frames.length;i++) {
-      const a=frames[i]; assert(Number.isInteger(a.shownStep) && a.shownStep>=40 && a.shownStep<=100);
+      const a=frames[i]; assert(Number.isInteger(a.shownStep) && a.shownStep>=warmupSteps && a.shownStep<=totalSteps);
       assert(Number.isFinite(a.timestamp) && Number.isFinite(a.cpuMs) && a.cpuMs>=0);
       assert(Number.isFinite(a.visibleResultDelayMs) && a.visibleResultDelayMs>=0);
       if (i) assert(a.timestamp>frames[i-1].timestamp && a.shownStep>=frames[i-1].shownStep);
     }
     assert.equal(r.scene.presentation.maxVisibleResultDelayMs,Math.max(...frames.map(a=>a.visibleResultDelayMs)));
   } else assert(!f.sceneBuild,'Нет контроля полной сцены');
-  for (const [name, first, last] of [['warmup', 0, 40], ['live', 40, 100]]) {
+  for (const [name, first, last] of [['warmup',0,warmupSteps],['live',warmupSteps,totalSteps]]) {
     const a = r.allSteps.slice(first,last).map(s => s.timeMs), s = a.slice().sort((x,y) => x-y);
     assert(a.every(v => Number.isFinite(v) && v > 0));
     assert.equal(r[name].count,a.length);
@@ -74,7 +80,7 @@ const series = paths.map(path => {
     wasmMemory: r.wasmMemory, replyLatency: r.replyLatency,
     preparation: r.preparation, renderOnly: r.renderOnly, renderOnlyIntervals: r.renderOnlyIntervals,
     warmup: r.warmup, live: r.live, liveFrameCost: r.liveFrameCost, liveFrameIntervals: r.liveFrameIntervals,
-    scheduler: r.scheduler, comparison: r.comparison, ...(r.scene?{scene:r.scene}:{}), scope:r.scope };
+    scheduler: r.scheduler, comparison: r.comparison, measurement, ...(r.scene?{scene:r.scene}:{}), scope:r.scope };
 });
 const result = { schema: 1, createdAt: new Date().toISOString(), series,
   interpretation: 'Достоверность записи и повторение модели проверены. Скорость измерена на коротком окне; это не приёмка интерактивного манёвра или всей сцены.' };

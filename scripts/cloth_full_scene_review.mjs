@@ -22,6 +22,7 @@ export async function startClothSceneReview({renderer,genSail,boat,camera,Buffer
 
   let pending = [], positions, recipe, geometry, step = 0, shownStep = 0, lastFrame;
   let source, signature, liveStart, frames = [], errors = new Set(), verifying = false;
+  let measurement;
   const composition = () => ({ canvasPixels:[renderer.domElement.width,renderer.domElement.height],
     geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures });
   const nextFrame = () => new Promise(resolve => pending.push(resolve));
@@ -47,10 +48,10 @@ export async function startClothSceneReview({renderer,genSail,boat,camera,Buffer
     },
     draw(pos,index) { positions = pos; step = index; return lastFrame.cpuMs; },
     beginVerification() { signature = composition(); verifying = true; },
-    startLive(start) { liveStart = start; frames = []; },
+    startLive(start,input) { liveStart = start; measurement = input; frames = []; },
     async finish() {
       // Последний ответ должен попасть в реальный кадр, а не только в память.
-      while (shownStep!==100) await nextFrame();
+      while (shownStep!==measurement.warmupSteps+measurement.liveSteps) await nextFrame();
       verifying = false;
       return { valid:errors.size===0, errors:Array.from(errors), build:source,
         stationaryBoat:{x:0,y:0,psi:0,phi:recipe.boat.phi,th:0,zc:0},
@@ -82,7 +83,7 @@ export async function startClothSceneReview({renderer,genSail,boat,camera,Buffer
         if (boat.x!==0 || boat.y!==0 || boat.psi!==0 || boat.phi!==recipe.boat.phi || boat.th!==0 || boat.zc!==0 || boat.u!==0 || boat.v!==0)
           errors.add('Лодка перестала быть неподвижной');
         if (liveStart!==undefined) frames.push({...data,shownStep,
-          visibleResultDelayMs:Math.max(0,performance.now()-liveStart-(shownStep-40)*recipe.hS*1000)});
+          visibleResultDelayMs:Math.max(0,performance.now()-liveStart-(shownStep-measurement.warmupSteps)*recipe.hS*1000)});
       }
       const ready = pending; pending = []; for (const resolve of ready) resolve(data.timestamp);
     }

@@ -28,7 +28,7 @@ if (scenePath) {
 }
 const originalBytes = readFileSync(input), original = JSON.parse(originalBytes);
 const config = original.config;
-assert(config.seconds === 1 && config.iter === 80 && config.clothHz === 30 && config.sharedInput &&
+assert(Number.isInteger(config.seconds) && config.seconds>=1 && config.seconds<=30 && config.iter === 80 && config.clothHz === 30 && config.sharedInput &&
   config.joinedCutProfile && config.linearBackend === 'kkt-wasm' && original.phase === 'complete', 'Нужна принятая короткая постановка');
 const baseline = original.results.find(r => r.rows === 11 && r.cols === 9);
 assert(baseline, 'Нет сетки 11×9');
@@ -99,9 +99,10 @@ cloth.advance = function (...args) {
 assert(cloth.step(b, 1/30)); b.p.rig.gennaker.clew_arc_r = 0;
 assert(error(cloth.pos, baseline.samples[0].positionsM) <= 1e-8);
 energy.reset();
-for (let i = 0; i < 30; i++) assert(cloth.step(b, 1/30));
+for (let i = 0; i < 30*config.seconds; i++) assert(cloth.step(b, 1/30));
 assert(error(cloth.pos, baseline.positionsM ?? baseline.samples.at(-1).positionsM) <= 1e-8);
-assert.equal(expected.length, 100);
+const measurement = {warmupSteps:40,liveSteps:60*config.seconds,durationS:config.seconds};
+assert.equal(expected.length,measurement.warmupSteps+measurement.liveSteps);
 const paths = [...Object.keys(original.sourceSha256), 'scripts/cloth_browser_fixture.mjs', 'tests/lib/cloth-browser-motion.mjs',
   'scripts/cloth_browser_review.mjs', 'sim/cloth-browser-review.html', 'viewer/vendor/three.webgpu.js'];
 paths.push('tests/lib/cloth-browser-client.mjs','tests/lib/cloth-browser-worker.mjs');
@@ -112,5 +113,5 @@ writeFileSync(output, JSON.stringify({ schema: 1, revision: execFileSync('git', 
   baseline: { path: input, sha256: hash(originalBytes), revision: original.revision },
   physicsSha256: hash(packBytes), wasm: { path: wasmPath, sha256: hash(wasmBytes) }, sourceSha256,
   ...(sceneBuild ? {sceneBuild} : {}),
-  tack, recipe, expected, nodeComparison: { maxDifferenceM, steps: expected.length } }, null, 2) + '\n', { flag: 'wx' });
-console.log(`Браузерный вход ${output}: ${expected.length} шагов, отличие от штатного подключения ${maxDifferenceM.toExponential(3)} м; прежние кадры 0/1 с совпали.`);
+  tack, recipe, measurement, expected, nodeComparison: { maxDifferenceM, steps: expected.length } }, null, 2) + '\n', { flag: 'wx' });
+console.log(`Браузерный вход ${output}: ${expected.length} шагов, отличие от штатного подключения ${maxDifferenceM.toExponential(3)} м; прежние кадры 0/${config.seconds} с совпали.`);

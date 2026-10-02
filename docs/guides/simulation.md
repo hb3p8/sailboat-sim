@@ -167,6 +167,34 @@ node scripts/cloth_browser_report.mjs out/acceptance/browser-cloth-summary.json 
 положительное заключение о скорости. Полная сцена отдельно измеряется
 обычным `?bench=0`, а её лента сохраняется в `out/perf/`.
 
+## Заданное движение угла под сохранённой нагрузкой
+
+Для отдельной проверки механики используйте чистый сохранённый вход
+`browser-full-five-before-plus/minus.json`. Его 40 шагов посадки проверяются
+точно против прежних координат/энергии, затем задаётся ход угла в направлении
+нижнего переднего крепления. Лодка и поле не пересчитываются; масса,
+материал, верхняя планка и допуски прежние. Это не закон верёвки или замер
+отклика браузера. Новый путь результата обязателен; перезапись отклоняется.
+
+```sh
+node tests/cloth-support-balance.test.mjs
+node scripts/cloth_support_fixture.mjs out/acceptance/browser-full-five-before-plus.json 0.05 out/acceptance/supports-plus-60.json 60
+node scripts/cloth_support_fixture.mjs out/acceptance/browser-full-five-before-plus.json 0.05 out/acceptance/supports-plus-120.json 120
+node scripts/cloth_support_fixture.mjs out/acceptance/browser-full-five-before-plus.json 0.05 out/acceptance/supports-plus-240.json 240
+node scripts/cloth_support_refinement.mjs out/acceptance/supports-plus-60.json out/acceptance/supports-plus-120.json out/acceptance/supports-plus-240.json out/acceptance/supports-plus-refinement.json
+```
+
+Повторите последовательно для `minus`, хода `−0.05` и нулевого хода.
+Нулевой ход при 60 Гц дополнительно сравнивается точно с прежними 120
+рабочими шагами. Переход — `sin⁴(πt/T)`, T=1 с, затем удержание 1 с;
+скорость и ускорение на концах нулевые. Необязательный пятый аргумент
+`sin2` сохраняет контроль со скачком ускорения. Команды/силы/позиции и
+остатки общего баланса сохраняются на каждом шаге. Отказ тоже сохраняется
+в отдельный JSON и завершает команду с ненулевым кодом.
+Сравнение требует чистые физические записи и проверяет исходники по коммиту;
+времена совпадают без интерполяции. История движения и накопленная работа
+измеряются целиком, итоговая работа записывается отдельно.
+
 ## Подробный расчёт воздуха и воды (CFD)
 
 CFD выполняется вне интерактивного шага. Его запуск требует отдельного решения

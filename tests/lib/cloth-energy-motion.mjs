@@ -2,7 +2,7 @@
 // Многоточечный градиент сначала сворачивается через аффинную планку, затем
 // вычисляется знаменатель. Равенство C+α λ/h² не заменяет уравнение движения.
 export class EnergyMotion {
-  constructor({ positions, mass, constraints, fixed = [], board = null, dampingHz = 6 }) {
+  constructor({ positions, mass, constraints, fixed = [], board = null, dampingHz = 6, translatingBody = null }) {
     if (!mass?.length || positions?.length !== 3 * mass.length ||
         !Array.from(mass).every(x => Number.isFinite(x) && x > 0) ||
         !Array.from(positions).every(Number.isFinite) || !Array.isArray(constraints) ||
@@ -18,6 +18,27 @@ export class EnergyMotion {
     for (const i of fixed) {
       if (!Number.isInteger(i) || i < 0 || i >= mass.length) throw new Error('Некорректное закрепление');
       this.w[i] = 0;
+    }
+    if (translatingBody) {
+      const { node, attachments, dampingHz: bodyDampingHz = 0, frame } = translatingBody;
+      if (!this.movingSupportsAllowed() || board || !Number.isInteger(node) || node < 0 || node >= mass.length ||
+          this.fixed.has(node) || !Array.isArray(attachments) || !attachments.length ||
+          new Set(attachments).size !== attachments.length || attachments.some(i =>
+            !Number.isInteger(i) || i < 0 || i >= mass.length || i === node || this.fixed.has(i)) ||
+          !Number.isFinite(bodyDampingHz) || bodyDampingHz < 0 || frame!=='inertial-cartesian')
+        throw new Error('Поступательная опора требует полного уравнения, инерциальных осей, отдельных узлов и постановки без планки');
+      // mass[node] — только опора. Массы прикреплённых узлов ткани уже есть
+      // в mass и входят в общую инерцию ровно один раз.
+      this.translatingBody = Object.freeze({ node, attachments: Object.freeze(attachments.slice()), dampingHz: bodyDampingHz, frame,
+        offsets: Object.freeze(attachments.map(i => Object.freeze(Array.from(this.pos.slice(3*i,3*i+3),
+          (v,d) => v-this.pos[3*node+d])))) });
+      this.bodyAttachments = new Set(attachments);
+      const effectiveMass = mass[node] + attachments.reduce((s,i) => s + mass[i], 0);
+      if (!Number.isFinite(effectiveMass) || !Number.isFinite(1/effectiveMass))
+        throw new Error('Переполнение массы поступательной опоры');
+      this.w[node] = 1/effectiveMass; this.bodyEffectiveMassKg = effectiveMass;
+      for (const i of attachments) { this.w[i]=0; this.target[i]=node; }
+      this.reconstruct(); this.prev.set(this.pos);
     }
     if (board) {
       const { head, end, nodes, fractions } = board;
@@ -47,6 +68,11 @@ export class EnergyMotion {
 
   // Длина планки задаётся отдельной жёсткой связью, не скрытой поправкой здесь.
   reconstruct() {
+    if (this.translatingBody) {
+      const { node, attachments, offsets } = this.translatingBody;
+      for (let j=0;j<attachments.length;j++) for (let d=0;d<3;d++)
+        this.pos[3*attachments[j]+d] = this.pos[3*node+d]+offsets[j][d];
+    }
     if (!this.board) return;
     const { head, end, nodes, fractions } = this.board, p = this.pos;
     for (let k = 0; k < nodes.length; k++) for (let d = 0; d < 3; d++)
@@ -75,6 +101,7 @@ export class EnergyMotion {
     if (!(h > 0)) return 0;
     let energy = 0;
     for (let i = 0; i < this.mass.length; i++) if (this.w[i] > 0 ||
+        this.bodyAttachments?.has(i) ||
         (this.board && this.board.nodes.includes(i) && !this.fixed.has(i)) ||
         (this.supportMotionActive && this.fixed.has(i)))
       for (let d = 0; d < 3; d++) energy += .5 * this.mass[i] *
@@ -109,6 +136,17 @@ export class EnergyMotion {
     for (const [i, fixedPosition] of this.fixedPositions) for (let d = 0; d < 3; d++)
       if (this.pos[3 * i + d] !== fixedPosition[d])
         throw new Error('Подвижное закрепление требует отдельного учёта работы');
+    if (this.translatingBody) {
+      const {node,attachments,offsets}=this.translatingBody;
+      // Оси опоры не вращаются. Проверяется и текущая геометрия, и история:
+      // внешняя перестановка узла не должна создавать скрытого импульса.
+      for (const field of [this.pos,this.prev]) for(let j=0;j<attachments.length;j++) for(let d=0;d<3;d++) {
+        const value=field[3*attachments[j]+d],expected=field[3*node+d]+offsets[j][d];
+        const roundoff=32*Number.EPSILON*Math.max(1,Math.abs(value),Math.abs(expected),Math.abs(offsets[j][d]));
+        if (!Number.isFinite(value) || !Number.isFinite(expected) || Math.abs(value-expected)>roundoff)
+          throw new Error('Поступательная опора или история изменена вне общего шага');
+      }
+    }
     if (supportTargets !== undefined && (!this.movingSupportsAllowed() || !Array.isArray(supportTargets)))
       throw new Error('Перемещение закреплений требует полного уравнения и массива команд');
     const targets = (supportTargets ?? []).map(target => {
@@ -141,14 +179,24 @@ export class EnergyMotion {
     for (const c of this.constraints) if (c.alpha > 0) initialSoftEnergyJ += .5 * c.value(old).C ** 2 / c.alpha;
     const dampingForce = new Float64Array(this.pos.length);
     for (let i = 0; i < this.mass.length; i++) if (this.w[i] ||
+        this.bodyAttachments?.has(i) ||
         (this.board && this.board.nodes.includes(i) && !this.fixed.has(i)) ||
         (this.supportMotionActive && this.fixed.has(i))) for (let d = 0; d < 3; d++) {
-      const k = 3 * i + d; dampingForce[k] = this.mass[i] * (decay - 1) * (old[k] - prior[k]) / (priorDt * h);
+      const k = 3 * i + d;
+      const ownDecay = i===this.translatingBody?.node ? Math.exp(-this.translatingBody.dampingHz*h) : decay;
+      dampingForce[k] = this.mass[i] * (ownDecay - 1) * (old[k] - prior[k]) / (priorDt * h);
     }
     for (const {node,positionM} of targets) this.pos.set(positionM,3*node);
-    for (let i = 0; i < this.mass.length; i++) if (this.w[i]) for (let d = 0; d < 3; d++) {
+    for (let i = 0; i < this.mass.length; i++) if (this.w[i] && i!==this.translatingBody?.node) for (let d = 0; d < 3; d++) {
       const k = 3 * i + d;
       this.pos[k] += decay * (old[k] - prior[k]) / priorDt * h + h * h * this.w[i] * reducedForce[k];
+    }
+    if (this.translatingBody) {
+      const node=this.translatingBody.node, reducedDamping=this.reduceField(dampingForce);
+      for (let d=0;d<3;d++) {
+        const k=3*node+d;
+        this.pos[k]=old[k]+(old[k]-prior[k])/priorDt*h + h*h*this.w[node]*(reducedForce[k]+reducedDamping[k]);
+      }
     }
     if (this.board && this.supportMotionActive) for (let d=0;d<3;d++) {
       const k=3*this.board.head+d, delta=this.pos[k]-old[k]-decay*(old[k]-prior[k])/priorDt*h;
@@ -197,7 +245,7 @@ export class EnergyMotion {
       workJ += force[k] * displacement; dampingWorkJ += dampingForce[k] * displacement;
       hardWorkEstimateJ += hardForce[k] * displacement;
     }
-    const support = this.supportMotionActive
+    const support = this.supportMotionActive || this.translatingBody
       ? this.supportAudit(force,h,priorDt,old,prior,dampingForce,materialResidual,hardForce,
           kineticJ-initialKineticJ,softEnergyJ-initialSoftEnergyJ,workJ,dampingWorkJ,hardWorkEstimateJ)
       : null;
@@ -218,11 +266,15 @@ export class EnergyMotion {
   supportAudit(force,h,priorDt,old,prior,dampingForce,materialGradient,hardForce,
       kineticChangeJ,softEnergyChangeJ,appliedWorkJ,dampingWorkJ,hardWorkJ) {
     const supportForceN = new Float64Array(this.pos.length);
+    const bodyAttachmentForceN = this.translatingBody ? new Float64Array(this.pos.length) : null;
+    const bodyBalanceResidualN = this.translatingBody ? [0,0,0] : null;
     let inertiaIncrementJ=0, materialIncrementJ=-softEnergyChangeJ;
     for (let i=0;i<this.mass.length;i++) for (let d=0;d<3;d++) {
       const k=3*i+d, displacement=this.pos[k]-old[k];
       const velocity=displacement/h, priorVelocity=(old[k]-prior[k])/priorDt;
       const residual=this.mass[i]*(velocity-priorVelocity)/h-force[k]-dampingForce[k]+materialGradient[k]-hardForce[k];
+      if (this.bodyAttachments?.has(i)) { bodyAttachmentForceN[k]=residual; bodyBalanceResidualN[d]+=residual; }
+      if (i===this.translatingBody?.node) bodyBalanceResidualN[d]+=residual;
       inertiaIncrementJ += .5*this.mass[i]*(velocity-priorVelocity)**2;
       materialIncrementJ += materialGradient[k]*displacement;
       if (this.board?.nodes.includes(i)) {
@@ -234,7 +286,26 @@ export class EnergyMotion {
     for (const i of this.fixed) for (let d=0;d<3;d++) {
       const k=3*i+d; supportWorkJ += supportForceN[k]*(this.pos[k]-old[k]);
     }
+    let bodyAudit;
+    if (this.translatingBody) {
+      const {node,attachments}=this.translatingBody, bodyForceN=[0,0,0],bodyMomentNm=[0,0,0];
+      let bodyWorkJ=0, attachmentWorkJ=0;
+      for (const i of attachments) {
+        const r=[0,1,2].map(d=>this.pos[3*i+d]-this.pos[3*node+d]);
+        const f=[0,1,2].map(d=>-bodyAttachmentForceN[3*i+d]);
+        for(let d=0;d<3;d++) {
+          bodyForceN[d]+=f[d];bodyWorkJ+=f[d]*(this.pos[3*node+d]-old[3*node+d]);
+          attachmentWorkJ-=f[d]*(this.pos[3*i+d]-old[3*i+d]);
+        }
+        bodyMomentNm[0]+=r[1]*f[2]-r[2]*f[1];bodyMomentNm[1]+=r[2]*f[0]-r[0]*f[2];
+        bodyMomentNm[2]+=r[0]*f[1]-r[1]*f[0];
+      }
+      bodyAudit={bodyAttachmentForceN,bodyForceN,bodyMomentNm,bodyLockMomentNm:bodyMomentNm.map(v=>-v),
+        bodyFrame:this.translatingBody.frame,bodyOriginM:Array.from(this.pos.slice(3*node,3*node+3)),
+        bodyBalanceResidualN,bodyWorkJ,attachmentWorkJ,bodyWorkCancellationResidualJ:bodyWorkJ+attachmentWorkJ};
+    }
     return {supportForceN,supportWorkJ,inertiaIncrementJ,materialIncrementJ,
-      discreteBalanceResidualJ:kineticChangeJ+softEnergyChangeJ-appliedWorkJ-dampingWorkJ-hardWorkJ-supportWorkJ+inertiaIncrementJ+materialIncrementJ};
+      discreteBalanceResidualJ:kineticChangeJ+softEnergyChangeJ-appliedWorkJ-dampingWorkJ-hardWorkJ-supportWorkJ+inertiaIncrementJ+materialIncrementJ,
+      ...bodyAudit};
   }
 }

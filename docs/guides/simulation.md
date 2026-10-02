@@ -236,6 +236,22 @@ node scripts/cloth_support_body.mjs out/acceptance/новый-ответ-тел�
 SV20 и не меняет рабочий физический пакет;
 [границы](../research/cloth-material.md#известный-ответ-тела-и-выделение-нагрузки-парусов).
 
+## Двусторонний расчёт опоры и ткани
+
+Перед подключением движущейся лодки проверьте известную двустороннюю
+поступательную связь, без браузера:
+
+```sh
+node tests/cloth-body-coupling.test.mjs --out=out/acceptance/новая-связь-js.json
+node tests/cloth-body-coupling.test.mjs --linear-backend=kkt-wasm --wasm=out/acceptance/cloth-sparse-20261002-simd.wasm --legacy-input=out/acceptance/cloth-supports-cf42ad9-sin4-inward-plus-60.json --legacy-input=out/acceptance/cloth-supports-cf42ad9-sin4-outward-minus-60.json --out=out/acceptance/новая-связь-wasm.json
+```
+
+Выход создаётся без перезаписи и содержит исходники/ревизию/модуль,
+назначенные условия, известные результаты и отрицательный контроль задержки.
+Оси инерциальные, опора не вращается, направление удерживает внешняя
+направляющая; это не режим `Boat` и не закон верёвки. Планка пока несовместима;
+[границы](../research/cloth-material.md#двустороннее-поступательное-движение-известной-опоры).
+
 ## Экранные команды исследовательской ткани
 
 Из чистого коммита соберите сцену, сохраните новую копию `sim/index.html`

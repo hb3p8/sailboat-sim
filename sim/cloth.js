@@ -905,21 +905,21 @@ export class Cloth {
       };
       const bottom = (u, out) => profAt(T, C, gen.foot_cloth_m || gen.foot_m, nF, u, out);
       const top = (u, out) => profAt(H, HA, gen.head_width_m, [0, side, 0], u, out);
-      this.cutAt = matchedCutSurface(section, bottom, top);
+      this.cutSurfaceAt = matchedCutSurface(section, bottom, top);
       for (let r = 0; r < this.rows; r++) {
         const v = this.rowF(r);
         // Длина согласованной строки измеряется по той же поверхности,
         // независимо от количества столбцов. Границы сохраняют заданные длины.
         let length = 0;
         for (let c = 0; c <= 256; c++) {
-          this.cutAt(c / 256, v, p);
+          this.cutSurfaceAt(c / 256, v, p);
           if (c) length += Math.hypot(...p.map((x, k) => x - last[k]));
           for (let k = 0; k < 3; k++) last[k] = p[k];
         }
         this.rowW[r] = r === 0 ? (gen.foot_cloth_m || gen.foot_m)
           : r === this.rows - 1 ? gen.head_width_m : length;
         for (let c = 0; c < this.cols; c++) {
-          this.cutAt(c / (this.cols - 1), v, p);
+          this.cutSurfaceAt(c / (this.cols - 1), v, p);
           const i = this.ix(r, c);
           this.dx[i] = p[0]; this.dy[i] = p[1]; this.dz[i] = p[2];
         }

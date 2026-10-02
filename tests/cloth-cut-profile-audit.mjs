@@ -31,9 +31,9 @@ const copyModule=async divisions=>{
 };
 const b=new Boat(JSON.parse(pack));b.setGennaker(true);
 const scan=(c,u,v0,v1,step)=>{
-  let last=c.cutAt(u,v0,[]),maxDistanceM=0,atV=null;
+  let last=c.cutSurfaceAt(u,v0,[]),maxDistanceM=0,atV=null;
   for(let i=1;i<=Math.round((v1-v0)/step);i++){
-    const v=v0+i*step,p=c.cutAt(u,v,[]),d=Math.hypot(...p.map((x,k)=>x-last[k]));
+    const v=v0+i*step,p=c.cutSurfaceAt(u,v,[]),d=Math.hypot(...p.map((x,k)=>x-last[k]));
     if(d>maxDistanceM){maxDistanceM=d;atV=v;}last=p;
   }
   return {step,maxDistanceM,atV};
@@ -45,7 +45,7 @@ for(const divisions of [24,40]) {
     const c=new VariantCloth(b.rig.sails[2],2,{rows:11,cols:9,continuousCut:true,analyticCutProfile,rigidBoard:true});
     c.gen=b.p.rig.gennaker;c.designSide=-1;c.design3d([]);
     const edges=[];
-    for(let i=0;i<=32;i++)for(const [u,v] of [[i/32,0],[i/32,1],[0,i/32],[1,i/32]])edges.push(...c.cutAt(u,v,[]));
+    for(let i=0;i<=32;i++)for(const [u,v] of [[i/32,0],[i/32,1],[0,i/32],[1,i/32]])edges.push(...c.cutSurfaceAt(u,v,[]));
     if(referenceEdges)assert.deepEqual(edges,referenceEdges,'Границы контроля изменились');else referenceEdges=edges;
     causes.push({divisions,analyticCutProfile,...scan(c,.1875,.1,.115,.00001)});
   }

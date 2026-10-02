@@ -92,9 +92,9 @@ if(cut!=='original') {
     continuousCut:true,analyticCutProfile:cut==='continuous-analytic'});
   cloth.gen=b.p.rig.gennaker;cloth.designSide=-1;cloth.design3d([]);
   profileScan={u:.1875,vRange:[.1,.115],results:[.001,.0001,.00001].map(step=>{
-    let last=cloth.cutAt(.1875,.1,[]),maxDistanceM=0,atV=null;
+    let last=cloth.cutSurfaceAt(.1875,.1,[]),maxDistanceM=0,atV=null;
     for(let i=1;i<=Math.round(.015/step);i++) {
-      const v=.1+i*step,p=cloth.cutAt(.1875,v,[]),d=Math.hypot(...p.map((x,k)=>x-last[k]));
+      const v=.1+i*step,p=cloth.cutSurfaceAt(.1875,v,[]),d=Math.hypot(...p.map((x,k)=>x-last[k]));
       if(d>maxDistanceM){maxDistanceM=d;atV=v;}last=p;
     }
     return {step,maxDistanceM,atV,maxDistancePerParameterM:maxDistanceM/step};

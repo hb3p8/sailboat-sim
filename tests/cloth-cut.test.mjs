@@ -38,7 +38,7 @@ const make = (rows,cols,side,continuousCut,analyticCutProfile=false) => {
 const point = (c,r,col) => {const i=c.ix(r,col);return [c.dx[i],c.dy[i],c.dz[i]];};
 const previous=make(11,9,-1,true);
 // Прежний дискретный поиск остаётся явным отрицательным контролем.
-assert.ok(distance(previous.cutAt(.1875,.10530,[]),previous.cutAt(.1875,.10531,[]))>.04);
+assert.ok(distance(previous.cutSurfaceAt(.1875,.10530,[]),previous.cutSurfaceAt(.1875,.10531,[]))>.04);
 assert.throws(()=>make(11,9,-1,false,true),/непрерывного кроя/);
 for(const analytic of [false,true]) {
 const coarse=make(11,9,-1,true,analytic),old=make(11,9,-1,false),fine=make(21,17,-1,true,analytic);
@@ -56,7 +56,7 @@ for(let r=0;r<21;r++)for(let c=0;c<17;c++) {
 // Фиксированная верхняя оценка 100 м на единицу параметра значительно больше
 // размеров паруса; 1 нм — запас для обращения высоты 40 делениями пополам.
 for(const u of [0,.071,.25,.5,.793,1])for(const v of [0,1])for(const eps of [1e-5,1e-7,1e-9]) {
-  const p=coarse.cutAt(u,v,[]),q=coarse.cutAt(u,v===0?eps:1-eps,[]);
+  const p=coarse.cutSurfaceAt(u,v,[]),q=coarse.cutSurfaceAt(u,v===0?eps:1-eps,[]);
   assert.ok(distance(p,q)<=100*eps+1e-9,`Разрыв у границы u=${u}, v=${v}, шаг=${eps}`);
 }
 // Геометрическое качество: оба треугольника каждой ячейки ненулевые и
@@ -71,18 +71,32 @@ for(let r=0;r<40;r++)for(let c=0;c<32;c++) {
 }
 // Длина строки читается с одной поверхности и не меняется со столбцами.
 for(let r=0;r<11;r++)assert.equal(coarse.rowW[r],fine.rowW[r*2]);
+// cutAt(rf,t) обязан читать узлы по индексу ряда, как sample() для летящего
+// полотна. Аналитическая поверхность имеет другой аргумент и другое имя.
+// Независимый плоский квадрат в буферах поймает подмену одного метода другим.
+const sampled=make(11,9,-1,true,analytic);
+for(let r=0;r<11;r++)for(let col=0;col<9;col++) {
+  const i=sampled.ix(r,col);sampled.dx[i]=col/8;sampled.dy[i]=r/10;sampled.dz[i]=0;
+}
+for(const rf of [0,.5,5.3,10]) {
+  for(const u of [0,.17,.5,.87,1])
+    assert.ok(distance(sampled.cutAt(rf,u,[]),[u,rf/10,0])<1e-15);
+  const shape=sampled.rowShape(rf,true);
+  assert.equal(shape.chord,1);assert.equal(shape.camber,0);assert.equal(shape.arc,1);
+  assert.equal(shape.back,0);assert.equal(shape.flip,0);assert.equal(shape.kink,0);
+}
 if(analytic) {
   // Тот же предел 100 м/единицу параметра, что у границ: проверяем область
   // найденного разрыва и стыки проектных станций без изменения допуска.
   for(const u of [.071,.1875,.5,.793])for(const step of [.001,.0001,.00001]) {
-    let last=coarse.cutAt(u,.1,[]);
+    let last=coarse.cutSurfaceAt(u,.1,[]);
     for(let i=1;i<=Math.round(.015/step);i++) {
-      const p=coarse.cutAt(u,.1+i*step,[]);
+      const p=coarse.cutSurfaceAt(u,.1+i*step,[]);
       assert.ok(distance(p,last)<=100*step+1e-9,`Скачок внутри кроя, u=${u}, шаг=${step}`);last=p;
     }
   }
   for(const v of [.25,.5,.75])for(const u of [.071,.1875,.5,.793])for(const eps of [1e-5,1e-7,1e-9])
-    assert.ok(distance(coarse.cutAt(u,v-eps,[]),coarse.cutAt(u,v+eps,[]))<=200*eps+1e-9);
+    assert.ok(distance(coarse.cutSurfaceAt(u,v-eps,[]),coarse.cutSurfaceAt(u,v+eps,[]))<=200*eps+1e-9);
 }
 }
 console.log('Крой: известные максимумы, поверхности, все границы, внутренние пределы, зеркало, общие узлы и ячейки проверены; отрицательный контроль сохранён.');

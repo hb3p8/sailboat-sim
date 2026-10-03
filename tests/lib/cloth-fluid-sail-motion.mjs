@@ -6,9 +6,12 @@ import {materialSurface,gridTriangles,MODEL_MATERIAL} from './cloth-material.mjs
 import {installSharedInput} from './cloth-shared-input.mjs';
 import {distance} from '../cloth-compliance.mjs';
 
-export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='schur-wasm',hS=r.hS}={}) {
+export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='schur-wasm',hS=r.hS,allowRefinementGrid=false}={}) {
   const n=r.rows*r.cols;
-  if(r.rows!==11||r.cols!==9||r.loadFrame!=='inertial-cartesian-frozen'||r.mass.length!==n+4||r.fixed.length||
+  const gridAccepted=r.rows===11&&r.cols===9 || allowRefinementGrid&&
+    Number.isInteger(r.rows)&&Number.isInteger(r.cols)&&r.rows>=11&&r.cols>=9&&r.rows<=41&&r.cols<=33&&
+    (r.rows-1)%10===0&&(r.cols-1)%8===0;
+  if(!gridAccepted||r.loadFrame!=='inertial-cartesian-frozen'||r.mass.length!==n+4||r.fixed.length||
       JSON.stringify(bodyInput)!==JSON.stringify({massKg:1000,principalInertiaKgM2:[1000,5000,5000],originM:[0,0,0]}))
     throw new Error('Нужна проверенная лабораторная постановка 11×9');
   const addedDiagonal=[60,1000,1200,250,4500,3500];

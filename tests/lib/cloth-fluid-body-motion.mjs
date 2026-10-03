@@ -3,12 +3,13 @@
 import {IMPLICIT_TOLERANCES} from './cloth-implicit-motion.mjs';
 import {finiteArray,checkRotation,cayleyBodyPose,cross3,dotN,rotate3,transpose3,denseSolve} from './cloth-fluid-inertia.mjs';
 import {fluidSchurDirection} from './cloth-fluid-schur-direction.mjs';
+import {bodyRopes,ropeValue} from './cloth-body-rope.mjs';
 const add=(a,b)=>a.map((v,d)=>v+b[d]),sub=(a,b)=>a.map((v,d)=>v-b[d]);
 const point=(p,i)=>Array.from(p.slice(3*i,3*i+3));
 
 export class FluidBodyEnergyMotion {
   constructor({positions,mass,constraints,body,velocityMS,dampingHz=6,
-      linearBackend='reference-dense',wasmSparseFactor,gridRows,gridCols,newtonCorrection=true}) {
+      linearBackend='reference-dense',wasmSparseFactor,gridRows,gridCols,newtonCorrection=true,ropes=[]}) {
     if(positions?.length!==3*mass?.length||!Array.from(mass).every(v=>Number.isFinite(v)&&v>0)||
         !Array.from(positions).every(Number.isFinite)||!Array.isArray(constraints)||
         !(Number.isFinite(dampingHz)&&dampingHz>=0)||!finiteArray(body?.originM,3)||
@@ -23,6 +24,10 @@ export class FluidBodyEnergyMotion {
     this.constraints=constraints.map(c=>({...c,lambda:0}));
     if(this.constraints.some(c=>!(Number.isFinite(c.alpha)&&c.alpha>=0)||typeof c.value!=='function'||(c.alpha>0&&c.unilateral)))
       throw new Error('Некорректный материал или связь');
+    this.ropes=bodyRopes(ropes,mass.length);this.ropeLengthsM=Float64Array.from(this.ropes,r=>r.lengthM);
+    this.ropeHardStart=this.constraints.filter(c=>c.alpha===0).length;
+    this.constraints.push(...this.ropes.map((r,i)=>({alpha:0,unilateral:true,lambda:0,ropeIndex:i,
+      value:(q,context)=>ropeValue(r,q,context.pose,context.ropeLengthsM[i])})));
     this.soft=this.constraints.filter(c=>c.alpha>0);this.hard=this.constraints.filter(c=>c.alpha===0);
     this.body={originM:Array.from(body.originM),orientation9:Array.from(body.orientation9),velocity6:Array.from(body.velocity6)};
     this.inertia=body.inertia;this.dampingHz=dampingHz;
@@ -47,9 +52,13 @@ export class FluidBodyEnergyMotion {
       if(Math.max(...sub(point(this.pos,node),target).map(Math.abs))>this.tolerances.lengthToleranceM)
         throw new Error('Крепление переставлено вне общего шага');
     }
+    if(!finiteArray(this.ropeLengthsM,this.ropes.length)||this.ropeLengthsM.some(v=>v<=0))
+      throw new Error('Некорректная сохранённая длина верёвки');
+    for(let i=0;i<this.ropes.length;i++)if(ropeValue(this.ropes[i],this.pos,this.body,this.ropeLengthsM[i]).C>
+        this.tolerances.lengthToleranceM)throw new Error('Верёвка переставлена вне общего шага');
   }
 
-  bodyState(nu,old,load,h,reactions) {
+  bodyState(nu,old,load,h,reactions,q,mu) {
     const pose=cayleyBodyPose(old.body.originM,old.body.orientation9,nu,h);
     const RT=transpose3(pose.averageRotation9),oldRT=transpose3(old.body.orientation9);
     const deltaNu=sub(nu,old.body.velocity6),inertial=this.inertia.momentum(deltaNu).map(v=>v/h);
@@ -61,10 +70,27 @@ export class FluidBodyEnergyMotion {
       for(let d=0;d<3;d++)bodyForceN[d]+=reaction[d];
       const torque=cross3(lever,reaction);for(let d=0;d<3;d++)bodyMomentNm[d]+=torque[d];
     });
+    let ropeState;
+    if(this.ropes.length) {
+      const bindingInterfaceLoad=[...rotate3(RT,bodyForceN),...rotate3(oldRT,bodyMomentNm)];
+      const ropeLengthsM=load.ropeLengthsM??this.ropeLengthsM;
+      const ropeValues=this.ropes.map((r,i)=>ropeValue(r,q,pose,ropeLengthsM[i]));
+      const ropeForceN=[0,0,0],ropeMomentNm=[0,0,0];
+      const ropeReactions=this.ropes.map((r,i)=>{
+        const force=ropeValues[i].direction.map(v=>v*mu[this.ropeHardStart+i]);
+        const torque=cross3(rotate3(pose.averageRotation9,r.localM),force);
+        for(let d=0;d<3;d++){ropeForceN[d]+=force[d];ropeMomentNm[d]+=torque[d];bodyForceN[d]+=force[d];bodyMomentNm[d]+=torque[d];}
+        return {bodyForceN:force,bodyMomentNm:torque,interfaceLoad:[...rotate3(RT,force),...rotate3(oldRT,torque)]};
+      });
+      ropeState={ropeValues,ropeReactions,ropeLengthsM,bindingInterfaceLoad,
+        ropeInterfaceLoad:[...rotate3(RT,ropeForceN),...rotate3(oldRT,ropeMomentNm)]};
+    }
     const interfaceLoad=[...rotate3(RT,bodyForceN),...rotate3(oldRT,bodyMomentNm)];
     const bodyResidual=inertial.map((v,d)=>v+convective[d]-external[d]-interfaceLoad[d]);
-    return {nu,pose,convective,external,interfaceLoad,bodyResidual,bodyForceN,bodyMomentNm,targets};
+    return {nu,pose,convective,external,interfaceLoad,bodyResidual,bodyForceN,bodyMomentNm,targets,...ropeState};
   }
+
+  hardValue(c,q,context) {return c.ropeIndex==null?c.value(q):c.value(q,context);}
 
   readSoft(q) {
     // Каждое промежуточное состояние владеет своими градиентами. Неудачный
@@ -85,7 +111,9 @@ export class FluidBodyEnergyMotion {
 
   state(z,old,load,h,active) {
     const nc=this.pos.length,q=z.slice(0,nc),nu=Array.from(z.slice(nc,nc+6));
-    const body=this.bodyState(nu,old,load,h,z.slice(nc+6+active.length));
+    const mu=new Float64Array(this.lastMu.length);
+    active.forEach((j,a)=>{mu[j]=z[nc+6+a];});
+    const body=this.bodyState(nu,old,load,h,z.slice(nc+6+active.length),q,mu);
     const clothResidual=new Float64Array(nc),materialGradient=new Float64Array(nc),hardForce=new Float64Array(nc);
     let softEnergyJ=0;
     const decay=Math.exp(-this.dampingHz*h),dampingForce=new Float64Array(nc);
@@ -99,10 +127,10 @@ export class FluidBodyEnergyMotion {
       if(values)for(let k=0;k<nodes.length;k++)for(let d=0;d<3;d++)materialGradient[3*nodes[k]+d]+=C*values[3*k+d]/c.alpha;
       else for(const [i,g] of grad)for(let d=0;d<3;d++)materialGradient[3*i+d]+=C*g[d]/c.alpha;
     }
-    const constraintResidual=[],mu=new Float64Array(this.lastMu.length);
+    const constraintResidual=[];
     let maxLengthM=0,dualViolationN=0,complementarityJ=0;
     for(let j=0;j<this.hard.length;j++) {
-      const c=this.hard[j],{C,grad}=c.value(q),a=active.indexOf(j),value=a<0?0:z[nc+6+a];mu[j]=value;
+      const c=this.hard[j],{C,grad}=this.hardValue(c,q,body),a=active.indexOf(j),value=mu[j];
       maxLengthM=Math.max(maxLengthM,c.unilateral?Math.max(0,C):Math.abs(C));
       if(a>=0)constraintResidual.push(C);
       for(const [i,g] of grad)for(let d=0;d<3;d++)hardForce[3*i+d]-=value*g[d];
@@ -132,8 +160,10 @@ export class FluidBodyEnergyMotion {
     this.validateState();
     if(load?.frame!=='inertial-cartesian-cg'||!finiteArray(load.clothForceN,this.pos.length)||
         !finiteArray(load.forceN,3)||!finiteArray(load.momentNm,3)||!(Number.isFinite(h)&&h>0)||
-        !Number.isInteger(passes)||passes<1)throw new Error('Некорректная нагрузка или шаг тела с водой');
-    const old={pos:this.pos.slice(),vel:this.vel.slice(),body:structuredClone(this.body)};
+        !Number.isInteger(passes)||passes<1||
+        (load.ropeLengthsM!=null&&(!finiteArray(load.ropeLengthsM,this.ropes.length)||Array.from(load.ropeLengthsM).some(v=>v<=0))))
+      throw new Error('Некорректная нагрузка, команда верёвки или шаг тела с водой');
+    const old={pos:this.pos.slice(),vel:this.vel.slice(),body:structuredClone(this.body),ropeLengthsM:this.ropeLengthsM.slice()};
     let active=this.hard.flatMap((c,j)=>!c.unilateral||this.lastMu[j]>this.tolerances.dualToleranceN?[j]:[]);
     let state,z,iterations=0,polishIterations=0,polishStalls=0;
     const polishFactorizationFailures=[];
@@ -165,7 +195,7 @@ export class FluidBodyEnergyMotion {
           (remove<0||state.mu[j]<state.mu[remove]))remove=j;
       if(remove>=0){active=active.filter(j=>j!==remove);continue;}
       let include=-1,worst=this.tolerances.lengthToleranceM;
-      this.hard.forEach((c,j)=>{if(c.unilateral&&!active.includes(j)){const {C}=c.value(state.q);if(C>worst){worst=C;include=j;}}});
+      this.hard.forEach((c,j)=>{if(c.unilateral&&!active.includes(j)){const {C}=this.hardValue(c,state.q,state);if(C>worst){worst=C;include=j;}}});
       if(include>=0){active.push(include);continue;}
       if(this.linearBackend==='schur-wasm'&&this.newtonCorrection&&iteration>0&&iteration<passes) {
         // Один точный корректор только окончательного набора натянутых кромок.
@@ -181,7 +211,8 @@ export class FluidBodyEnergyMotion {
           if(!(state.maxForceN<=this.tolerances.forceToleranceN&&state.maxLengthM<=this.tolerances.lengthToleranceM&&
               state.dualViolationN<=this.tolerances.dualToleranceN&&state.complementarityJ<=this.tolerances.complementarityToleranceJ&&
               Math.abs(checked.discreteBalanceResidualJ)<=checked.workLimitJ&&
-              Math.abs(checked.bodyWorkCancellationResidualJ)<=checked.interfaceWorkLimitJ))throw error;
+              Math.abs(checked.bodyWorkCancellationResidualJ)<=checked.interfaceWorkLimitJ&&
+              this.validRopeAudit(checked)))throw error;
           polishFactorizationFailures.push({pivot:error.pivot});
         }
         const norm=dotN(state.residual,state.residual);
@@ -197,6 +228,10 @@ export class FluidBodyEnergyMotion {
       if(state.maxLengthM>this.tolerances.lengthToleranceM||state.dualViolationN>this.tolerances.dualToleranceN||
           state.complementarityJ>this.tolerances.complementarityToleranceJ)throw new Error('Не выполнены условия кромок общего шага');
       const audit=this.audit(state,old,load,h,iterations);
+      if(this.ropes.length&&(!(Math.abs(audit.discreteBalanceResidualJ)<=audit.workLimitJ&&
+          Math.abs(audit.bodyWorkCancellationResidualJ)<=audit.interfaceWorkLimitJ)||!this.validRopeAudit(audit))) {
+        const error=new Error('Не выполнен баланс работы управляемой верёвки');error.audit=audit;throw error;
+      }
       if(this.linearBackend==='schur-wasm')Object.assign(audit.solver,{newtonCorrection:this.newtonCorrection,polishIterations,polishStalls});
       if(polishFactorizationFailures.length)Object.assign(audit.solver,{polishFactorizationFailures});
       checkRotation(state.pose.orientation9);
@@ -205,6 +240,7 @@ export class FluidBodyEnergyMotion {
       this.body={originM:state.pose.originM.slice(),orientation9:state.pose.orientation9.slice(),velocity6:state.nu.slice()};
       this.lastMu=state.mu.slice();this.soft.forEach((c,j)=>{c.lambda=softLambdas[j];});
       this.hard.forEach((c,j)=>{c.lambda=-h*h*state.mu[j];});
+      if(this.ropes.length)this.ropeLengthsM=Float64Array.from(state.ropeLengthsM);
       return audit;
     }
     throw new Error('Не сошёлся выбор кромок общего шага');
@@ -234,11 +270,50 @@ export class FluidBodyEnergyMotion {
       hardWorkJ+=s.hardForce[k]*displacement;attachmentWorkJ+=s.attachmentForceN[k]*displacement;
       materialGradientWorkJ+=s.materialGradient[k]*displacement;
     }
+    let ropeAudit,ropeInterfaceResidualJ=0,bindingBodyWorkJ=bodyWorkJ;
+    if(this.ropes.length) {
+      bindingBodyWorkJ=h*dotN(s.nu,s.bindingInterfaceLoad);
+      const records=this.ropes.map((r,i)=>{
+        const value=s.ropeValues[i],initial=ropeValue(r,old.pos,old.body,old.ropeLengthsM[i]);
+        const tensionN=s.mu[this.ropeHardStart+i],{bodyForceN,bodyMomentNm,interfaceLoad}=s.ropeReactions[i];
+        const ropeBodyWorkJ=h*dotN(s.nu,interfaceLoad);
+        const endpointWorkJ=dotN(bodyForceN,sub(value.endpointM,initial.endpointM));
+        const ropeClothWorkJ=-dotN(bodyForceN,sub(point(s.q,r.node),point(old.pos,r.node)));
+        const actualWorkJ=ropeBodyWorkJ+ropeClothWorkJ;
+        const controlWorkJ=-tensionN*(value.lengthM-initial.lengthM);
+        // При выборе направления в конце шага изменение направления и
+        // выбор начального провиса дают неотрицательную численную потерю.
+        const engagementLossJ=tensionN*Math.max(0,initial.lengthM-initial.distanceM);
+        const turnLossJ=tensionN*Math.max(0,initial.distanceM-dotN(value.direction,initial.relativeM));
+        const controlResidualJ=actualWorkJ-controlWorkJ+engagementLossJ+turnLossJ;
+        const controlLimitJ=2*this.tolerances.lengthToleranceM*Math.abs(tensionN)+
+          128*Number.EPSILON*Math.max(1,Math.abs(actualWorkJ),Math.abs(controlWorkJ),Math.abs(engagementLossJ),Math.abs(turnLossJ));
+        // Вычитание мировых координат имеет абсолютную ошибку от самих
+        // координат, даже при малом перемещении. Это оценка округления
+        // операций, а не новый физический допуск или поправка силы.
+        const endpointRoundoffJ=128*Number.EPSILON*bodyForceN.reduce((sum,v,d)=>
+          sum+Math.abs(v)*(Math.abs(value.endpointM[d])+Math.abs(initial.endpointM[d])),0);
+        ropeInterfaceResidualJ+=ropeBodyWorkJ-endpointWorkJ;
+        return {node:r.node,localM:r.localM.slice(),oldLengthM:initial.lengthM,lengthM:value.lengthM,
+          distanceM:value.distanceM,slackM:Math.max(0,-value.C),violationM:Math.max(0,value.C),tensionN,
+          bodyForceN,bodyMomentNm,clothForceN:bodyForceN.map(v=>-v),
+          bodyWorkJ:ropeBodyWorkJ,clothWorkJ:ropeClothWorkJ,actualWorkJ,controlWorkJ,
+          engagementLossJ,turnLossJ,controlResidualJ,controlLimitJ,
+          endpointWorkResidualJ:ropeBodyWorkJ-endpointWorkJ,endpointRoundoffJ};
+      });
+      // hardWork уже содержит работу верёвки на ткани. Добавляем работу
+      // её другого конца; равные силы на движущихся концах не обязаны
+      // давать нулевую суммарную работу при изменении длины.
+      hardWorkJ+=records.reduce((sum,r)=>sum+r.bodyWorkJ,0);
+      ropeAudit={ropes:records,ropeControlWorkJ:records.reduce((sum,r)=>sum+r.controlWorkJ,0),
+        ropeActualWorkJ:records.reduce((sum,r)=>sum+r.actualWorkJ,0),bindingBodyWorkJ,ropeInterfaceResidualJ};
+    }
     const workJ=bodyExternalWorkJ+clothWorkJ,kineticChangeJ=after-before,softChangeJ=s.softEnergyJ-softBeforeJ;
     const materialIncrementJ=materialGradientWorkJ-softChangeJ;
-    const bodyWorkCancellationResidualJ=bodyWorkJ+attachmentWorkJ;
+    const bindingCancellationResidualJ=bindingBodyWorkJ+attachmentWorkJ;
+    const bodyWorkCancellationResidualJ=bindingCancellationResidualJ+ropeInterfaceResidualJ;
     const discreteBalanceResidualJ=kineticChangeJ+softChangeJ-workJ-dampingWorkJ-hardWorkJ+
-      inertiaIncrementJ+materialIncrementJ-bodyWorkCancellationResidualJ;
+      inertiaIncrementJ+materialIncrementJ-bindingCancellationResidualJ;
     const deltaBody=sub(s.nu,old.body.velocity6),bodyResidualWorkJ=h*dotN(s.nu,s.bodyResidual);
     let residualIdentityJ=bodyResidualWorkJ,workLimitJ=0;
     for(let k=0;k<s.q.length;k++) {
@@ -249,7 +324,8 @@ export class FluidBodyEnergyMotion {
     workLimitJ+=128*Number.EPSILON*Math.max(1,Math.abs(before),Math.abs(after),Math.abs(workJ),Math.abs(inertiaIncrementJ),Math.abs(materialGradientWorkJ));
     const interfaceWorkLimitJ=2*this.tolerances.lengthToleranceM*this.bindings.reduce((sum,{node})=>
       sum+point(s.attachmentForceN,node).reduce((q,v)=>q+Math.abs(v),0),0)+
-      128*Number.EPSILON*Math.max(1,Math.abs(bodyWorkJ),Math.abs(attachmentWorkJ));
+      128*Number.EPSILON*Math.max(1,Math.abs(bodyWorkJ),Math.abs(attachmentWorkJ))+
+      (ropeAudit?.ropes.reduce((sum,r)=>sum+r.endpointRoundoffJ,0)??0);
     return {solver:{method:'общее уравнение обобщённой инерции и ткани',converged:true,iterations,linearBackend:this.linearBackend,
         ...this.tolerances},maxPhysicalResidualN:s.maxForceN,maxHardViolationM:s.maxLengthM,
       dualViolationN:s.dualViolationN,complementarityJ:s.complementarityJ,
@@ -259,6 +335,11 @@ export class FluidBodyEnergyMotion {
       initialKineticJ:before,kineticJ:after,softEnergyJ:s.softEnergyJ,workJ,clothWorkJ,bodyExternalWorkJ,dampingWorkJ,hardWorkJ,
       inertiaIncrementJ,materialIncrementJ,discreteBalanceResidualJ,residualIdentityJ,workLimitJ,
       bodyWorkJ,attachmentWorkJ,bodyWorkCancellationResidualJ,interfaceWorkLimitJ,
-      convectivePowerW:dotN(s.nu,s.convective),bodyIncrementVelocity6:deltaBody};
+      convectivePowerW:dotN(s.nu,s.convective),bodyIncrementVelocity6:deltaBody,...ropeAudit};
+  }
+
+  validRopeAudit(audit) {
+    return !this.ropes.length||audit.ropes.every(r=>Number.isFinite(r.controlResidualJ)&&
+      Math.abs(r.controlResidualJ)<=r.controlLimitJ);
   }
 }

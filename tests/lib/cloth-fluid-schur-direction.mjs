@@ -22,7 +22,7 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
     const values=gradientValues(plan.layout,grad,new Float64Array(plan.coordinates.length));
     return {c,grad,g:Array.from(plan.coordinates,(coordinate,k)=>[coordinate,values[k]])};
   });
-  const hard=m.hard.map(c=>({...c.value(s.q)}));
+  const hard=m.hard.map(c=>({...m.hardValue(c,s.q,s)}));
   const hg=hard.map(c=>coordinates(c.grad));
   const bindings=m.bindings.flatMap(({node})=>[0,1,2].map(d=>[[3*node+d,1]]));
   const groups=[...hg,...bindings];
@@ -82,7 +82,7 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
         for(let k=0;k<plan.rawValues.length;k++)target[plan.layout.slots[k]]+=plan.rawValues[k];
         return C;
       }
-      const {C,grad}=c.value(q);gradientValues(plan.layout,grad,target);return C;
+      const {C,grad}=m.hardValue(c,q,s);gradientValues(plan.layout,grad,target);return C;
     };
     const buffered=t=>typeof t.c.valueInto==='function'&&t.c.gradientNodes?.length===t.plan.layout.nodes.length&&
       t.c.gradientNodes.every((node,i)=>node===t.plan.layout.nodes[i]);
@@ -139,17 +139,22 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
     } else add(nc+j,nc+j,1);
   });
 
-  // Только шесть производных скоростей. Ткань в общем остатке от nu не зависит;
-  // E хранит производные положения закреплений, B — настоящего уравнения тела.
+  // Шесть производных скоростей: закрепления и, при наличии верёвки,
+  // её направление/длина. B читает настоящее уравнение тела.
   const B=new Float64Array(36),E=Array.from({length:6},()=>new Float64Array(n));
   for(let j=0;j<6;j++) {
     const delta=2e-6*Math.max(1,Math.abs(s.nu[j])),plus=s.nu.slice(),minus=s.nu.slice();
     plus[j]+=delta;minus[j]-=delta;
-    const reactions=z.slice(nc+6+active.length),rp=m.bodyState(plus,old,load,h,reactions),rm=m.bodyState(minus,old,load,h,reactions);
+    const reactions=z.slice(nc+6+active.length),rp=m.bodyState(plus,old,load,h,reactions,s.q,s.mu),rm=m.bodyState(minus,old,load,h,reactions,s.q,s.mu);
     for(let d=0;d<6;d++)B[6*d+j]=(rp.bodyResidual[d]-rm.bodyResidual[d])/(2*delta)/(d<3?1:m.inertia.referenceLengthM);
     for(let d=0;d<nb;d++)E[j][nc+nh+d]=-(rp.targets[Math.floor(d/3)][d%3]-rm.targets[Math.floor(d/3)][d%3])/(2*delta);
+    m.ropes.forEach((r,i)=>{
+      const k=m.ropeHardStart+i,T=s.mu[k];
+      for(let d=0;d<3;d++)E[j][3*r.node+d]+=T*(rp.ropeValues[i].direction[d]-rm.ropeValues[i].direction[d])/(2*delta);
+      if(activeSet.has(k))E[j][nc+k]=(rp.ropeValues[i].C-rm.ropeValues[i].C)/(2*delta);
+    });
   }
-  // D зависит только от реакций креплений: мировая сила и момент по середине плеча.
+  // Часть D от реакций креплений: мировая сила и момент по середине плеча.
   const D=Array.from({length:6},()=>new Float64Array(n)),RT=transpose3(s.pose.averageRotation9),oldRT=transpose3(old.body.orientation9);
   m.bindings.forEach(({localM},b)=>{
     const lever=rotate3(s.pose.averageRotation9,localM);
@@ -159,6 +164,23 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
       column.forEach((v,i)=>{D[i][nc+nh+3*b+d]=-v/(i<3?1:m.inertia.referenceLengthM);});
     }
   });
+  if(m.ropes.length) {
+    const reactions=z.slice(nc+6+active.length);
+    // Уравнение тела зависит также от свободных узлов, поскольку они
+    // задают направление силы верёвки. Остальное полотно здесь не читается.
+    for(const node of new Set(m.ropes.map(r=>r.node)))for(let d=0;d<3;d++) {
+      const k=3*node+d,delta=2e-6*Math.max(1,Math.abs(s.q[k])),plus=s.q.slice(),minus=s.q.slice();
+      plus[k]+=delta;minus[k]-=delta;
+      const rp=m.bodyState(s.nu,old,load,h,reactions,plus,s.mu),rm=m.bodyState(s.nu,old,load,h,reactions,minus,s.mu);
+      for(let i=0;i<6;i++)D[i][k]=(rp.bodyResidual[i]-rm.bodyResidual[i])/(2*delta)/(i<3?1:m.inertia.referenceLengthM);
+    }
+    m.ropes.forEach((r,j)=>{
+      const k=m.ropeHardStart+j;if(!activeSet.has(k))return;
+      const u=s.ropeValues[j].direction,lever=rotate3(s.pose.averageRotation9,r.localM);
+      const column=[...rotate3(RT,u),...rotate3(oldRT,cross3(lever,u))];
+      column.forEach((v,i)=>{D[i][nc+k]=-v/(i<3?1:m.inertia.referenceLengthM);});
+    });
+  }
   const permute=v=>Float64Array.from({length:n},(_,i)=>v[p.order[i]]);
   let response;
   if(n) {

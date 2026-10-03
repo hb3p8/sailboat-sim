@@ -7,11 +7,7 @@ import {createHash} from 'node:crypto';
 import {relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {cpus} from 'node:os';
-import {FluidBodyEnergyMotion} from '../tests/lib/cloth-fluid-body-motion.mjs';
-import {fluidInertia} from '../tests/lib/cloth-fluid-inertia.mjs';
-import {materialSurface,gridTriangles,MODEL_MATERIAL} from '../tests/lib/cloth-material.mjs';
-import {installSharedInput} from '../tests/lib/cloth-shared-input.mjs';
-import {distance} from '../tests/cloth-compliance.mjs';
+import {fluidSailMotion} from '../tests/lib/cloth-fluid-sail-motion.mjs';
 import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
 
 const [input,output,countText='1',...extra]=process.argv.slice(2),count=Number(countText);
@@ -36,35 +32,15 @@ assert.deepEqual([r.rows,r.cols],[11,9]);assert.equal(r.loadFrame,'inertial-cart
 assert.equal(r.mass.length,n+4);assert.equal(r.fixed.length,0);
 const bodyInput=source.config.bodyInput;
 assert.deepEqual(bodyInput,{massKg:1000,principalInertiaKgM2:[1000,5000,5000],originM:[0,0,0]});
-const addedDiagonal=[60,1000,1200,250,4500,3500];
-// Назначенный лабораторный контроль, не массы/обмер воды около SV20.
-const addedMass6=Array.from({length:36},(_,i)=>i%7===0?addedDiagonal[i/7]:0);
-const inertia=fluidInertia({dryMassKg:bodyInput.massKg,dryPrincipalInertiaKgM2:bodyInput.principalInertiaKgM2,addedMass6});
-const surface=materialSurface(r.reference,gridTriangles(r.rows,r.cols),MODEL_MATERIAL,
-  {bendingModel:'curvature',rows:r.rows,cols:r.cols});
-const constraints=[...surface.constraints,...r.hard.map(c=>Object.assign(distance(c.a,c.b,c.rest,0,c.unilateral),{family:c.family}))];
-const {head,end,nodes,fractions}=r.board;
-nodes.forEach((node,j)=>{if(node!==head&&node!==end)for(let d=0;d<3;d++)constraints.push({
-  alpha:0,unilateral:false,family:'аффинная верхняя планка',unit:'м',value(p) {
-    const t=fractions[j],e=[0,0,0];e[d]=1;
-    return {C:p[3*node+d]-(1-t)*p[3*head+d]-t*p[3*end+d],
-      grad:[[node,e],[head,e.map(v=>-(1-t)*v)],[end,e.map(v=>-t*v)]]};
-  }});});
-const positions=r.positions.slice(0,3*n),previous=r.previous.slice(0,3*n);
-const velocity=positions.map((v,k)=>(v-previous[k])/r.prevDt);
-const m=new FluidBodyEnergyMotion({positions,mass:r.mass.slice(0,n),constraints,velocityMS:velocity,dampingHz:6,
-  linearBackend:backend,wasmSparseFactor,gridRows:r.rows,gridCols:r.cols,
-  body:{inertia,originM:bodyInput.originM,orientation9:[1,0,0,0,1,0,0,0,1],velocity6:[0,0,0,0,0,0],
-    attachments:r.rigidBody.attachments,frame:'body-cg'}});
-const forceN=new Float64Array(3*n),cloth={rows:r.rows,cols:r.cols,n,rigidBoard:true,freeClew:false,
-  pos:m.pos,prev:Float64Array.from(previous),frc:forceN,nrm:new Float64Array(3*n),pattern(){},velocityDt(){return hS;}};
-installSharedInput(cloth,r.field);
+const calculation=fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend:backend,hS});
+const {motion:m,forceN,addedMass6}=calculation;
+const positions=Array.from(m.pos),velocity=Array.from(m.vel);
 const record={schema:'cloth-fluid-sail-v1',revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
   dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),runtime:process.version,
   hardware:{cpu:cpus()[0]?.model,platform:process.platform,arch:process.arch},
   input:{path:input,sha256:hash(bytes),revision:source.revision},physicsSha256:source.physicsSha256,
   sourceSha256:{},backend,wasm:wasmPath?{path:wasmPath,sha256:hash(wasmBytes)}:null,
-  parameters:{bodyInput,addedMass6,material:MODEL_MATERIAL,hS,tack:source.config.tack,requestedSteps:count,
+  parameters:{bodyInput,addedMass6,material:calculation.material,hS,tack:source.config.tack,requestedSteps:count,
     scope:'Лабораторный ЦТ и оси, заданная постоянная инерция воды; прежний замороженный воздух/вес/сопротивление ткани. Сил воды, собственного веса тела, живого Boat и CFD нет.'},
   initial:{positionsM:positions,velocityMS:velocity},steps:[]};
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -79,9 +55,9 @@ const serial=v=>ArrayBuffer.isView(v)?Array.from(v):Array.isArray(v)?v.map(seria
 const start=performance.now();let attempt=0;
 try {
   for(attempt=1;attempt<=count;attempt++) {
-    cloth.prev.set(m.pos.map((v,k)=>v-hS*m.vel[k]));cloth.forcesAt(r.boat,hS);
+    calculation.prepareLoad();
     const old=m.pos.slice(),before=performance.now();
-    const a=m.step({frame:'inertial-cartesian-cg',clothForceN:forceN,forceN:[0,0,0],momentNm:[0,0,0]},hS,r.iterations);
+    const a=calculation.solve();
     const entry={step:attempt,stepMs:performance.now()-before,positionsM:Array.from(m.pos),body:structuredClone(m.body),forceN:Array.from(forceN),audit:serial(a)};
     record.steps.push(entry);
     assert(a.maxPhysicalResidualN<=m.tolerances.forceToleranceN&&a.maxHardViolationM<=m.tolerances.lengthToleranceM);

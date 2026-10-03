@@ -70,3 +70,16 @@ export function rigSideZ(side) { return -side; }
 // рига в физике обязан совпадать со знаком, который получается из угла ветра.
 // Убрать её значит убрать проверку, а она ловит перевёрнутый парус.
 export function roseSide(awaAngle) { return awaAngle > 0 ? -1 : 1; }
+
+// Произвольный поворот общего тела: та же смена базиса (x,z,-y),
+// матрица 4×4 по строкам для Matrix4.set; начало отсчёта задано вызывающим кодом.
+export function bodyPoseSceneMatrix(originM, rotation9) {
+  if (originM?.length !== 3 || rotation9?.length !== 9 ||
+      ![...originM,...rotation9].every(Number.isFinite))
+    throw new Error('Некорректная поза тела для сцены');
+  const r=rotation9;
+  return [r[0],r[2],-r[1],originM[0],
+          r[6],r[8],-r[7],originM[2],
+          -r[3],-r[5],r[4],-originM[1],
+          0,0,0,1];
+}

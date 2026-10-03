@@ -13,7 +13,7 @@ import {
   bodyDirLocalX, bodyDirLocalY, bodyDirLocalZ,
   bodyPointLocalX, bodyPointLocalY, bodyPointLocalZ,
   rigSideZ, roseSide,
-  BOAT_SCENE_ORDER, boatBodyRotation,
+  BOAT_SCENE_ORDER, boatBodyRotation, bodyPoseSceneMatrix,
 } from '../sim/axes.js';
 
 const EPS = 1e-12;
@@ -208,3 +208,17 @@ for (let i = 0; i < 3; i++)
 console.log('  ok    парус, крен, ветер, роза и решётка замкнуты');
 console.log('  ok    линии тока сохраняют расстояние до центра парусности');
 console.log('\nВсе проверки осей пройдены.\n');
+
+// Произвольная общая поза: независимая точка сначала поворачивается в мире,
+// затем переводится в сцену. Проверяются составные углы и перенос.
+for (const [psi,phi,th] of [[0,0,0],[.6,-.35,.2],[-1.1,.4,-.3]]) {
+  const r=boatBodyRotation(psi,phi,th),o=[3,-2,.7];
+  const matrix=new Matrix4().set(...bodyPoseSceneMatrix(o,r));
+  for (const p of [[0,0,0],[1,0,0],[0,1,0],[0,0,1],[2,-3,4]]) {
+    const world=r.reduce((a,v,k)=>{a[Math.floor(k/3)]+=v*p[k%3];return a;},o.slice());
+    const actual=new Vector3(p[0],p[2],-p[1]).applyMatrix4(matrix);
+    near(actual.x,world[0],'Общая поза: X');
+    near(actual.y,world[2],'Общая поза: высота');
+    near(actual.z,-world[1],'Общая поза: сторона');
+  }
+}

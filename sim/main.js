@@ -17,7 +17,7 @@
 const D = Math.PI / 180;
 const HZ = 30;
 const DT = 1 / HZ;
-// Включается только для отдельного замера: Boat не заменяется новой тканью.
+// Отдельные проверочные режимы: обычный Boat в них не шагает.
 let clothSceneReview = null;
 
 const stage = document.getElementById('stage');
@@ -3709,7 +3709,12 @@ shapeSails(rigSideZ(1));
 // рисовать нечем, поэтому цикл запускается после init.
 renderer.init().then(async () => {
   resize();
-  if (new URLSearchParams(location.search).has('cloth-review')) {
+  if (new URLSearchParams(location.search).has('fluid-live')) {
+    if (!benchFrozen() || BENCH_N !== 0) throw new Error('Живой опыт требует ?bench=0');
+    const { startFluidLiveScene } = await import('../scripts/cloth_fluid_live_scene.mjs');
+    clothSceneReview = await startFluidLiveScene({ renderer, genSail, boatGroup, mainSail, jibSail, scene, sea, sunTarget:sun.target, camera,
+      BufferGeometry, BufferAttribute });
+  } else if (new URLSearchParams(location.search).has('cloth-review')) {
     if (!benchFrozen() || BENCH_N !== 0) throw new Error('Замер ткани требует ?bench=0');
     const { startClothSceneReview } = await import('../scripts/cloth_full_scene_review.mjs');
     clothSceneReview = await startClothSceneReview({ renderer, genSail, boat, camera,

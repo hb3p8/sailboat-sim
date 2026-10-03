@@ -28,7 +28,7 @@ const sha=async b=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256
 async function read(path,expected) {const response=await fetch('/'+path);if(!response.ok)throw Error('Не прочитан '+path);const bytes=await response.arrayBuffer();if(await sha(bytes)!==expected)throw Error('Изменилось происхождение '+path);return bytes;}
 function draw(p,recipe) {
   ctx.clearRect(0,0,800,620);const n=recipe.rows*recipe.cols;
-  const proj=i=>[80+55*(p[3*i]+.4*p[3*i+1]),550-50*p[3*i+2]+12*p[3*i+1]];
+  const proj=i=>[160+55*(p[3*i]+.4*p[3*i+1]),550-50*p[3*i+2]+12*p[3*i+1]];
   for(let r=0;r<recipe.rows-1;r++)for(let c=0;c<recipe.cols-1;c++) {
     const a=r*recipe.cols+c;for(const t of [[a,a+1,a+recipe.cols],[a+1,a+recipe.cols+1,a+recipe.cols]]) {
       ctx.beginPath();t.forEach((i,j)=>{const q=proj(i);j?ctx.lineTo(...q):ctx.moveTo(...q);});ctx.closePath();ctx.fillStyle='#cfdee780';ctx.fill();ctx.strokeStyle='#688c9e';ctx.lineWidth=.6;ctx.stroke();

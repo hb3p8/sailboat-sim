@@ -12,7 +12,16 @@ const coordinates=grad=>{
 
 export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
   const nc=m.pos.length,nh=m.hard.length,nb=3*m.bindings.length,n=nc+nh+nb;
-  const soft=m.soft.map(c=>{const v=c.value(s.q);return {c,grad:v.grad,g:coordinates(v.grad)};});
+  const soft=m.soft.map((c,j)=>{
+    const v=s.softValues?.[j]??c.value(s.q),plan=m.fluidAssembly?.soft[j];
+    if(v.values&&plan?.direct&&v.nodes.length===plan.layout.nodes.length&&
+        v.nodes.every((node,k)=>node===plan.layout.nodes[k]))
+      return {c,g:Array.from(plan.coordinates,(coordinate,k)=>[coordinate,0+v.values[k]])};
+    const grad=v.grad??v.nodes.map((node,k)=>[node,Array.from(v.values.slice(3*k,3*k+3))]);
+    if(!plan)return {c,grad,g:coordinates(grad)};
+    const values=gradientValues(plan.layout,grad,new Float64Array(plan.coordinates.length));
+    return {c,grad,g:Array.from(plan.coordinates,(coordinate,k)=>[coordinate,values[k]])};
+  });
   const hard=m.hard.map(c=>({...c.value(s.q)}));
   const hg=hard.map(c=>coordinates(c.grad));
   const bindings=m.bindings.flatMap(({node})=>[0,1,2].map(d=>[[3*node+d,1]]));

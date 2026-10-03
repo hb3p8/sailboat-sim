@@ -66,6 +66,23 @@ export class FluidBodyEnergyMotion {
     return {nu,pose,convective,external,interfaceLoad,bodyResidual,bodyForceN,bodyMomentNm,targets};
   }
 
+  readSoft(q) {
+    // Каждое промежуточное состояние владеет своими градиентами. Неудачный
+    // поиск шага не меняет уже рассчитанный остаток или его направление.
+    const samples=[],buffered=c=>typeof c.valueInto==='function'&&Array.isArray(c.gradientNodes);
+    const sample=c=>({nodes:c.gradientNodes.slice(),values:new Float64Array(3*c.gradientNodes.length)});
+    for(let j=0;j<this.soft.length;) {
+      const c=this.soft[j],group=c.gradientGroup,block=group?.size>1?this.soft.slice(j,j+group.size):[c];
+      if(group&&block.length===group.size&&block.every((v,k)=>v.gradientGroup===group&&v.gradientSlot===k&&buffered(v))) {
+        const values=block.map(sample),C=group.valueInto(q,values.map(v=>v.values));
+        values.forEach((v,k)=>{v.C=C[k];samples.push(v);});j+=block.length;
+      } else if(buffered(c)) {
+        const v=sample(c);v.C=c.valueInto(q,v.values);samples.push(v);j++;
+      } else {samples.push(c.value(q));j++;}
+    }
+    return samples;
+  }
+
   state(z,old,load,h,active) {
     const nc=this.pos.length,q=z.slice(0,nc),nu=Array.from(z.slice(nc,nc+6));
     const body=this.bodyState(nu,old,load,h,z.slice(nc+6+active.length));
@@ -76,9 +93,11 @@ export class FluidBodyEnergyMotion {
       const m=this.mass[Math.floor(k/3)];dampingForce[k]=m*(decay-1)*old.vel[k]/h;
       clothResidual[k]=m*((q[k]-old.pos[k])/h-old.vel[k])/h-load.clothForceN[k]-dampingForce[k];
     }
-    for(const c of this.soft) {
-      const {C,grad}=c.value(q);softEnergyJ+=.5*C*C/c.alpha;
-      for(const [i,g] of grad)for(let d=0;d<3;d++)materialGradient[3*i+d]+=C*g[d]/c.alpha;
+    const softValues=this.readSoft(q);
+    for(let j=0;j<this.soft.length;j++) {
+      const c=this.soft[j],{C,grad,nodes,values}=softValues[j];softEnergyJ+=.5*C*C/c.alpha;
+      if(values)for(let k=0;k<nodes.length;k++)for(let d=0;d<3;d++)materialGradient[3*nodes[k]+d]+=C*values[3*k+d]/c.alpha;
+      else for(const [i,g] of grad)for(let d=0;d<3;d++)materialGradient[3*i+d]+=C*g[d]/c.alpha;
     }
     const constraintResidual=[],mu=new Float64Array(this.lastMu.length);
     let maxLengthM=0,dualViolationN=0,complementarityJ=0;
@@ -106,7 +125,7 @@ export class FluidBodyEnergyMotion {
     if(!residual.every(Number.isFinite)||!Number.isFinite(softEnergyJ))throw new Error('Переполнение общего остатка');
     return {q,...body,mu,residual,clothResidual,
       maxForceN,maxLengthM,dualViolationN,complementarityJ,materialGradient,hardForce,dampingForce,
-      attachmentForceN,softEnergyJ};
+      attachmentForceN,softEnergyJ,softValues};
   }
 
   step(load,h,passes=80) {

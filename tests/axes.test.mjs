@@ -2,6 +2,8 @@
 // один общий контракт между миром, сценой, моделью лодки, ригом и приборами.
 
 import assert from 'node:assert/strict';
+import { Euler, Matrix4, Vector3 } from '../viewer/vendor/three.webgpu.js';
+import { Buoyancy } from '../sim/buoyancy.js';
 import {
   toSceneX, toSceneZ, toWorldX, toWorldY,
   dirSceneX, dirSceneZ,
@@ -11,6 +13,7 @@ import {
   bodyDirLocalX, bodyDirLocalY, bodyDirLocalZ,
   bodyPointLocalX, bodyPointLocalY, bodyPointLocalZ,
   rigSideZ, roseSide,
+  BOAT_SCENE_ORDER, boatBodyRotation,
 } from '../sim/axes.js';
 
 const EPS = 1e-12;
@@ -114,6 +117,52 @@ for (const th of [-0.09, -0.02, 0.03, 0.11]) {
 }
 for (const zc of [-0.4, 0, 0.25]) near(heaveY(zc), zc, 'всплытие переводится как есть');
 console.log('  ok    дифферент поднимает нос, всплытие переводится без знака');
+
+// Независимое последовательное вращение: порядок не выводится из матрицы
+// проверяемого помощника или из соглашения Euler в three.
+const sequential = ([x, y, z], psi, phi, th) => {
+  const yr = Math.cos(phi) * y - Math.sin(phi) * z;
+  const zr = Math.sin(phi) * y + Math.cos(phi) * z;
+  const xp = Math.cos(th) * x - Math.sin(th) * zr;
+  return [Math.cos(psi) * xp - Math.sin(psi) * yr,
+          Math.sin(psi) * xp + Math.cos(psi) * yr,
+          Math.sin(th) * x + Math.cos(th) * zr];
+};
+let combinedCases = 0;
+for (const psi of [0, 0.7, -2.2]) for (const phi of [0, -0.45, 0.6])
+for (const th of [0, -0.13, 0.24]) {
+  const r = boatBodyRotation(psi, phi, th);
+  const scene = new Matrix4().makeRotationFromEuler(new Euler(
+    heelRotX(phi), headingRotY(psi), pitchRotZ(th), BOAT_SCENE_ORDER));
+  for (const p of [[0, 0, 0], [4.6, 1.3, -0.7], [1.2, -2.3, 6.1],
+                   [1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
+    const want = sequential(p, psi, phi, th);
+    const mapped = [0, 1, 2].map(d => r[3*d]*p[0]+r[3*d+1]*p[1]+r[3*d+2]*p[2]);
+    const drawn = new Vector3(p[0], p[2], -p[1]).applyMatrix4(scene);
+    const world = [drawn.x, -drawn.z, drawn.y];
+    for (let d = 0; d < 3; d++) {
+      near(mapped[d], want[d], 'матрица физики совпадает с последовательным вращением');
+      near(world[d], want[d], 'three совпадает с физикой при всех трёх углах');
+    }
+  }
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++)
+    near([0,1,2].reduce((s,d) => s+r[3*d+i]*r[3*d+j], 0), i===j?1:0,
+      'составной поворот сохраняет длины и углы');
+  // Призма 2×2×4; вода пересекает обе боковые грани каждого сечения.
+  // Площадь и первый момент по Y получены прямым интегрированием линии воды.
+  const poly = [[-1,-2],[1,-2],[1,2],[-1,2]];
+  const buoy = new Buoyancy({sections:{x_m:[-1,0,1],poly:[poly,poly,poly]}});
+  const zc = 0.15, hyd = buoy.at(zc, phi, th);
+  for (let i = 0; i < 3; i++) {
+    const height = (-zc-r[6]*buoy.xs[i])/r[8];
+    near(buoy.area[i], 2*(2+height), 'площадь погружённого сечения по мировой вертикали');
+    near(buoy.area[i]*buoy.cy[i], -2*r[7]/(3*r[8]), 'первый момент сечения по Y');
+  }
+  near(hyd.volume, 4*(2-zc/r[8]), 'известный объём призмы при крене и дифференте');
+  combinedCases++;
+}
+assert.throws(() => boatBodyRotation(0, NaN, 0), /конечными/);
+console.log(`  ok    ${combinedCases} сочетаний курса/крена/дифферента: three, матрица и погружение`);
 
 // Положительное отклонение пера направляет его хорду в +Y физики (влево).
 // В модели это -Z; положительный поворот three вокруг Y как раз ведёт +X в -Z.

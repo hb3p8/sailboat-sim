@@ -3230,8 +3230,8 @@ function frame() {
   // местной поверхности, которую ей даёт проба из ocean.js. Поэтому подрисовывать
   // здесь нечего — всплытие и дифферент приходят из физики целиком.
   //
-  // Порядок поворотов YXZ означает, что дифферент применяется первым, в осях
-  // самой лодки, — то есть так, как он и получается.
+  // Общий порядок с плавучестью: крен, затем дифферент, затем курс.
+  // При двух ненулевых углах перестановка меняет погружение точек корпуса.
   boatGroup.position.set(toSceneX(ix), heaveY(izc), toSceneZ(iy));
   // Солнце едет за лодкой, оставаясь в своём направлении: коробка теней
   // маленькая, и без этого лодка выходит из неё на первой же сотне метров.
@@ -3242,7 +3242,7 @@ function frame() {
   // Цель — сама лодка: коробка маленькая и сидит ровно на ней.
   sun.target.position.copy(boatGroup.position);
   sun.position.copy(sun.target.position).addScaledVector(SUN_DIR, SHADOW_LIGHT);
-  boatGroup.rotation.order = 'YXZ';
+  boatGroup.rotation.order = BOAT_SCENE_ORDER;
   boatGroup.rotation.y = headingRotY(ipsi);
   boatGroup.rotation.x = heelRotX(iphi);
   boatGroup.rotation.z = pitchRotZ(ith);

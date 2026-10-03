@@ -19,6 +19,23 @@ export function dirSceneZ(angle) { return -Math.sin(angle); }
 
 // --- повороты вокруг осей сцены ---------------------------------------------
 
+// Сначала крен, затем дифферент, затем курс: Rz(psi) Ry(-th) Rx(phi)
+// в физических осях. Та же вертикаль используется при отсечении воды Buoyancy.
+export const BOAT_SCENE_ORDER = 'YZX';
+
+// Строки матрицы переводят связанный с корпусом вектор в мир физики.
+// Начало координат геометрии отдельно от ЦТ; к вектору смещение не добавляется.
+export function boatBodyRotation(psi, phi, th) {
+  if (![psi, phi, th].every(Number.isFinite))
+    throw new Error('Углы лодки должны быть конечными');
+  const cy = Math.cos(psi), sy = Math.sin(psi);
+  const cp = Math.cos(phi), sp = Math.sin(phi);
+  const ct = Math.cos(th), st = Math.sin(th);
+  return [cy * ct, -cy * st * sp - sy * cp, -cy * st * cp + sy * sp,
+          sy * ct, -sy * st * sp + cy * cp, -sy * st * cp - cy * sp,
+          st, ct * sp, ct * cp];
+}
+
 export function headingRotY(psi) { return psi; }
 export function windRotY(dir) { return dir - Math.PI; }
 export function heelRotX(phi) { return phi; }

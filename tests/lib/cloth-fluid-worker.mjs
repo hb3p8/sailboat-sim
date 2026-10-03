@@ -4,7 +4,7 @@ import {loadSparseFactor} from './cloth-sparse-wasm.mjs';
 
 export function fluidWorkerHandler(post) {
   let calculation,index=0,busy=false,failed=false;
-  return async ({id,type,recipe,bodyInput,bytes,controls})=>{
+  return async ({id,type,recipe,bodyInput,bytes,controls,sheet})=>{
     if(busy){post({id,type:'error',message:'Предыдущая команда ещё выполняется',index});return;}
     busy=true;
     try {
@@ -12,9 +12,10 @@ export function fluidWorkerHandler(post) {
       if(type==='init') {
         if(calculation)throw new Error('Расчёт уже подготовлен');
         const start=performance.now(),factor=await loadSparseFactor(bytes);
-        calculation=fluidSailMotion(recipe,bodyInput,factor);
+        calculation=fluidSailMotion(recipe,bodyInput,factor,{sheet});
         post({id,type:'ready',positions:calculation.motion.pos.slice(),body:structuredClone(calculation.motion.body),
-          setupMs:performance.now()-start,hS:calculation.hS});
+          setupMs:performance.now()-start,hS:calculation.hS,
+          ...(calculation.sheetControl?{sheetControl:calculation.sheetControl}:{})});
       } else if(type==='step') {
         if(!calculation)throw new Error('Расчёт не подготовлен');
         const start=performance.now(),audit=calculation.step(controls),stepMs=performance.now()-start;

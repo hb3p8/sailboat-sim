@@ -38,12 +38,21 @@ export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='sch
   const forceN=new Float64Array(3*n),cloth={rows:r.rows,cols:r.cols,n,
     pos:motion.pos,prev:Float64Array.from(previous),frc:forceN,nrm:new Float64Array(3*n),pattern(){},velocityDt(){return hS;}};
   const {integrated}=installSharedForces(cloth,r.field);
+  // Окно и скорость назначены для первого живого переноса: тот же диапазон
+  // 0.25 м и 0.5 м/с, что в принятом лабораторном цикле 70381c0.
+  // Это ограничение управления стенда, не пределы настоящей верёвки SV20.
+  const sheetControl=sheet?Object.freeze({minLengthM:sheet.lengthM,maxLengthM:sheet.lengthM+.25,maxSpeedMPS:.5}):undefined;
   let load;
-  function prepareLoad({pressureScale=1,yawMomentNm=0,sheetLengthM}={}) {
+  function prepareLoad({pressureScale=1,yawMomentNm=0,sheetLengthM,sheetRateMPS}={}) {
     if(!Number.isFinite(pressureScale)||pressureScale<0||pressureScale>1.5||!Number.isFinite(yawMomentNm)||Math.abs(yawMomentNm)>100)
       throw new Error('Нагрузка должна быть 0–150%, внешний момент — от −100 до 100 Н·м');
     if(sheetLengthM!=null&&(!sheet||!Number.isFinite(sheetLengthM)||sheetLengthM<=0))
       throw new Error('Нужны подключённая верёвка и положительная конечная длина');
+    if(sheetRateMPS!=null) {
+      if(!sheetControl||!Number.isFinite(sheetRateMPS)||Math.abs(sheetRateMPS)>sheetControl.maxSpeedMPS||sheetLengthM!=null)
+        throw new Error('Скорость верёвки требует подключённого угла, диапазона ±0.5 м/с и одной команды длины');
+      sheetLengthM=Math.max(sheetControl.minLengthM,Math.min(sheetControl.maxLengthM,motion.ropeLengthsM[0]+hS*sheetRateMPS));
+    }
     cloth.prev.set(motion.pos.map((v,k)=>v-hS*motion.vel[k]));cloth.forcesAt(r.boat,hS);
     // При единичном входе сохраняем порядок операций прежней полной серии.
     if(pressureScale!==1)for(let i=0;i<n;i++)for(let d=0;d<3;d++)forceN[3*i+d]+=(pressureScale-1)*integrated[16*i+d];
@@ -57,6 +66,6 @@ export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='sch
       throw new Error('Шаг не выполнил проверку работы сил');
     return audit;
   }
-  return {motion,forceN,addedMass6,material:MODEL_MATERIAL,hS,prepareLoad,solve,
+  return {motion,forceN,addedMass6,material:MODEL_MATERIAL,hS,sheetControl,prepareLoad,solve,
     step(controls){prepareLoad(controls);return solve();}};
 }

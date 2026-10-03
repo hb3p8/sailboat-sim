@@ -1,12 +1,12 @@
 // Общая постановка лабораторного паруса: CLI и браузер считают одно уравнение.
-// Управление меняет только сохранённое давление и внешний момент; живого воздуха нет.
+// Давление/момент и необязательная верёвка; поле воздуха остаётся замороженным.
 import {FluidBodyEnergyMotion} from './cloth-fluid-body-motion.mjs';
 import {fluidInertia} from './cloth-fluid-inertia.mjs';
 import {materialSurface,gridTriangles,MODEL_MATERIAL} from './cloth-material.mjs';
-import {installSharedInput} from './cloth-shared-input.mjs';
+import {installSharedForces} from './cloth-shared-input.mjs';
 import {distance} from '../cloth-compliance.mjs';
 
-export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='schur-wasm',hS=r.hS,allowRefinementGrid=false}={}) {
+export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='schur-wasm',hS=r.hS,allowRefinementGrid=false,sheet}={}) {
   const n=r.rows*r.cols;
   const gridAccepted=r.rows===11&&r.cols===9 || allowRefinementGrid&&
     Number.isInteger(r.rows)&&Number.isInteger(r.cols)&&r.rows>=11&&r.cols>=9&&r.rows<=41&&r.cols<=33&&
@@ -28,22 +28,27 @@ export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='sch
         grad:[[node,e],[head,e.map(v=>-(1-t)*v)],[end,e.map(v=>-t*v)]]};
     }});});
   const positions=r.positions.slice(0,3*n),previous=r.previous.slice(0,3*n);
+  if(sheet&&(sheet.node!==r.cols-1||!r.rigidBody.attachments.includes(sheet.node)))
+    throw new Error('Верёвка должна освобождать нижний задний угол паруса');
   const velocity=positions.map((v,k)=>(v-previous[k])/r.prevDt);
   const motion=new FluidBodyEnergyMotion({positions,mass:r.mass.slice(0,n),constraints,velocityMS:velocity,dampingHz:6,
-    linearBackend,wasmSparseFactor,gridRows:r.rows,gridCols:r.cols,
+    linearBackend,wasmSparseFactor,gridRows:r.rows,gridCols:r.cols,ropes:sheet?[sheet]:[],
     body:{inertia,originM:bodyInput.originM,orientation9:[1,0,0,0,1,0,0,0,1],velocity6:[0,0,0,0,0,0],
-      attachments:r.rigidBody.attachments,frame:'body-cg'}});
-  const forceN=new Float64Array(3*n),cloth={rows:r.rows,cols:r.cols,n,rigidBoard:true,freeClew:false,
+      attachments:r.rigidBody.attachments.filter(node=>!sheet||node!==sheet.node),frame:'body-cg'}});
+  const forceN=new Float64Array(3*n),cloth={rows:r.rows,cols:r.cols,n,
     pos:motion.pos,prev:Float64Array.from(previous),frc:forceN,nrm:new Float64Array(3*n),pattern(){},velocityDt(){return hS;}};
-  const {integrated}=installSharedInput(cloth,r.field);
+  const {integrated}=installSharedForces(cloth,r.field);
   let load;
-  function prepareLoad({pressureScale=1,yawMomentNm=0}={}) {
+  function prepareLoad({pressureScale=1,yawMomentNm=0,sheetLengthM}={}) {
     if(!Number.isFinite(pressureScale)||pressureScale<0||pressureScale>1.5||!Number.isFinite(yawMomentNm)||Math.abs(yawMomentNm)>100)
       throw new Error('Нагрузка должна быть 0–150%, внешний момент — от −100 до 100 Н·м');
+    if(sheetLengthM!=null&&(!sheet||!Number.isFinite(sheetLengthM)||sheetLengthM<=0))
+      throw new Error('Нужны подключённая верёвка и положительная конечная длина');
     cloth.prev.set(motion.pos.map((v,k)=>v-hS*motion.vel[k]));cloth.forcesAt(r.boat,hS);
     // При единичном входе сохраняем порядок операций прежней полной серии.
     if(pressureScale!==1)for(let i=0;i<n;i++)for(let d=0;d<3;d++)forceN[3*i+d]+=(pressureScale-1)*integrated[16*i+d];
     load={frame:'inertial-cartesian-cg',clothForceN:forceN,forceN:[0,0,0],momentNm:[0,0,yawMomentNm]};
+    if(sheetLengthM!=null)load.ropeLengthsM=[sheetLengthM];
   }
   function solve() {
     if(!load)throw new Error('Нагрузка шага не подготовлена');

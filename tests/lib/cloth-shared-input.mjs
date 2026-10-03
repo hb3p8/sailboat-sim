@@ -71,7 +71,7 @@ export function sharedInputFromCloth(cloth, boat) {
 export function installSharedInput(cloth, field) {
   if (!cloth.rigidBoard || cloth.freeClew || field.components !== 16)
     throw new Error('Общий вход требует неподвижных углов, жёсткой планки и 16 компонент поля');
-  const integrated = integrateDensity(field,cloth.rows,cloth.cols), pattern = cloth.pattern;
+  const {integrated} = installSharedForces(cloth,field), pattern = cloth.pattern;
   cloth.pattern = function (...args) {
     pattern.apply(this,args);
     for (let i = 0; i < this.n; i++) {
@@ -82,6 +82,14 @@ export function installSharedInput(cloth, field) {
     this.w[this.tack] = this.w[this.head] = this.w[this.clew] = 0;
     this.prepareBoard();
   };
+  return { integrated };
+}
+
+// Замороженное поле не задаёт положение углов. Общая механика сама
+// выбирает закрепления или верёвку; здесь рассчитываются только силы.
+export function installSharedForces(cloth,field) {
+  if(field.components!==16)throw new Error('Нужны 16 компонент замороженного поля');
+  const integrated=integrateDensity(field,cloth.rows,cloth.cols);
   cloth.forcesAt = function (boat,h) {
     const velocityDt = this.velocityDt(h), cp = Math.cos(boat.phi), sp = Math.sin(boat.phi);
     this.pressureForce ||= new Float64Array(this.n);

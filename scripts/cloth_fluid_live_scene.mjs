@@ -20,6 +20,14 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   const panel=document.createElement('section');panel.id='fluid-live-panel';
   panel.innerHTML='<b>Генакер и движущаяся опора: живой опыт</b><p>Это лабораторная модель. Меняется сохранённая нагрузка, а не ветер. Масса опоры и инерция воды назначены для проверки. Верёвка, настоящий руль и силы воды пока не подключены.</p><label>Сторона при перезапуске <select id="fluid-side"><option value="plus">Первая</option><option value="minus">Другая</option></select></label><label>Нагрузка на парус <input id="fluid-pressure" type="range" min="0" max="150" value="100" step="5"> <output id="fluid-pressure-value">100%</output></label><label>Внешний поворачивающий момент <input id="fluid-yaw" type="range" min="-100" max="100" value="0" step="10"> <output id="fluid-yaw-value">0 Н·м</output></label><button id="fluid-prepare">Начать заново</button><button id="fluid-run" disabled>Запустить</button><button id="fluid-step" disabled>Один шаг</button><button id="fluid-save" disabled>Скачать запись</button><p id="fluid-status">Подготовьте опыт. Один запуск — до 5 секунд модельного времени.</p><p id="fluid-speed"></p>';
   document.body.append(panel);
+  // Клавиши панели должны выполнять обычное действие браузера. Они не
+  // управляют прежним рулём, камерой или парусами замороженного Boat.
+  for(const type of ['keydown','keyup']) {
+    panel.addEventListener(type,event=>event.stopPropagation());
+    window.addEventListener(type,event=>{
+      if(!panel.contains(event.target)){event.preventDefault();event.stopImmediatePropagation();}
+    },true);
+  }
   const el=id=>panel.querySelector('#fluid-'+id),status=el('status');
   let client,fixture,geometry,snapshot,running=false,busy=false,generation=0,timer,wallMs=0,steps=[];
   let shownStep=0,initial;

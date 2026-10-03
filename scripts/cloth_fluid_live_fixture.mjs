@@ -26,9 +26,11 @@ const records=inputs.map(path=>{
   assert.equal(s.physicsSha256,hash(physics));
   return {path:`${prefix}-${side}.json`,value:{schema:'cloth-fluid-live-v1',revision,dirty,sourceSha256,
     input:{path,sha256:hash(bytes),revision:s.revision},physicsSha256:s.physicsSha256,
-    wasm:{path:wasm,sha256:hash(readFileSync(wasm))},scene:{path:'sim/index.html',sha256:hash(scene)},
+    wasm:{path:wasm,sha256:hash(readFileSync(wasm))},scene:{path:`${prefix}-scene.html`,sha256:hash(scene)},
     recipe:s.recipe,bodyInput:s.config.bodyInput,side}};
 });
 assert.equal(new Set(records.map(r=>r.path)).size,2);
 for(const r of records)assert(!existsSync(r.path),'Сохранённый вход нельзя перезаписывать');
+assert(!existsSync(`${prefix}-scene.html`),'Снимок сцены нельзя перезаписывать');
+writeFileSync(`${prefix}-scene.html`,scene,{flag:'wx'});
 for(const r of records){writeFileSync(r.path,JSON.stringify(r.value,null,2)+'\n',{flag:'wx'});console.log(JSON.stringify({вход:r.path,ревизия:revision,изменено:dirty}));}

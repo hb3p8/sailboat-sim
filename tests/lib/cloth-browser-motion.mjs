@@ -3,8 +3,10 @@ import { materialSurface, gridTriangles, MODEL_MATERIAL } from './cloth-material
 import { ImplicitEnergyMotion } from './cloth-implicit-motion.mjs';
 import { distance } from '../cloth-compliance.mjs';
 import { installSharedInput } from './cloth-shared-input.mjs';
+import { rigidSailMotion } from './cloth-rigid-sail-motion.mjs';
 
 export function browserMotion(recipe, wasmSparseFactor) {
+  if (recipe.rigidBody) return rigidSailMotion(recipe,wasmSparseFactor);
   const { rows, cols, reference, positions, previous, mass, fixed, board, hard, field, boat } = recipe;
   const surface = materialSurface(Float64Array.from(reference), gridTriangles(rows, cols), MODEL_MATERIAL,
     { bendingModel: 'curvature', rows, cols });

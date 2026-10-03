@@ -280,6 +280,37 @@ node tests/cloth-rigid-body-coupling.test.mjs --linear-backend=kkt-wasm --wasm=o
 
 ## Экранные команды исследовательской ткани
 
+### Полный парус на свободной опоре
+
+Из чистой ревизии подготовьте новую запись для каждой стороны:
+
+```sh
+node scripts/cloth_rigid_sail_fixture.mjs out/acceptance/cloth-supports-cf42ad9-sin4-held-plus-60.json out/acceptance/новая-свободная-опора-plus-60.json 60 1
+node scripts/cloth_rigid_sail_fixture.mjs out/acceptance/cloth-supports-cf42ad9-sin4-held-minus-60.json out/acceptance/новая-свободная-опора-minus-five.json 60 5
+node tests/cloth-rigid-sail-worker.test.mjs --input=out/acceptance/новая-свободная-опора-minus-five.json --out=out/acceptance/новая-сводка-worker.json
+```
+
+Повторите 1 с на 120/240 Гц и 5 с на 60 Гц для обеих сторон, последовательно.
+Для уточнения передайте три записи одной стороны в порядке 60/120/240 Гц:
+
+```sh
+node scripts/cloth_rigid_sail_refinement.mjs out/acceptance/новое-уточнение.json out/acceptance/новая-свободная-опора-plus-60.json out/acceptance/новая-свободная-опора-plus-120.json out/acceptance/новая-свободная-опора-plus-240.json
+node scripts/cloth_rigid_sail_review.mjs out/acceptance/новая-свободная-опора-plus-five.json out/acceptance/новая-свободная-опора-minus-five.json out/acceptance/свободная-опора-review.html
+```
+
+Все выходы создаются без перезаписи. Откройте созданный HTML через локальный
+сервер и нажмите сторону. Стенд проверяет происхождение входа/исходников,
+WASM и все физические поля против Node. Сохраните исходный текст полной
+измеренной записи: преобразование промежуточного объекта инструментом
+может округлить число. Три парных запуска после перезагрузки отделяют
+подготовку/первую секунду от рабочего окна 1–5 с; все исходные длительности
+и выбросы сохраняются. Это расчёт лабораторной опоры и ткани со старым
+замороженным полем, не живой `Boat` или полный кадр симулятора.
+[Постановка](../research/cloth-material.md#полный-парус-на-свободной-опоре),
+[стоимость](../research/cloth-performance.md#worker-полного-паруса-со-свободной-опорой).
+
+### Команды в основной исследовательской сцене
+
 Из чистого коммита соберите сцену, сохраните новую копию `sim/index.html`
 в `out/acceptance/` и подготовьте входы из полных опытов 60 Гц:
 

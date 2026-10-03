@@ -493,7 +493,7 @@ node tests/cloth-fluid-worker.test.mjs --input=out/acceptance/rigid-sail-60321b9
 паузы и ожидание следующего шага; он не является частотой отрисовки.
 
 Текущий подготовленный вход:
-`http://127.0.0.1:8020/sim/index.html?bench=0&fluid-live=fluid-live-mesh-b9f7801`.
+`http://127.0.0.1:8020/sim/index.html?bench=0&fluid-live=fluid-live-rope-base-70381c0`.
 Исходная сцена собирается явной командой выше: изменения исследовательских
 `.mjs` и метаданных Git могут не вызвать пересборку через `make sim`.
 Ленточки штатного `Rig` скрыты в лабораторном режиме: живой воздух и его

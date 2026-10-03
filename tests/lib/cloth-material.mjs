@@ -52,19 +52,39 @@ function referenceTriangle(reference, indices) {
   return { indices: indices.slice(), areaM2: .5 * area2, bx, by, frame };
 }
 
+// Один закон энергии для обоих интерфейсов. Корректор может передать свой
+// массив градиента; обычный value сохраняет прежний независимый снимок.
+function bufferedModes(specs,prepare) {
+  const valid=(gradient,j)=>gradient instanceof Float64Array&&gradient.length===3*specs[j].indices.length;
+  const gradientGroup={size:specs.length,valueInto(p,gradients) {
+    if(!Array.isArray(gradients)||gradients.length!==specs.length||gradients.some((g,j)=>!valid(g,j)))
+      throw new Error('Нужны численные массивы группы материала правильной длины');
+    const context=prepare(p);return specs.map((s,j)=>s.evaluateInto(p,gradients[j],context));
+  }};
+  return specs.map(({family,alpha,indices,evaluateInto},j)=>{
+    const gradientNodes=Object.freeze(Array.from(indices));
+    const valueInto=(p,gradient)=>{
+      if(!valid(gradient,j))throw new Error('Нужен численный массив градиента материала правильной длины');
+      return evaluateInto(p,gradient,prepare(p));
+    };
+    return {family,alpha,lambda:0,unilateral:false,gradientNodes,valueInto,gradientGroup,gradientSlot:j,
+      value(p) {
+        const g=new Float64Array(3*gradientNodes.length),C=valueInto(p,g);
+        return {C,grad:gradientNodes.map((node,k)=>[node,[g[3*k],g[3*k+1],g[3*k+2]]])};
+      }};
+  });
+}
+
 function membraneMode(triangle, mode, stiffnessNPerM) {
-  const { indices, areaM2, bx, by, frame } = triangle;
-  return { family: mode === 0 ? 'bulk' : 'shear', alpha: 1 / (areaM2 * stiffnessNPerM),
-    lambda: 0, unilateral: false,
-    value(p) {
-      const { u, v } = frame(p), uu = dot(u, u), vv = dot(v, v);
+  const { indices, areaM2, bx, by } = triangle;
+  return {family:mode===0?'bulk':'shear',alpha:1/(areaM2*stiffnessNPerM),indices,evaluateInto(p,gradient,{u,v}) {
+      const uu = dot(u, u), vv = dot(v, v);
       // E = (F^T F - I)/2. Энергия A/2 · [K tr(E)^2 + G (E11-E22)^2 + G (2 E12)^2].
       const C = mode === 0 ? .5 * (uu + vv - 2) : mode === 1 ? .5 * (uu - vv) : dot(u, v);
       const du = mode === 2 ? v : u, dv = mode === 2 ? u : v.map(x => mode === 1 ? -x : x);
-      return { C, grad: indices.map((i, k) => [i,
-        du.map((x, d) => bx[k] * x + by[k] * dv[d])]) };
-    },
-  };
+      for(let k=0;k<indices.length;k++)for(let d=0;d<3;d++)gradient[3*k+d]=bx[k]*du[d]+by[k]*dv[d];
+      return C;
+  }};
 }
 
 // Производные на равномерной параметрической сетке. У границы — односторонние
@@ -120,6 +140,7 @@ function curvatureModes(reference, triangles, rows, cols, B) {
     const combinations = [[1 / (l * l), 0, 0],
       [x * x / (l * l * y * y), 1 / (y * y), -2 * x / (l * y * y)],
       [-Math.SQRT2 * x / (l * l * y), 0, Math.SQRT2 / (l * y)]];
+    const specs=[];
     for (const combination of combinations) {
       const weights = stencil.map(([i, w]) => [i, w[0], w[1],
         combination[0] * w[2] + combination[1] * w[3] + combination[2] * w[4]]);
@@ -134,17 +155,19 @@ function curvatureModes(reference, triangles, rows, cols, B) {
         return out;
       };
       const restCurvature = dot(rest.normal, second(reference));
-      modes.push({ family: 'bending', alpha: 1 / (B * areas[index]), lambda: 0, unilateral: false,
-        value(p) {
-          const f = frame(p), H = second(p), curvature = dot(f.normal, H);
+      specs.push({family:'bending',alpha:1/(B*areas[index]),indices:weights.map(([i])=>i),evaluateInto(p,gradient,f) {
+          const H = second(p), curvature = dot(f.normal, H);
           // Производная нормали: (I-n n^T) / |u×v|; затем обратный ход через u×v.
           const adjN = H.map((value, d) => (value - f.normal[d] * curvature) / f.length);
           const adjU = cross(f.v, adjN), adjV = cross(adjN, f.u);
-          return { C: curvature - restCurvature, grad: weights.map(([i, wu, wv, wh]) => [i,
-            f.normal.map((value, d) => wu * adjU[d] + wv * adjV[d] + wh * value)]) };
-        },
-      });
+          for(let k=0;k<weights.length;k++) {
+            const [,wu,wv,wh]=weights[k];
+            for(let d=0;d<3;d++)gradient[3*k+d]=wu*adjU[d]+wv*adjV[d]+wh*f.normal[d];
+          }
+          return curvature-restCurvature;
+      }});
     }
+    modes.push(...bufferedModes(specs,frame));
   }
   return modes;
 }
@@ -171,8 +194,8 @@ export function materialSurface(referencePositions, triangleIndices, parameters 
     if (seen.has(key)) throw new Error('Повторный треугольник материальной поверхности');
     seen.add(key);
     const triangle = referenceTriangle(reference, indices); triangles.push(triangle);
-    constraints.push(membraneMode(triangle, 0, K), membraneMode(triangle, 1, G),
-      membraneMode(triangle, 2, G));
+    constraints.push(...bufferedModes([membraneMode(triangle,0,K),membraneMode(triangle,1,G),
+      membraneMode(triangle,2,G)],triangle.frame));
     for (let k = 0; k < 3; k++) {
       const from = indices[k], to = indices[(k + 1) % 3], opposite = indices[(k + 2) % 3];
       const name = `${Math.min(from, to)},${Math.max(from, to)}`, previous = edges.get(name);

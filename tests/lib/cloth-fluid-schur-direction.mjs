@@ -44,7 +44,8 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
       }
       const layout=gradientLayout(grad),size=layout.coordinates.length;
       return {coordinates:Int32Array.from(g,([i])=>i),entries:Int32Array.from(entries),layout,
-        plusValues:new Float64Array(size),minusValues:new Float64Array(size),hessian:new Float64Array(size*size)};
+        plusValues:new Float64Array(size),minusValues:new Float64Array(size),rawValues:new Float64Array(3*grad.length),
+        direct:layout.slots.length===size&&layout.slots.every((slot,i)=>slot===i),hessian:new Float64Array(size*size)};
     };
     m.fluidAssembly={soft:soft.map(({g,grad})=>compile(g,grad)),hard:hg.map((g,j)=>compile(g,hard[j].grad))};
   }
@@ -60,19 +61,61 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
     const terms=[...soft.map(({c,g},k)=>({c,g,plan:m.fluidAssembly.soft[k],weight:1/c.alpha,soft:true})),
       ...active.map(j=>({c:m.hard[j],g:hg[j],plan:m.fluidAssembly.hard[j],weight:s.mu[j],soft:false}))];
     const plus=s.q.slice(),minus=s.q.slice();
-    for(const {c,g,plan,weight,soft:isSoft} of terms) {
-      checkPlan(g,plan);
-      const size=g.length,H=plan.hessian;
+    const read=(c,plan,q,target,buffered)=>{
+      if(buffered&&plan.direct) {
+        const C=c.valueInto(q,target);
+        // Прежний Map начинал каждую сумму с +0, включая входное -0.
+        for(let k=0;k<target.length;k++)target[k]=0+target[k];
+        return C;
+      }
+      if(buffered) {
+        const C=c.valueInto(q,plan.rawValues);target.fill(0);
+        for(let k=0;k<plan.rawValues.length;k++)target[plan.layout.slots[k]]+=plan.rawValues[k];
+        return C;
+      }
+      const {C,grad}=c.value(q);gradientValues(plan.layout,grad,target);return C;
+    };
+    const buffered=t=>typeof t.c.valueInto==='function'&&t.c.gradientNodes?.length===t.plan.layout.nodes.length&&
+      t.c.gradientNodes.every((node,i)=>node===t.plan.layout.nodes[i]);
+    const assemble=({g,plan})=>{
+      const size=g.length,H=plan.hessian;let entry=0;
+      for(let a=0;a<size;a++)for(let b=0;b<=a;b++)matrix[plan.entries[entry++]]+=.5*(H[a*size+b]+H[b*size+a]);
+    };
+    for(let term=0;term<terms.length;) {
+      const t=terms[term],{c,g,plan,weight,soft:isSoft}=t;
+      checkPlan(g,plan);const size=g.length,H=plan.hessian,group=c.gradientGroup;
+      const block=group?.size>1?terms.slice(term,term+group.size):[t];
+      const batch=group&&block.length===group.size&&block.every((v,j)=>v.soft&&v.c.gradientGroup===group&&
+        v.c.gradientSlot===j&&buffered(v)&&v.plan.direct&&v.g.length===size&&
+        v.g.every(([k],i)=>k===g[i][0]));
+      if(batch) {
+        block.forEach(({g,plan})=>checkPlan(g,plan));
+        const plusGradients=block.map(v=>v.plan.plusValues),minusGradients=block.map(v=>v.plan.minusValues);
+        for(let j=0;j<size;j++) {
+          const k=g[j][0],delta=2e-6*Math.max(1,Math.abs(s.q[k]));plus[k]+=delta;minus[k]-=delta;
+          const Cp=group.valueInto(plus,plusGradients),Cm=group.valueInto(minus,minusGradients);
+          for(let mode=0;mode<block.length;mode++) {
+            const {plan,weight}=block[mode],gp=plan.plusValues,gm=plan.minusValues;
+            for(let i=0;i<size;i++) {
+              gp[i]=0+gp[i];gm[i]=0+gm[i];
+              plan.hessian[i*size+j]=weight*(Cp[mode]*gp[i]-Cm[mode]*gm[i])/(2*delta);
+            }
+          }
+          plus[k]=s.q[k];minus[k]=s.q[k];
+        }
+        // Слагаемые в общей матрице добавляются в прежнем порядке мод.
+        block.forEach(assemble);term+=block.length;continue;
+      }
+      const useBuffer=buffered(t);
       for(let j=0;j<size;j++) {
         const k=g[j][0],delta=2e-6*Math.max(1,Math.abs(s.q[k]));
         plus[k]+=delta;minus[k]-=delta;
-        const vp=c.value(plus),vm=c.value(minus);
-        const gp=gradientValues(plan.layout,vp.grad,plan.plusValues),gm=gradientValues(plan.layout,vm.grad,plan.minusValues);
-        for(let i=0;i<size;i++)H[i*size+j]=weight*((isSoft?vp.C:1)*gp[i]-(isSoft?vm.C:1)*gm[i])/(2*delta);
+        const Cp=read(c,plan,plus,plan.plusValues,useBuffer),Cm=read(c,plan,minus,plan.minusValues,useBuffer);
+        const gp=plan.plusValues,gm=plan.minusValues;
+        for(let i=0;i<size;i++)H[i*size+j]=weight*((isSoft?Cp:1)*gp[i]-(isSoft?Cm:1)*gm[i])/(2*delta);
         plus[k]=s.q[k];minus[k]=s.q[k];
       }
-      let entry=0;
-      for(let a=0;a<size;a++)for(let b=0;b<=a;b++)matrix[plan.entries[entry++]]+=.5*(H[a*size+b]+H[b*size+a]);
+      assemble(t);term++;
     }
   } else for(let k=0;k<soft.length;k++) {
     const {c,g}=soft[k],plan=m.fluidAssembly.soft[k];checkPlan(g,plan);let entry=0;

@@ -320,12 +320,27 @@ node scripts/cloth_fluid_sail_fixture.mjs out/acceptance/rigid-sail-60321b9-plus
 node scripts/cloth_fluid_sail_fixture.mjs out/acceptance/rigid-sail-60321b9-minus-five.json out/acceptance/новая-вода-minus.json 1
 ```
 
-Третий аргумент — 1–3 шага по сохранённому h. Используется чистая прежняя
+Третий аргумент — 1–1800 шагов по сохранённому h; по умолчанию один.
+`--hz=60|120|240` явно задаёт уточнение времени. Используется чистая прежняя
 серия 11×9 с лабораторным телом 1000 кг; её SHA проверяются по Git. Вода
 задана отдельной назначенной матрицей энергии, её вес не добавляется.
 Поле воздуха/веса/сопротивления ткани остаётся замороженным. Первый отказ
 и принятые шаги сохраняются в новом JSON; прежний результат не перезаписывается.
-Прямой проверочный метод пока медленный, это не запуск интерактивной яхты.
+Контрольный `reference-dense` остаётся по умолчанию; он медленный.
+Блочное ускорение явно выбирается вместе с WASM. Сначала повторите малые
+задачи в обоих методах, затем полные серии последовательно:
+
+```sh
+node tests/cloth-fluid-body.test.mjs --linear-backend=schur-wasm --wasm=out/acceptance/cloth-sparse-20261002-simd.wasm --out=out/acceptance/новый-блочный-контроль.json
+node scripts/cloth_fluid_sail_fixture.mjs out/acceptance/rigid-sail-60321b9-plus-five.json out/acceptance/новая-вода-plus-60.json 60 --hz=60 --linear-backend=schur-wasm --wasm=out/acceptance/cloth-sparse-20261002-simd.wasm
+node scripts/cloth_fluid_refinement.mjs out/acceptance/новое-уточнение-воды.json out/acceptance/новая-вода-plus-60.json out/acceptance/новая-вода-plus-120.json out/acceptance/новая-вода-plus-240.json
+```
+
+Для последней команды сначала подготовьте 120 и 240 шагов на 120/240 Гц
+с теми же исходниками/входом и общей длительностью; повторите для другой стороны.
+`--without-newton-control` относится к малой проверке: это отрицательный
+вариант без завершающего корректора, ожидаются отказ и `phase=failed`.
+Ускорение не является запуском интерактивной яхты.
 [Уравнение, числа и границы](../research/boat-coupling.md#общий-шаг-обобщённой-инерции-и-ткани).
 
 ### Команды в основной исследовательской сцене

@@ -2,11 +2,13 @@
 // Newton решает все реакции внутри шага. Прежние решатели не изменяются.
 import {IMPLICIT_TOLERANCES} from './cloth-implicit-motion.mjs';
 import {finiteArray,checkRotation,cayleyBodyPose,cross3,dotN,rotate3,transpose3,denseSolve} from './cloth-fluid-inertia.mjs';
+import {fluidSchurDirection} from './cloth-fluid-schur-direction.mjs';
 const add=(a,b)=>a.map((v,d)=>v+b[d]),sub=(a,b)=>a.map((v,d)=>v-b[d]);
 const point=(p,i)=>Array.from(p.slice(3*i,3*i+3));
 
 export class FluidBodyEnergyMotion {
-  constructor({positions,mass,constraints,body,velocityMS,dampingHz=6}) {
+  constructor({positions,mass,constraints,body,velocityMS,dampingHz=6,
+      linearBackend='reference-dense',wasmSparseFactor,gridRows,gridCols,newtonCorrection=true}) {
     if(positions?.length!==3*mass?.length||!Array.from(mass).every(v=>Number.isFinite(v)&&v>0)||
         !Array.from(positions).every(Number.isFinite)||!Array.isArray(constraints)||
         !(Number.isFinite(dampingHz)&&dampingHz>=0)||!finiteArray(body?.originM,3)||
@@ -28,6 +30,12 @@ export class FluidBodyEnergyMotion {
       localM:Object.freeze(rotate3(transpose3(body.orientation9),sub(point(this.pos,node),body.originM)))}));
     this.bindings=Object.freeze(this.bindings);this.lastMu=new Float64Array(this.hard.length+3*this.bindings.length);
     this.tolerances=IMPLICIT_TOLERANCES;
+    if(typeof newtonCorrection!=='boolean'||!['reference-dense','schur-wasm'].includes(linearBackend)||
+        (linearBackend==='schur-wasm'&&typeof wasmSparseFactor?.ldl!=='function')||
+        ((gridRows!=null||gridCols!=null)&&(!Number.isInteger(gridRows)||gridRows<=0||
+          !Number.isInteger(gridCols)||gridCols<=0||gridRows*gridCols!==mass.length)))
+      throw new Error('Неизвестный или не загруженный способ общего решения либо сетка');
+    Object.assign(this,{linearBackend,wasmSparseFactor,gridRows,gridCols,newtonCorrection});
   }
 
   validateState() {
@@ -41,12 +49,26 @@ export class FluidBodyEnergyMotion {
     }
   }
 
-  state(z,old,load,h,active) {
-    const nc=this.pos.length,q=z.slice(0,nc),nu=Array.from(z.slice(nc,nc+6));
+  bodyState(nu,old,load,h,reactions) {
     const pose=cayleyBodyPose(old.body.originM,old.body.orientation9,nu,h);
     const RT=transpose3(pose.averageRotation9),oldRT=transpose3(old.body.orientation9);
     const deltaNu=sub(nu,old.body.velocity6),inertial=this.inertia.momentum(deltaNu).map(v=>v/h);
     const convective=this.inertia.convective(nu),external=[...rotate3(RT,load.forceN),...rotate3(oldRT,load.momentNm)];
+    const bodyForceN=[0,0,0],bodyMomentNm=[0,0,0],targets=[];
+    this.bindings.forEach(({localM},b)=>{
+      const lever=rotate3(pose.averageRotation9,localM),reaction=Array.from(reactions.slice(3*b,3*b+3));
+      targets.push(add(pose.originM,rotate3(pose.orientation9,localM)));
+      for(let d=0;d<3;d++)bodyForceN[d]+=reaction[d];
+      const torque=cross3(lever,reaction);for(let d=0;d<3;d++)bodyMomentNm[d]+=torque[d];
+    });
+    const interfaceLoad=[...rotate3(RT,bodyForceN),...rotate3(oldRT,bodyMomentNm)];
+    const bodyResidual=inertial.map((v,d)=>v+convective[d]-external[d]-interfaceLoad[d]);
+    return {nu,pose,convective,external,interfaceLoad,bodyResidual,bodyForceN,bodyMomentNm,targets};
+  }
+
+  state(z,old,load,h,active) {
+    const nc=this.pos.length,q=z.slice(0,nc),nu=Array.from(z.slice(nc,nc+6));
+    const body=this.bodyState(nu,old,load,h,z.slice(nc+6+active.length));
     const clothResidual=new Float64Array(nc),materialGradient=new Float64Array(nc),hardForce=new Float64Array(nc);
     let softEnergyJ=0;
     const decay=Math.exp(-this.dampingHz*h),dampingForce=new Float64Array(nc);
@@ -67,27 +89,24 @@ export class FluidBodyEnergyMotion {
       for(const [i,g] of grad)for(let d=0;d<3;d++)hardForce[3*i+d]-=value*g[d];
       if(c.unilateral){dualViolationN=Math.max(dualViolationN,-value);complementarityJ=Math.max(complementarityJ,Math.abs(value*C));}
     }
-    const bodyForceN=[0,0,0],bodyMomentNm=[0,0,0],attachmentForceN=new Float64Array(nc);
+    const attachmentForceN=new Float64Array(nc);
     for(let b=0;b<this.bindings.length;b++) {
-      const {node,localM}=this.bindings[b],lever=rotate3(pose.averageRotation9,localM);
+      const {node}=this.bindings[b];
       const reaction=Array.from(z.slice(nc+6+active.length+3*b,nc+6+active.length+3*b+3));
-      const target=add(pose.originM,rotate3(pose.orientation9,localM)),C=sub(point(q,node),target);
+      const C=sub(point(q,node),body.targets[b]);
       maxLengthM=Math.max(maxLengthM,...C.map(Math.abs));constraintResidual.push(...C);
       mu.set(reaction,this.hard.length+3*b);attachmentForceN.set(reaction.map(v=>-v),3*node);
-      for(let d=0;d<3;d++) {clothResidual[3*node+d]+=reaction[d];bodyForceN[d]+=reaction[d];}
-      const torque=cross3(lever,reaction);for(let d=0;d<3;d++)bodyMomentNm[d]+=torque[d];
+      for(let d=0;d<3;d++)clothResidual[3*node+d]+=reaction[d];
     }
     for(let k=0;k<nc;k++)clothResidual[k]+=materialGradient[k]-hardForce[k];
-    const interfaceLoad=[...rotate3(RT,bodyForceN),...rotate3(oldRT,bodyMomentNm)];
-    const bodyResidual=inertial.map((v,d)=>v+convective[d]-external[d]-interfaceLoad[d]);
-    const bodyForceEquivalent=bodyResidual.map((v,d)=>d<3?v:v/this.inertia.referenceLengthM);
+    const bodyForceEquivalent=body.bodyResidual.map((v,d)=>d<3?v:v/this.inertia.referenceLengthM);
     const maxForceN=Math.max(0,...clothResidual.map(Math.abs),...bodyForceEquivalent.map(Math.abs));
     const residual=Float64Array.from([...clothResidual,...bodyForceEquivalent,
       ...constraintResidual.map(v=>v*this.tolerances.forceToleranceN/this.tolerances.lengthToleranceM)]);
     if(!residual.every(Number.isFinite)||!Number.isFinite(softEnergyJ))throw new Error('Переполнение общего остатка');
-    return {q,nu,pose,mu,residual,clothResidual,bodyResidual,convective,external,interfaceLoad,
+    return {q,...body,mu,residual,clothResidual,
       maxForceN,maxLengthM,dualViolationN,complementarityJ,materialGradient,hardForce,dampingForce,
-      bodyForceN,bodyMomentNm,attachmentForceN,softEnergyJ};
+      attachmentForceN,softEnergyJ};
   }
 
   step(load,h,passes=80) {
@@ -97,25 +116,21 @@ export class FluidBodyEnergyMotion {
         !Number.isInteger(passes)||passes<1)throw new Error('Некорректная нагрузка или шаг тела с водой');
     const old={pos:this.pos.slice(),vel:this.vel.slice(),body:structuredClone(this.body)};
     let active=this.hard.flatMap((c,j)=>!c.unilateral||this.lastMu[j]>this.tolerances.dualToleranceN?[j]:[]);
-    let state,z,iterations=0;
+    let state,z,iterations=0,polishIterations=0,polishStalls=0;
     for(let set=0;set<4*this.hard.length+10;set++) {
       const nc=this.pos.length,seed=state;
       z=Float64Array.from([...(seed?seed.q:old.pos),...(seed?seed.nu:old.body.velocity6),
         ...active.map(j=>(seed?.mu??this.lastMu)[j]),...Array.from((seed?.mu??this.lastMu).slice(this.hard.length))]);
       state=this.state(z,old,load,h,active);
-      for(let iteration=0;iteration<=passes;iteration++) {
+      let iteration=0;
+      for(;iteration<=passes;iteration++) {
         // Отрицательная реакция односторонней связи удаляется после решения
         // равенств. Здесь она не мешает Newton закончить этот набор связей.
         const activeLength=Math.max(0,...state.residual.slice(nc+6).map(v=>Math.abs(v)*this.tolerances.lengthToleranceM/this.tolerances.forceToleranceN));
-        if(state.maxForceN<=this.tolerances.forceToleranceN&&activeLength<=this.tolerances.lengthToleranceM)break;
+        const satisfied=state.maxForceN<=this.tolerances.forceToleranceN&&activeLength<=this.tolerances.lengthToleranceM;
+        if(satisfied)break;
         if(iteration===passes)throw new Error('Общий шаг воды и ткани не доведён за заданное число попыток');
-        const n=z.length,J=new Float64Array(n*n);
-        for(let j=0;j<n;j++) {
-          const delta=2e-6*Math.max(1,Math.abs(z[j])),plus=z.slice(),minus=z.slice();plus[j]+=delta;minus[j]-=delta;
-          const rp=this.state(plus,old,load,h,active).residual,rm=this.state(minus,old,load,h,active).residual;
-          for(let i=0;i<n;i++)J[i*n+j]=(rp[i]-rm[i])/(2*delta);
-        }
-        const direction=denseSolve(J,state.residual.map(v=>-v)),norm=dotN(state.residual,state.residual);
+        const direction=this.direction(z,state,old,load,h,active),norm=dotN(state.residual,state.residual);
         let accepted=false;
         for(let line=0;line<24;line++) {
           const fraction=2**-line,next=z.map((v,j)=>v+fraction*direction[j]);let trial;
@@ -132,9 +147,25 @@ export class FluidBodyEnergyMotion {
       let include=-1,worst=this.tolerances.lengthToleranceM;
       this.hard.forEach((c,j)=>{if(c.unilateral&&!active.includes(j)){const {C}=c.value(state.q);if(C>worst){worst=C;include=j;}}});
       if(include>=0){active.push(include);continue;}
+      if(this.linearBackend==='schur-wasm'&&this.newtonCorrection&&iteration>0&&iteration<passes) {
+        // Один точный корректор только окончательного набора натянутых кромок.
+        // После уже выполненных допусков отсутствие улучшения при округлении
+        // сохраняется в аудите; ни один физический допуск не ослабляется.
+        const direction=this.direction(z,state,old,load,h,active,{exact:true}),norm=dotN(state.residual,state.residual);
+        let accepted=false;
+        for(let line=0;line<24;line++) {
+          const fraction=2**-line,next=z.map((v,j)=>v+fraction*direction[j]);let trial;
+          try {trial=this.state(next,old,load,h,active);} catch {continue;}
+          if(dotN(trial.residual,trial.residual)<norm*(1-1e-4*fraction)) {z=next;state=trial;accepted=true;break;}
+        }
+        if(accepted){iterations++;polishIterations++;}else polishStalls++;
+      }
+      if(state.maxForceN>this.tolerances.forceToleranceN)throw new Error('Корректор не выполнил прежний допуск сил');
       if(state.maxLengthM>this.tolerances.lengthToleranceM||state.dualViolationN>this.tolerances.dualToleranceN||
           state.complementarityJ>this.tolerances.complementarityToleranceJ)throw new Error('Не выполнены условия кромок общего шага');
-      const audit=this.audit(state,old,load,h,iterations);checkRotation(state.pose.orientation9);
+      const audit=this.audit(state,old,load,h,iterations);
+      if(this.linearBackend==='schur-wasm')Object.assign(audit.solver,{newtonCorrection:this.newtonCorrection,polishIterations,polishStalls});
+      checkRotation(state.pose.orientation9);
       const softLambdas=this.soft.map(c=>-h*h*c.value(state.q).C/c.alpha);
       this.pos.set(state.q);this.vel.set(state.q.map((v,k)=>(v-old.pos[k])/h));
       this.body={originM:state.pose.originM.slice(),orientation9:state.pose.orientation9.slice(),velocity6:state.nu.slice()};
@@ -143,6 +174,17 @@ export class FluidBodyEnergyMotion {
       return audit;
     }
     throw new Error('Не сошёлся выбор кромок общего шага');
+  }
+
+  direction(z,state,old,load,h,active,options) {
+    if(this.linearBackend==='schur-wasm')return fluidSchurDirection(this,z,state,old,load,h,active,options);
+    const n=z.length,J=new Float64Array(n*n);
+    for(let j=0;j<n;j++) {
+      const delta=2e-6*Math.max(1,Math.abs(z[j])),plus=z.slice(),minus=z.slice();plus[j]+=delta;minus[j]-=delta;
+      const rp=this.state(plus,old,load,h,active).residual,rm=this.state(minus,old,load,h,active).residual;
+      for(let i=0;i<n;i++)J[i*n+j]=(rp[i]-rm[i])/(2*delta);
+    }
+    return denseSolve(J,state.residual.map(v=>-v));
   }
 
   audit(s,old,load,h,iterations) {
@@ -174,7 +216,7 @@ export class FluidBodyEnergyMotion {
     const interfaceWorkLimitJ=2*this.tolerances.lengthToleranceM*this.bindings.reduce((sum,{node})=>
       sum+point(s.attachmentForceN,node).reduce((q,v)=>q+Math.abs(v),0),0)+
       128*Number.EPSILON*Math.max(1,Math.abs(bodyWorkJ),Math.abs(attachmentWorkJ));
-    return {solver:{method:'общее уравнение обобщённой инерции и ткани',converged:true,iterations,linearBackend:'reference-dense',
+    return {solver:{method:'общее уравнение обобщённой инерции и ткани',converged:true,iterations,linearBackend:this.linearBackend,
         ...this.tolerances},maxPhysicalResidualN:s.maxForceN,maxHardViolationM:s.maxLengthM,
       dualViolationN:s.dualViolationN,complementarityJ:s.complementarityJ,
       bodyOriginM:s.pose.originM.slice(),bodyRotation9:s.pose.orientation9.slice(),bodyVelocity6:s.nu.slice(),

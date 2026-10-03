@@ -11,8 +11,18 @@ import {fluidInertia,denseSolve} from './lib/cloth-fluid-inertia.mjs';
 import {distance} from './cloth-compliance.mjs';
 import {materialSurface,gridTriangles,MODEL_MATERIAL} from './lib/cloth-material.mjs';
 import {boatBodyRotation} from '../sim/axes.js';
+import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
 
-const args=process.argv.slice(2);assert(args.length<=1&&args.every(v=>/^--out=.+$/.test(v)));
+const args=process.argv.slice(2);
+assert(args.every(v=>/^--(out|linear-backend|wasm)=.+$/.test(v)||v==='--without-newton-control')&&
+  new Set(args.map(v=>v.split('=')[0])).size===args.length);
+const backend=args.find(v=>v.startsWith('--linear-backend='))?.slice(17)??'reference-dense';
+const wasmPath=args.find(v=>v.startsWith('--wasm='))?.slice(7),output=args.find(v=>v.startsWith('--out='))?.slice(6);
+assert(['reference-dense','schur-wasm'].includes(backend)&&((backend==='schur-wasm')===Boolean(wasmPath)));
+const wasmBytes=wasmPath?readFileSync(wasmPath):undefined;
+const options={linearBackend:backend,wasmSparseFactor:wasmBytes?await loadSparseFactor(wasmBytes):undefined,
+  newtonCorrection:!args.includes('--without-newton-control')};
+assert(options.newtonCorrection||backend==='schur-wasm','Отрицательный контроль относится только к schur-wasm');
 const packBytes=readFileSync(new URL('../out/export/physics.json',import.meta.url)),pack=JSON.parse(packBytes);
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const I9=[1,0,0,0,1,0,0,0,1],point=(p,i)=>Array.from(p.slice(3*i,3*i+3));
@@ -31,8 +41,15 @@ const result={schema:'cloth-fluid-body-v1',date:new Date().toISOString(),runtime
   hardware:{cpu:cpus()[0]?.model,platform:process.platform,arch:process.arch},
   revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
   dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),
-  sourceSha256:{},physicsSha256:hash(packBytes),input,cases:{translation:0,spin:0,spring:0,rope:0,gravity:0},
+  sourceSha256:{},physicsSha256:hash(packBytes),input,backend,newtonCorrection:options.newtonCorrection,
+  wasm:wasmPath?{path:wasmPath,sha256:hash(wasmBytes)}:null,
+  cases:{translation:0,spin:0,spring:0,rope:0,gravity:0},
   refinement:[],totalAcceptedSteps:0,maxima:{forceEquivalentN:0,lengthM:0,workIdentityJ:0,energyLimitRatio:0,interfaceLimitRatio:0,convectivePowerW:0,knownCoordinateErrorM:0}};
+process.once('uncaughtException',error=>{
+  result.phase='failed';result.failure={message:error.message,stack:error.stack};
+  if(output)writeFileSync(output,JSON.stringify(result,null,2)+'\n',{flag:'wx'});
+  console.error(`Проверка общего шага остановлена: ${error.message}`);process.exitCode=1;
+});
 const root=fileURLToPath(new URL('../',import.meta.url));
 function source(url) {
   const path=relative(root,fileURLToPath(url));if(Object.hasOwn(result.sourceSha256,path))return;
@@ -53,7 +70,7 @@ function convectiveReference(M,nu) {
 
 function make(inertia,{positions=[],mass=[],constraints=[],attachments=[],originM=[0,0,0],R=I9,
     nu=[0,0,0,0,0,0],velocities,dampingHz=0}={}) {
-  return new FluidBodyEnergyMotion({positions,mass,constraints,velocityMS:velocities,dampingHz,
+  return new FluidBodyEnergyMotion({...options,positions,mass,constraints,velocityMS:velocities,dampingHz,
     body:{inertia,originM,orientation9:R,velocity6:nu,attachments,frame:'body-cg'}});
 }
 const load=(nc,F=[0,0,0],T=[0,0,0],cloth=new Array(nc).fill(0))=>
@@ -285,6 +302,7 @@ assert.throws(()=>fluidInertia({...input,addedMass6:asymmetricA}),/симмет�
 assert.throws(()=>fluidInertia({...input,addedMass6:diagonal6([-1,0,0,0,0,0])}),/неотрицательную/);
 assert.throws(()=>make(wet,{R:[-1,0,0,0,1,0,0,0,1]}),/ориентацию/);
 
-if(args[0])writeFileSync(args[0].slice(6),JSON.stringify(result,null,2)+'\n',{flag:'wx'});
+result.phase='complete';
+if(output)writeFileSync(output,JSON.stringify(result,null,2)+'\n',{flag:'wx'});
 console.log(`ок: ${result.totalAcceptedSteps} общих шагов, из них ${Object.values(result.cases).reduce((s,v)=>s+v,0)} известных; оба зеркала, уточнение времени, материал/изгиб, нить/пружина/сухой вес и полный отказ`);
 console.log(JSON.stringify({максимумы:result.maxima,отрицательный_контроль:result.negativeControl}));

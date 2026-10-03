@@ -136,6 +136,7 @@ export class FluidBodyEnergyMotion {
     const old={pos:this.pos.slice(),vel:this.vel.slice(),body:structuredClone(this.body)};
     let active=this.hard.flatMap((c,j)=>!c.unilateral||this.lastMu[j]>this.tolerances.dualToleranceN?[j]:[]);
     let state,z,iterations=0,polishIterations=0,polishStalls=0;
+    const polishFactorizationFailures=[];
     for(let set=0;set<4*this.hard.length+10;set++) {
       const nc=this.pos.length,seed=state;
       z=Float64Array.from([...(seed?seed.q:old.pos),...(seed?seed.nu:old.body.velocity6),
@@ -170,9 +171,22 @@ export class FluidBodyEnergyMotion {
         // Один точный корректор только окончательного набора натянутых кромок.
         // После уже выполненных допусков отсутствие улучшения при округлении
         // сохраняется в аудите; ни один физический допуск не ослабляется.
-        const direction=this.direction(z,state,old,load,h,active,{exact:true}),norm=dotN(state.residual,state.residual);
+        let direction;
+        try {direction=this.direction(z,state,old,load,h,active,{exact:true});} catch(error) {
+          // Полная Hessian нелинейной энергии может быть неопределённой даже
+          // при выполненном общем уравнении. Отказ вспомогательной коррекции
+          // допускается только для уже проверенного физического шага.
+          if(error?.code!=='CLOTH_SPARSE_FACTOR_REJECTED')throw error;
+          const checked=this.audit(state,old,load,h,iterations);
+          if(!(state.maxForceN<=this.tolerances.forceToleranceN&&state.maxLengthM<=this.tolerances.lengthToleranceM&&
+              state.dualViolationN<=this.tolerances.dualToleranceN&&state.complementarityJ<=this.tolerances.complementarityToleranceJ&&
+              Math.abs(checked.discreteBalanceResidualJ)<=checked.workLimitJ&&
+              Math.abs(checked.bodyWorkCancellationResidualJ)<=checked.interfaceWorkLimitJ))throw error;
+          polishFactorizationFailures.push({pivot:error.pivot});
+        }
+        const norm=dotN(state.residual,state.residual);
         let accepted=false;
-        for(let line=0;line<24;line++) {
+        for(let line=0;direction&&line<24;line++) {
           const fraction=2**-line,next=z.map((v,j)=>v+fraction*direction[j]);let trial;
           try {trial=this.state(next,old,load,h,active);} catch {continue;}
           if(dotN(trial.residual,trial.residual)<norm*(1-1e-4*fraction)) {z=next;state=trial;accepted=true;break;}
@@ -184,6 +198,7 @@ export class FluidBodyEnergyMotion {
           state.complementarityJ>this.tolerances.complementarityToleranceJ)throw new Error('Не выполнены условия кромок общего шага');
       const audit=this.audit(state,old,load,h,iterations);
       if(this.linearBackend==='schur-wasm')Object.assign(audit.solver,{newtonCorrection:this.newtonCorrection,polishIterations,polishStalls});
+      if(polishFactorizationFailures.length)Object.assign(audit.solver,{polishFactorizationFailures});
       checkRotation(state.pose.orientation9);
       const softLambdas=this.soft.map(c=>-h*h*c.value(state.q).C/c.alpha);
       this.pos.set(state.q);this.vel.set(state.q.map((v,k)=>(v-old.pos[k])/h));

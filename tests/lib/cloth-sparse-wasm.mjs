@@ -52,7 +52,12 @@ export async function loadSparseFactor(bytes, { reuse = true } = {}) {
     if (signs) new Int32Array(e.memory.buffer, signStart, n).set(signs);
     counts.numericFactorizations++;
     const failure = signs ? e.sparse_ldl_factor(lStart, workStart, n, ...baseStarts, starts[5], columnStart, signStart) : e.sparse_factor(lStart, workStart, n, ...baseStarts);
-    if (failure) { release(); throw new Error(`Матрица направления не положительна или связи зависимы: ${failure}`); }
+    if (failure) {
+      release();
+      const error=new Error(`Матрица направления не положительна или связи зависимы: ${failure}`);
+      error.code='CLOTH_SPARSE_FACTOR_REJECTED';error.pivot=failure;
+      throw error;
+    }
     const many = rightSides => {
       if (released) throw new Error('Решатель явно освобождён');
       if (!rightSides.length) return [];

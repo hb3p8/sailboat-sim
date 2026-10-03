@@ -2,6 +2,7 @@
 // Приближена только матрица направления (Gauss–Newton), не общий остаток.
 import {gridDissection,sparsePattern} from './cloth-sparse-solve.mjs';
 import {cross3,rotate3,transpose3,denseSolve} from './cloth-fluid-inertia.mjs';
+import {gradientLayout,gradientValues} from './cloth-gradient-layout.mjs';
 
 const coordinates=grad=>{
   const out=new Map();
@@ -11,7 +12,7 @@ const coordinates=grad=>{
 
 export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
   const nc=m.pos.length,nh=m.hard.length,nb=3*m.bindings.length,n=nc+nh+nb;
-  const soft=m.soft.map(c=>({c,g:coordinates(c.value(s.q).grad)}));
+  const soft=m.soft.map(c=>{const v=c.value(s.q);return {c,grad:v.grad,g:coordinates(v.grad)};});
   const hard=m.hard.map(c=>({...c.value(s.q)}));
   const hg=hard.map(c=>coordinates(c.grad));
   const bindings=m.bindings.flatMap(({node})=>[0,1,2].map(d=>[[3*node+d,1]]));
@@ -35,15 +36,17 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
     matrix[entry]+=v;
   };
   if(n&&!m.fluidAssembly) {
-    const compile=g=>{
+    const compile=(g,grad)=>{
       const entries=[];
       for(let a=0;a<g.length;a++)for(let b=0;b<=a;b++) {
         const i=p.inverse[g[a][0]],j=p.inverse[g[b][0]];
         entries.push(p.locations[Math.max(i,j)].get(Math.min(i,j)));
       }
-      return {coordinates:Int32Array.from(g,([i])=>i),entries:Int32Array.from(entries)};
+      const layout=gradientLayout(grad),size=layout.coordinates.length;
+      return {coordinates:Int32Array.from(g,([i])=>i),entries:Int32Array.from(entries),layout,
+        plusValues:new Float64Array(size),minusValues:new Float64Array(size),hessian:new Float64Array(size*size)};
     };
-    m.fluidAssembly={soft:soft.map(({g})=>compile(g)),hard:hg.map(compile)};
+    m.fluidAssembly={soft:soft.map(({g,grad})=>compile(g,grad)),hard:hg.map((g,j)=>compile(g,hard[j].grad))};
   }
   const checkPlan=(g,plan)=>{
     if(g.length!==plan.coordinates.length||g.some(([i],a)=>i!==plan.coordinates[a]))
@@ -56,15 +59,17 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
     // симметрия — тождество Hessian, а не новая материальная модель.
     const terms=[...soft.map(({c,g},k)=>({c,g,plan:m.fluidAssembly.soft[k],weight:1/c.alpha,soft:true})),
       ...active.map(j=>({c:m.hard[j],g:hg[j],plan:m.fluidAssembly.hard[j],weight:s.mu[j],soft:false}))];
+    const plus=s.q.slice(),minus=s.q.slice();
     for(const {c,g,plan,weight,soft:isSoft} of terms) {
       checkPlan(g,plan);
-      const size=g.length,H=new Float64Array(size*size);
+      const size=g.length,H=plan.hessian;
       for(let j=0;j<size;j++) {
-        const k=g[j][0],delta=2e-6*Math.max(1,Math.abs(s.q[k])),plus=s.q.slice(),minus=s.q.slice();
+        const k=g[j][0],delta=2e-6*Math.max(1,Math.abs(s.q[k]));
         plus[k]+=delta;minus[k]-=delta;
-        const vp=c.value(plus),vm=c.value(minus),gp=new Map(coordinates(vp.grad)),gm=new Map(coordinates(vm.grad));
-        for(let i=0;i<size;i++)H[i*size+j]=weight*((isSoft?vp.C:1)*gp.get(g[i][0])-
-          (isSoft?vm.C:1)*gm.get(g[i][0]))/(2*delta);
+        const vp=c.value(plus),vm=c.value(minus);
+        const gp=gradientValues(plan.layout,vp.grad,plan.plusValues),gm=gradientValues(plan.layout,vm.grad,plan.minusValues);
+        for(let i=0;i<size;i++)H[i*size+j]=weight*((isSoft?vp.C:1)*gp[i]-(isSoft?vm.C:1)*gm[i])/(2*delta);
+        plus[k]=s.q[k];minus[k]=s.q[k];
       }
       let entry=0;
       for(let a=0;a<size;a++)for(let b=0;b<=a;b++)matrix[plan.entries[entry++]]+=.5*(H[a*size+b]+H[b*size+a]);

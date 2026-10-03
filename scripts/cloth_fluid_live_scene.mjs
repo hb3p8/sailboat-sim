@@ -9,7 +9,7 @@ async function bytesAt(path) {
   const r=await fetch('/'+path,{cache:'no-store'});if(!r.ok)throw new Error(`Не удалось прочитать ${path}: ${r.status}`);
   return r.arrayBuffer();
 }
-export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,jibSail,scene,sea,sunTarget,camera,BufferGeometry,BufferAttribute}) {
+export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,jibSail,scene,sea,sunTarget,camera,BufferGeometry,BufferAttribute,indicators=[]}) {
   if(!renderer.backend.isWebGPUBackend)throw new Error('Живой стенд требует WebGPU');
   const prefix=new URLSearchParams(location.search).get('fluid-live');
   if(!/^[\w-]+$/.test(prefix))throw new Error('Укажите имя подготовленной серии в fluid-live');
@@ -107,6 +107,8 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
       // Лабораторные оси не привязаны к акватории; фоновые объекты не участвуют.
       for(const object of scene.children)if(object!==boatGroup&&object!==sea&&!object.isLight&&object!==sunTarget)object.visible=false;
       genSail.visible=true;mainSail.visible=false;jibSail.visible=false;
+      // Ленточки читают остановленный Rig; для лабораторного воздуха данных нет.
+      for(const indicator of indicators)indicator.visible=false;
       const [x,y,z]=originM;camera.position.set(x+9,z+5,-y+16);camera.lookAt(x+3,z+4,-y);
       shownStep=snapshot.index??0;panel.dataset.shownStep=String(shownStep);
       const saved=steps[shownStep-1];if(saved&&saved.presentedAt===undefined)saved.presentedAt=performance.now();

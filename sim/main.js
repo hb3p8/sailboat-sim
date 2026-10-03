@@ -3713,7 +3713,7 @@ renderer.init().then(async () => {
     if (!benchFrozen() || BENCH_N !== 0) throw new Error('Живой опыт требует ?bench=0');
     const { startFluidLiveScene } = await import('../scripts/cloth_fluid_live_scene.mjs');
     clothSceneReview = await startFluidLiveScene({ renderer, genSail, boatGroup, mainSail, jibSail, scene, sea, sunTarget:sun.target, camera,
-      BufferGeometry, BufferAttribute });
+      BufferGeometry, BufferAttribute, indicators:[...telltales,leechTells] });
   } else if (new URLSearchParams(location.search).has('cloth-review')) {
     if (!benchFrozen() || BENCH_N !== 0) throw new Error('Замер ткани требует ?bench=0');
     const { startClothSceneReview } = await import('../scripts/cloth_full_scene_review.mjs');

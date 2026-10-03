@@ -49,13 +49,16 @@ for(const tack of [...new Set(records.map(r=>r.config.tack))])for(const scale of
       const sa=sample(a,step),sb=sample(b,step);
       comparisons.push({tack,pressureScale:scale,step,timeS:step*a.config.hS,
         world:commonNodeDistances(a.recipe,b.recipe,sa.positionsM,sb.positionsM),
-        bodyRelative:commonNodeDistances(a.recipe,b.recipe,local(sa.positionsM,sa.body),local(sb.positionsM,sb.body))});
+        bodyRelative:commonNodeDistances(a.recipe,b.recipe,local(sa.positionsM,sa.body),local(sb.positionsM,sb.body)),
+        fixedGridWorld:commonNodeDistances(a.recipe,b.recipe,sa.positionsM,sb.positionsM,group[0].recipe),
+        fixedGridBodyRelative:commonNodeDistances(a.recipe,b.recipe,local(sa.positionsM,sa.body),local(sb.positionsM,sb.body),group[0].recipe)});
     }
   }
 }
 const report={schema:'cloth-fluid-mesh-review-v1',createdAt:new Date().toISOString(),
   revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
   dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),
+  sourceSha256:Object.fromEntries(['scripts/cloth_fluid_mesh_review.mjs','tests/cloth-motion-refinement.mjs'].map(p=>[p,hash(readFileSync(p))])),
   physicalAcceptance:false,
   scope:'Углы ломаных краёв и соседних граней по координатам; кривизна — угол в радианах / полусумма длин соседних участков. Различия формы в общих узлах отдельно в мире и относительно опоры; без подгонки поз или интерполяции времени. Не воспроизводит неизвестные команды/момент пользовательского снимка.',
   sources:records.map(r=>({path:r.path,sha256:r.sha256,revision:r.revision,dirty:r.dirty,config:r.config,
@@ -69,12 +72,13 @@ const html=`<!doctype html><html lang="ru"><meta charset="utf-8"><title>Изло
 <style>body{margin:24px;color:#213d4d;background:#f3f7fa;font:15px system-ui}h1{font-size:24px}.controls{display:flex;gap:20px;flex-wrap:wrap;margin:20px 0}label{display:flex;gap:8px;align-items:center}select{padding:6px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}article{background:white;border:1px solid #d0dee6;border-radius:10px;padding:12px}canvas{width:100%;height:520px;touch-action:none;cursor:grab}.numbers{font-size:13px;min-height:54px;line-height:1.6}details{margin:20px 0}pre{white-space:pre-wrap;font-size:12px}p{max-width:1100px}</style>
 <h1>Излом и плотность сетки паруса</h1>
 <p>Здесь сохранённые расчёты ткани с общей движущейся опорой. Сетка уточняется по высоте и ширине, материал и нагрузка одинаковые. Геометрия показана без сглаживания и интерполяции; плоское освещение подчёркивает грани. Поворот мышью и масштаб колесом общие для всех вариантов.</p>
-<div class="controls"><label>Сторона <select id="side"></select></label><label>Давление <select id="pressure"></select></label><label>Момент <select id="time"></select></label><label><input id="wire" type="checkbox">Показать сетку</label><button id="reset">Исходный ракурс</button></div>
+<div class="controls"><label>Сторона <select id="side"></select></label><label>Давление <select id="pressure"></select></label><label>Время <select id="time"></select></label><label><input id="wire" type="checkbox">Показать сетку</label><button id="reset">Исходный ракурс</button></div>
 <p>Оранжевый — задний край; синий — передний; фиолетовый — нижний.</p><div id="cards" class="cards"></div><p>Человеческая оценка: похож ли заметный излом на тот, что виден в живом опыте? Если сохраняется на плотной сетке — укажите край или участок. Размер сетки, углы, силы и точность расчёта проверяются инструментами.</p>
 <details><summary>Происхождение и границы опыта</summary><pre id="provenance"></pre></details>
 <script>const records=${payload};
 const side=document.querySelector('#side'),pressure=document.querySelector('#pressure'),time=document.querySelector('#time'),wire=document.querySelector('#wire'),cards=document.querySelector('#cards');
 for(const s of [...new Set(records.map(r=>r.config.tack))])side.add(new Option(s===1?'Плюс':'Минус',s));
+if(records.some(r=>r.config.tack===1))side.value='1';
 for(const s of [...new Set(records.map(r=>r.config.pressureScale))].sort())pressure.add(new Option((s*100)+'%',s));pressure.value='1.5';
 const steps=[...new Set(records.flatMap(r=>r.frames.map(f=>f.step)))].sort((a,b)=>a-b);for(const s of steps)time.add(new Option((s/60)+' с',s));time.value=steps.includes(60)?'60':String(steps.at(-1));
 let az=-Math.PI/3,pitch=.17,zoom=1,views=[];

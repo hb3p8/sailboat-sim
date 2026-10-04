@@ -82,7 +82,12 @@ function membraneMode(triangle, mode, stiffnessNPerM) {
       // E = (F^T F - I)/2. Энергия A/2 · [K tr(E)^2 + G (E11-E22)^2 + G (2 E12)^2].
       const C = mode === 0 ? .5 * (uu + vv - 2) : mode === 1 ? .5 * (uu - vv) : dot(u, v);
       const du = mode === 2 ? v : u, dv = mode === 2 ? u : v.map(x => mode === 1 ? -x : x);
-      for(let k=0;k<indices.length;k++)for(let d=0;d<3;d++)gradient[3*k+d]=bx[k]*du[d]+by[k]*dv[d];
+      for(let k=0;k<indices.length;k++) {
+        const coordinate=3*k,wu=bx[k],wv=by[k];
+        gradient[coordinate]=wu*du[0]+wv*dv[0];
+        gradient[coordinate+1]=wu*du[1]+wv*dv[1];
+        gradient[coordinate+2]=wu*du[2]+wv*dv[2];
+      }
       return C;
   }};
 }
@@ -171,9 +176,13 @@ function curvatureModes(reference, triangles, rows, cols, B) {
           // Производная нормали: (I-n n^T) / |u×v|; затем обратный ход через u×v.
           const adjN = H.map((value, d) => (value - f.normal[d] * curvature) / f.length);
           const adjU = cross(f.v, adjN), adjV = cross(adjN, f.u);
+          // Три оси независимы; порядок трёх слагаемых каждой компоненты
+          // сохраняется. Внутренний цикл и извлечение через итератор не нужны.
           for(let k=0;k<weights.length;k++) {
-            const [,wu,wv,wh]=weights[k];
-            for(let d=0;d<3;d++)gradient[3*k+d]=wu*adjU[d]+wv*adjV[d]+wh*f.normal[d];
+            const coordinate=3*k,wu=weights[k][1],wv=weights[k][2],wh=weights[k][3];
+            gradient[coordinate]=wu*adjU[0]+wv*adjV[0]+wh*f.normal[0];
+            gradient[coordinate+1]=wu*adjU[1]+wv*adjV[1]+wh*f.normal[1];
+            gradient[coordinate+2]=wu*adjU[2]+wv*adjV[2]+wh*f.normal[2];
           }
           return curvature-restCurvature;
       }});

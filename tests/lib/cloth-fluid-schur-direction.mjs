@@ -187,16 +187,35 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
       column.forEach((v,i)=>{D[i][nc+k]=-v/(i<3?1:m.inertia.referenceLengthM);});
     });
   }
-  const permute=v=>Float64Array.from({length:n},(_,i)=>v[p.order[i]]);
+  // Порядок координат задан постоянным планом. Прямые циклы не создают
+  // промежуточный массив с минусом и не вызывают функцию на каждое число.
+  const permute=(v,negative=false)=>{
+    const result=new Float64Array(n);
+    for(let i=0;i<n;i++)result[i]=negative?-v[p.order[i]]:v[p.order[i]];
+    return result;
+  };
   let response;
   if(n) {
     const solve=m.wasmSparseFactor.ldl(matrix,p,signs);
-    try {response=solve.many([permute(rK.map(v=>-v)),...E.map(permute)]).map(v=>
-      Float64Array.from({length:n},(_,i)=>v[p.inverse[i]]));} finally {solve.release();}
+    try {response=solve.many([permute(rK,true),...E.map(v=>permute(v))]).map(v=>{
+      const result=new Float64Array(n);
+      for(let i=0;i<n;i++)result[i]=v[p.inverse[i]];
+      return result;
+    });} finally {solve.release();}
   } else response=Array.from({length:7},()=>new Float64Array(0));
-  const dot=(a,b)=>a.reduce((sum,v,i)=>sum+v*b[i],0),[y0,...U]=response;
+  // Начальное +0 и последовательность сумм прежние, включая знак нуля.
+  const dot=(a,b)=>{let sum=0;for(let i=0;i<a.length;i++)sum+=a[i]*b[i];return sum;},[y0,...U]=response;
   const S=B.map((v,k)=>v-dot(D[Math.floor(k/6)],U[k%6]));
-  const rhs=Float64Array.from({length:6},(_,i)=>-s.residual[nc+i]-dot(D[i],y0));
-  const dNu=denseSolve(S,rhs),y=y0.map((v,i)=>v-U.reduce((sum,u,j)=>sum+u[i]*dNu[j],0));
-  return Float64Array.from([...y.slice(0,nc),...dNu,...active.map(j=>y[nc+j]),...y.slice(nc+nh)]);
+  const rhs=new Float64Array(6);
+  for(let i=0;i<6;i++)rhs[i]=-s.residual[nc+i]-dot(D[i],y0);
+  const dNu=denseSolve(S,rhs),y=new Float64Array(n);
+  for(let i=0;i<n;i++) {
+    let sum=0;for(let j=0;j<U.length;j++)sum+=U[j][i]*dNu[j];
+    y[i]=y0[i]-sum;
+  }
+  const result=new Float64Array(nc+6+active.length+nb);
+  result.set(y.subarray(0,nc));result.set(dNu,nc);
+  for(let i=0;i<active.length;i++)result[nc+6+i]=y[nc+active[i]];
+  result.set(y.subarray(nc+nh),nc+6+active.length);
+  return result;
 }

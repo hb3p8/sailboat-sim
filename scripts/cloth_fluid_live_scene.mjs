@@ -30,7 +30,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   }
   const el=id=>panel.querySelector('#fluid-'+id),status=el('status');
   let client,fixture,geometry,snapshot,running=false,busy=false,generation=0,timer,wallMs=0,steps=[];
-  let shownStep=0,initial,sheetDirection=0,automaticCycle=false;
+  let shownStep=0,initial,preparation,sheetDirection=0,automaticCycle=false;
   const cycleDirection=()=>steps.length<30?0:steps.length<60?1:steps.length<90?0:steps.length<120?-1:0;
   const controls=()=>({pressureScale:Number(el('pressure').value)/100,yawMomentNm:Number(el('yaw').value),
     ...(client.ready.sheetControl?{sheetRateMPS:(automaticCycle?cycleDirection():sheetDirection)*client.ready.sheetControl.maxSpeedMPS}:{})});
@@ -57,7 +57,8 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
     try {
       const result=await client.step(command);if(token!==generation)return;
       const receivedAt=performance.now();wallMs+=receivedAt-sentAt;
-      snapshot=result;steps.push({...result,positions:Array.from(result.positions),forceN:Array.from(result.forceN),sentAt,receivedAt});
+      snapshot=result;steps.push({...result,positions:Array.from(result.positions),forceN:Array.from(result.forceN),sentAt,receivedAt,
+        visibilityState:document.visibilityState});
       sheetReadout();
       panel.dataset.step=String(result.index);panel.dataset.modelSeconds=String(result.index*result.hS);
       status.textContent=`Принято ${result.index} шагов · время модели ${(result.index*result.hS).toFixed(2)} с · последний расчёт ${result.stepMs.toFixed(1)} мс`;
@@ -74,12 +75,12 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
     if(token===generation&&running&&client)timer=setTimeout(()=>{void step(token);},Math.max(0,fixture.recipe.hS*1000-(performance.now()-sentAt)));
   }
   async function prepare(cycle=false) {
-    const token=++generation;stop();automaticCycle=cycle;client?.terminate();client=undefined;busy=true;snapshot=undefined;steps=[];wallMs=0;shownStep=0;sheetReadout();
+    const token=++generation;stop();automaticCycle=cycle;client?.terminate();client=undefined;busy=true;snapshot=undefined;steps=[];wallMs=0;shownStep=0;preparation=undefined;sheetReadout();
     if(cycle)for(const [id,value] of [['pressure','100'],['yaw','0']]){el(id).value=value;el(id).oninput();}
     delete panel.dataset.error;panel.dataset.step='0';buttons();status.textContent='Проверяю вход и подготавливаю расчёт…';
     let prepared;
     try {
-      const bytes=await bytesAt(`out/acceptance/${prefix}-${el('side').value}.json`),input=JSON.parse(new TextDecoder().decode(bytes));
+      const prepareStart=performance.now(),bytes=await bytesAt(`out/acceptance/${prefix}-${el('side').value}.json`),input=JSON.parse(new TextDecoder().decode(bytes));
       if(input.schema!=='cloth-fluid-live-v1'||input.side!==el('side').value)throw new Error('Некорректная постановка');
       for(const [path,sha] of Object.entries(input.sourceSha256))if(await digest(await bytesAt(path))!==sha)throw new Error('Изменились исходники: '+path);
       if(await digest(await bytesAt(location.pathname.slice(1)))!==input.scene.sha256)throw new Error('Пересобранная сцена требует новой серии');
@@ -95,9 +96,13 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
           throw new Error('Верёвка не соответствует сохранённому опыту');
       }
       const wasm=await bytesAt(input.wasm.path);if(await digest(wasm)!==input.wasm.sha256)throw new Error('Изменился WASM');
-      prepared=await createFluidWorker(input.recipe,input.bodyInput,wasm,{sheet:input.sheet});
+      const verifiedAt=performance.now();
+      prepared=await createFluidWorker(input.recipe,input.bodyInput,wasm,{sheet:input.sheet,profile:input.profileWorker??false});
       if(token!==generation){prepared.terminate();return;}
       client=prepared;fixture=input;snapshot=client.ready;initial={positions:Array.from(snapshot.positions),body:structuredClone(snapshot.body)};
+      preparation={verifyMs:verifiedAt-prepareStart,workerMs:performance.now()-verifiedAt,setupMs:client.ready.setupMs,
+        ...(input.profileWorker?{compileMs:client.ready.compileMs,modelMs:client.ready.modelMs}:{}),
+        visibilityState:document.visibilityState};
       geometry?.dispose();geometry=new BufferGeometry();
       geometry.setAttribute('position',new BufferAttribute(new Float32Array(snapshot.positions.length),3));
       geometry.setAttribute('color',new BufferAttribute(new Float32Array(snapshot.positions.length).fill(1),3));
@@ -118,7 +123,9 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   el('step').onclick=()=>{void step();};
   el('save').onclick=()=>{
     const serial=v=>ArrayBuffer.isView(v)?Array.from(v):Array.isArray(v)?v.map(serial):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,serial(x)])):v;
-    const record={schema:'cloth-fluid-live-result-v1',fixture,initial,steps:serial(steps),shownStep,wallMs,
+    const record={schema:'cloth-fluid-live-result-v1',fixture,initial,steps:serial(steps),shownStep,wallMs,preparation,
+      environment:{userAgent:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency,
+        devicePixelRatio,viewport:[innerWidth,innerHeight],visibilityState:document.visibilityState,crossOriginIsolated},
       scope:'Живой лабораторный опыт; неподвижное поле с управляемым масштабом давления, внешним моментом и необязательной верёвкой. Нет закона воздуха, руля, гидросил и измеренных масс SV20; пик идеальной нерастяжимой верёвки не принят как реальная нагрузка.'};
     const url=URL.createObjectURL(new Blob([JSON.stringify(record,null,2)+'\n'],{type:'application/json'}));
     const a=document.createElement('a');a.href=url;a.download=`${prefix}-${fixture.side}-${Date.now()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);

@@ -12,6 +12,7 @@ const serial=v=>ArrayBuffer.isView(v)?Array.from(v):Array.isArray(v)?v.map(seria
 const jsonSerial=v=>JSON.parse(JSON.stringify(serial(v)));
 const bytes=readFileSync(input),r=JSON.parse(bytes),f=r.fixture;
 assert.equal(r.schema,'cloth-fluid-live-result-v1');assert.equal(f.schema,'cloth-fluid-live-v1');
+assert(f.profileWorker===undefined||typeof f.profileWorker==='boolean');
 for(const [path,sha] of Object.entries(f.sourceSha256))assert.equal(hash(readFileSync(path)),sha,'Изменился исходник '+path);
 for(const part of [f.input,f.wasm,f.scene])assert.equal(hash(readFileSync(part.path)),part.sha256,'Изменился сохранённый вход '+part.path);
 assert.equal(hash(readFileSync('out/export/physics.json')),f.physicsSha256);
@@ -30,7 +31,7 @@ if(f.sheetProof) {
 const factor=await loadSparseFactor(readFileSync(f.wasm.path)),c=fluidSailMotion(f.recipe,f.bodyInput,factor,{sheet:f.sheet});
 assert.deepEqual(r.initial,{positions:Array.from(c.motion.pos),body:jsonSerial(c.motion.body)});
 assert(r.steps.length<=300&&Number.isInteger(r.shownStep)&&r.shownStep>=0&&r.shownStep<=r.steps.length);
-const costs=[],delays=[];
+const costs=[],delays=[],timings=[];
 for(let i=0;i<r.steps.length;i++) {
   const s=r.steps[i];assert.equal(s.index,i+1);assert.equal(s.hS,f.recipe.hS);
   const a=c.step(s.controls);
@@ -42,6 +43,22 @@ for(let i=0;i<r.steps.length;i++) {
   assert(Math.abs(a.discreteBalanceResidualJ)<=a.workLimitJ&&Math.abs(a.bodyWorkCancellationResidualJ)<=a.interfaceWorkLimitJ);
   for(const rope of a.ropes??[])assert(Math.abs(rope.controlResidualJ)<=rope.controlLimitJ);
   assert(Number.isFinite(s.stepMs)&&s.stepMs>=0&&s.receivedAt>=s.sentAt);
+  assert.equal(Boolean(s.timing),Boolean(f.profileWorker),'Режим наблюдения отличается от входа');
+  if(s.timing) {
+    const t=s.timing,epsilon=1e-6;
+    for(const k of ['loadMs','physicsMs','snapshotMs','handlerMs'])assert(Number.isFinite(t[k])&&t[k]>=0,'Некорректное время '+k);
+    assert(Math.abs(t.loadMs+t.physicsMs-s.stepMs)<=epsilon&&Math.abs(t.handlerMs-s.stepMs-t.snapshotMs)<=epsilon);
+    assert.deepEqual(Object.keys(t.stages).sort(),['audit','bodyState','direction','readSoft','state','validateState']);
+    for(const row of Object.values(t.stages))assert(Number.isInteger(row.calls)&&row.calls>=0&&
+      Number.isFinite(row.inclusiveMs)&&Number.isFinite(row.selfMs)&&row.selfMs>=-epsilon&&row.inclusiveMs+epsilon>=row.selfMs);
+    assert(Object.values(t.stages).reduce((sum,row)=>sum+row.selfMs,0)<=t.physicsMs+epsilon,'Стадии суммируются дважды');
+    assert(t.linear.factorMs>=0&&t.linear.solveMs>=0&&t.linear.factorMs+t.linear.solveMs<=t.stages.direction.inclusiveMs+epsilon);
+    for(const [k,v] of Object.entries(t.wasm))assert(Number.isInteger(v)&&v>=0,'Неверный счётчик WASM '+k);
+    assert.equal(t.linear.factorCalls,t.wasm.numericFactorizations);
+    assert(Number.isInteger(t.linear.solveCalls)&&t.linear.solveCalls>=0);
+    assert(t.stages.direction.calls>=a.solver.iterations&&t.stages.audit.calls>=1);
+    timings.push(t);
+  }
   costs.push(s.stepMs);
   if(s.presentedAt!==undefined){assert(s.presentedAt>=s.receivedAt);delays.push(s.presentedAt-s.receivedAt);}
 }
@@ -49,6 +66,13 @@ const result={schema:'cloth-fluid-live-report-v1',input,sha256:hash(bytes),revis
   valid:true,exactSteps:r.steps.length,shownStep:r.shownStep,lastAcceptedStepShown:r.shownStep===r.steps.length,
   costsMs:{mean:costs.length?costs.reduce((a,b)=>a+b,0)/costs.length:null,max:costs.length?Math.max(...costs):null},
   maxPresentationDelayMs:delays.length?Math.max(...delays):null,
+  ...(f.profileWorker?{timing:{profile:true,steps:timings.length,
+    loadTotalMs:timings.reduce((sum,t)=>sum+t.loadMs,0),physicsTotalMs:timings.reduce((sum,t)=>sum+t.physicsMs,0),
+    snapshotTotalMs:timings.reduce((sum,t)=>sum+t.snapshotMs,0),
+    stages:Object.fromEntries(Object.keys(timings[0]?.stages??{}).map(k=>[k,
+      Object.fromEntries(['calls','inclusiveMs','selfMs'].map(v=>[v,timings.reduce((sum,t)=>sum+t.stages[k][v],0)]))])),
+    linear:Object.fromEntries(['factorMs','solveMs','factorCalls','solveCalls'].map(k=>[k,timings.reduce((sum,t)=>sum+t.linear[k],0)])),
+    scope:'Наблюдение меняет стоимость исполнения; интервалы включают остановки потока. Вложенные стадии используют selfMs; линейное время входит в direction.'}}:{}),
   ...(f.sheet?{sheet:{proof:f.sheetProof,limits:c.sheetControl,
     minLengthM:r.steps.length?Math.min(...r.steps.map(s=>s.audit.ropes[0].lengthM)):f.sheet.lengthM,
     maxLengthM:r.steps.length?Math.max(...r.steps.map(s=>s.audit.ropes[0].lengthM)):f.sheet.lengthM,

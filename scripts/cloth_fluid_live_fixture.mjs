@@ -8,8 +8,9 @@ import {fileURLToPath} from 'node:url';
 const args=process.argv.slice(2),inputs=args.filter(v=>v.startsWith('--input=')).map(v=>v.slice(8));
 const prefix=args.find(v=>v.startsWith('--out-prefix='))?.slice(13),wasm=args.find(v=>v.startsWith('--wasm='))?.slice(7);
 const sheetInputs=args.filter(v=>v.startsWith('--sheet-input=')).map(v=>v.slice(14));
-assert(inputs.length===2&&prefix&&wasm&&[0,2].includes(sheetInputs.length)&&args.length===4+sheetInputs.length,
-  'Нужны две --input, --out-prefix, --wasm и необязательные две --sheet-input');
+const profileWorker=args.includes('--profile-worker');
+assert(inputs.length===2&&prefix&&wasm&&[0,2].includes(sheetInputs.length)&&args.length===4+sheetInputs.length+Number(profileWorker),
+  'Нужны две --input, --out-prefix, --wasm, необязательные две --sheet-input и --profile-worker');
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const revision=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 const dirty=Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim());
@@ -41,7 +42,7 @@ const records=inputs.map(path=>{
   return {path:`${prefix}-${side}.json`,value:{schema:'cloth-fluid-live-v1',revision,dirty,sourceSha256,
     input:{path,sha256:hash(bytes),revision:s.revision},physicsSha256:s.physicsSha256,
     wasm:{path:wasm,sha256:hash(readFileSync(wasm))},scene:{path:`${prefix}-scene.html`,sha256:hash(scene)},
-    recipe:s.recipe,bodyInput:s.config.bodyInput,side,
+    recipe:s.recipe,bodyInput:s.config.bodyInput,side,...(profileWorker?{profileWorker:true}:{}),
     ...(proof?{sheet:proof.r.parameters.sheet,sheetProof:{path:proof.path,sha256:proof.sha256,revision:proof.r.revision}}:{})}};
 });
 assert.equal(new Set(records.map(r=>r.path)).size,2);

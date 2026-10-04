@@ -1,6 +1,7 @@
 // Последовательный канал общего шага: команды не накапливаются в очереди.
 export async function createFluidWorker(recipe, bodyInput, bytes, {
-  makeWorker = url => new Worker(url,{type:'module'}),sheet } = {}) {
+  makeWorker = url => new Worker(url,{type:'module'}),sheet,profile=false } = {}) {
+  if(typeof profile!=='boolean')throw new Error('Измерение стадий задаётся логическим значением');
   const worker = makeWorker(new URL('./cloth-fluid-worker.mjs',import.meta.url));
   let pending = null, sequence = 0, closed = false;
   const rejectPending = error => {
@@ -32,7 +33,7 @@ export async function createFluidWorker(recipe, bodyInput, bytes, {
   try {
     // Копия отделяет владение байтами от прочитанного/проверенного исходного модуля.
     const ownedBytes = bytes instanceof ArrayBuffer ? bytes.slice(0) : bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
-    const ready = await request('init',{recipe,bodyInput,bytes:ownedBytes,...(sheet?{sheet}:{})},[ownedBytes]);
+    const ready = await request('init',{recipe,bodyInput,bytes:ownedBytes,profile,...(sheet?{sheet}:{})},[ownedBytes]);
     return {ready,step:controls=>request('step',{controls}),terminate};
   } catch(e) { terminate(); throw e; }
 }

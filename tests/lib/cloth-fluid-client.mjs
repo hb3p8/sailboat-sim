@@ -1,7 +1,8 @@
 // Последовательный канал общего шага: команды не накапливаются в очереди.
 export async function createFluidWorker(recipe, bodyInput, bytes, {
-  makeWorker = url => new Worker(url,{type:'module'}),sheet,profile=false } = {}) {
+  makeWorker = url => new Worker(url,{type:'module'}),sheet,profile=false,probe=false } = {}) {
   if(typeof profile!=='boolean')throw new Error('Измерение стадий задаётся логическим значением');
+  if(typeof probe!=='boolean')throw new Error('Независимая проба задаётся логическим значением');
   const worker = makeWorker(new URL('./cloth-fluid-worker.mjs',import.meta.url));
   let pending = null, sequence = 0, closed = false;
   const rejectPending = error => {
@@ -33,7 +34,7 @@ export async function createFluidWorker(recipe, bodyInput, bytes, {
   try {
     // Копия отделяет владение байтами от прочитанного/проверенного исходного модуля.
     const ownedBytes = bytes instanceof ArrayBuffer ? bytes.slice(0) : bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
-    const ready = await request('init',{recipe,bodyInput,bytes:ownedBytes,profile,...(sheet?{sheet}:{})},[ownedBytes]);
-    return {ready,step:controls=>request('step',{controls}),terminate};
+    const ready = await request('init',{recipe,bodyInput,bytes:ownedBytes,profile,...(probe?{probe:true}:{}),...(sheet?{sheet}:{})},[ownedBytes]);
+    return {ready,step:controls=>request('step',{controls}),terminate,...(probe?{probe:()=>request('probe')}:{})};
   } catch(e) { terminate(); throw e; }
 }

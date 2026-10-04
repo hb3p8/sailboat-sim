@@ -3,10 +3,11 @@ import {fluidSailMotion} from './cloth-fluid-sail-motion.mjs';
 import {loadSparseFactor} from './cloth-sparse-wasm.mjs';
 import {observeSparseFactor} from './cloth-worker-timing.mjs';
 import {observeFluidStages,stageDifference} from './cloth-fluid-timing.mjs';
+import {createExecutionProbe} from './cloth-execution-probe.mjs';
 
 export function fluidWorkerHandler(post) {
-  let calculation,factor,linearObserver,stageObserver,index=0,busy=false,failed=false;
-  return async ({id,type,recipe,bodyInput,bytes,controls,sheet,profile=false})=>{
+  let calculation,factor,linearObserver,stageObserver,executionProbe,index=0,busy=false,failed=false;
+  return async ({id,type,recipe,bodyInput,bytes,controls,sheet,profile=false,probe=false})=>{
     if(busy){post({id,type:'error',message:'Предыдущая команда ещё выполняется',index});return;}
     busy=true;
     try {
@@ -14,13 +15,16 @@ export function fluidWorkerHandler(post) {
       if(type==='init') {
         if(calculation)throw new Error('Расчёт уже подготовлен');
         if(typeof profile!=='boolean')throw new Error('Измерение стадий задаётся логическим значением');
+        if(typeof probe!=='boolean')throw new Error('Независимая проба задаётся логическим значением');
         const start=performance.now();factor=await loadSparseFactor(bytes);const compiledAt=performance.now();
         if(profile)linearObserver=observeSparseFactor(factor);
         calculation=fluidSailMotion(recipe,bodyInput,linearObserver?.factor??factor,{sheet});
         if(profile)stageObserver=observeFluidStages(calculation.motion);
+        if(probe)executionProbe=createExecutionProbe();
         const positions=calculation.motion.pos.slice(),body=structuredClone(calculation.motion.body),readyAt=performance.now();
         post({id,type:'ready',positions,body,setupMs:readyAt-start,hS:calculation.hS,
           ...(profile?{profile:true,compileMs:compiledAt-start,modelMs:readyAt-compiledAt}:{}),
+          ...(probe?{probe:true}:{}),
           ...(calculation.sheetControl?{sheetControl:calculation.sheetControl}:{})});
       } else if(type==='step') {
         if(!calculation)throw new Error('Расчёт не подготовлен');
@@ -41,6 +45,10 @@ export function fluidWorkerHandler(post) {
         }
         post({id,type:'step',index:++index,hS:calculation.hS,stepMs,positions,body,forceN,audit,controls:controls??{},
           ...(timing?{timing}:{})},[positions.buffer]);
+      } else if(type==='probe') {
+        if(!calculation||!executionProbe)throw new Error('Независимая проба не подготовлена');
+        // Проба не меняет индекс, состояние, команды или наблюдатели модели.
+        post({id,type:'probe',index,probe:executionProbe()});
       } else throw new Error('Неизвестная команда общего шага');
     } catch(e) {failed=true;post({id,type:'error',message:e.message,index});}
     finally {busy=false;}

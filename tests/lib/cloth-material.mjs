@@ -121,10 +121,17 @@ function curvatureModes(reference, triangles, rows, cols, B) {
     for (const [x, wx] of derivativeWeights(c, cols, 1))
       for (const [y, wy] of derivativeWeights(r, rows, 1)) add(y * cols + x, 4, wx * wy);
     const stencil = Array.from(coefficients);
+    const centerCoordinate=3*index;
     const derivative = (p, slot) => {
       const out = [0, 0, 0];
-      for (const [i, w] of stencil) for (let d = 0; d < 3; d++)
-        out[d] += w[slot] * (p[3 * i + d] - p[3 * index + d]);
+      // Сохраняем порядок сумм по узлам и разности с центром. Развёрнутые
+      // три оси убирают внутренний цикл и повторное извлечение коэффициента.
+      for(let k=0;k<stencil.length;k++) {
+        const coordinate=3*stencil[k][0],weight=stencil[k][1][slot];
+        out[0]+=weight*(p[coordinate]-p[centerCoordinate]);
+        out[1]+=weight*(p[coordinate+1]-p[centerCoordinate+1]);
+        out[2]+=weight*(p[coordinate+2]-p[centerCoordinate+2]);
+      }
       return out;
     };
     const frame = p => {
@@ -150,8 +157,12 @@ function curvatureModes(reference, triangles, rows, cols, B) {
       for (const slot of [1, 2, 3]) center[slot] -= weights.reduce((sum, w) => sum + w[slot], 0);
       const second = p => {
         const out = [0, 0, 0];
-        for (const [i, , , w] of weights) for (let d = 0; d < 3; d++)
-          out[d] += w * (p[3 * i + d] - p[3 * index + d]);
+        for(let k=0;k<weights.length;k++) {
+          const coordinate=3*weights[k][0],weight=weights[k][3];
+          out[0]+=weight*(p[coordinate]-p[centerCoordinate]);
+          out[1]+=weight*(p[coordinate+1]-p[centerCoordinate+1]);
+          out[2]+=weight*(p[coordinate+2]-p[centerCoordinate+2]);
+        }
         return out;
       };
       const restCurvature = dot(rest.normal, second(reference));

@@ -15,12 +15,17 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
   const soft=m.soft.map((c,j)=>{
     const v=s.softValues?.[j]??c.value(s.q),plan=m.fluidAssembly?.soft[j];
     if(v.values&&plan?.direct&&v.nodes.length===plan.layout.nodes.length&&
-        v.nodes.every((node,k)=>node===plan.layout.nodes[k]))
-      return {c,g:Array.from(plan.coordinates,(coordinate,k)=>[coordinate,0+v.values[k]])};
+        v.nodes.every((node,k)=>node===plan.layout.nodes[k])) {
+      // Пары координат нужны лишь внутри этого вызова направления. Снимок
+      // материала принадлежит состоянию, рабочие пары — раскладке решателя.
+      for(let k=0;k<plan.g.length;k++)plan.g[k][1]=0+v.values[k];
+      return {c,g:plan.g};
+    }
     const grad=v.grad??v.nodes.map((node,k)=>[node,Array.from(v.values.slice(3*k,3*k+3))]);
     if(!plan)return {c,grad,g:coordinates(grad)};
-    const values=gradientValues(plan.layout,grad,new Float64Array(plan.coordinates.length));
-    return {c,grad,g:Array.from(plan.coordinates,(coordinate,k)=>[coordinate,values[k]])};
+    const values=gradientValues(plan.layout,grad,plan.currentValues);
+    for(let k=0;k<plan.g.length;k++)plan.g[k][1]=values[k];
+    return {c,grad,g:plan.g};
   });
   const hard=m.hard.map(c=>({...m.hardValue(c,s.q,s)}));
   const hg=hard.map(c=>coordinates(c.grad));
@@ -53,6 +58,7 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
       }
       const layout=gradientLayout(grad),size=layout.coordinates.length;
       return {coordinates:Int32Array.from(g,([i])=>i),entries:Int32Array.from(entries),layout,
+        g:Array.from(g,([i])=>[i,0]),currentValues:new Float64Array(size),
         plusValues:new Float64Array(size),minusValues:new Float64Array(size),rawValues:new Float64Array(3*grad.length),
         direct:layout.slots.length===size&&layout.slots.every((slot,i)=>slot===i),hessian:new Float64Array(size*size)};
     };

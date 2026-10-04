@@ -43,7 +43,15 @@ for(const repeated of [false,true]) {
   assert.equal(direct.counters.group,1);assert.equal(direct.counters.ordinary,0);
   assert.equal(legacy.counters.ordinary,3,'Направление повторно прочитало материал того же состояния');
   const snapshot=structuredClone(a),trial=z.slice();trial[3]=2;trial[4]=4;
-  direct.m.state(trial,old(direct.m),load,h,[]);assert.deepEqual(a,snapshot,'Пробное состояние изменило принятый снимок');
+  const next=direct.m.state(trial,old(direct.m),load,h,[]);assert.deepEqual(a,snapshot,'Пробное состояние изменило принятый снимок');
+  direct.m.direction(trial,next,old(direct.m),load,h,[]);
+  const again=direct.m.direction(z,a,old(direct.m),load,h,[]);
+  again.forEach((v,k)=>assert(Math.abs(v-expected[k])<1e-14,'Повтор старого состояния использовал градиенты пробного состояния'));
+  assert.deepEqual(a,snapshot,'Рабочая раскладка изменила снимок материала');
+  const otherModes=structuredClone(a.softValues.slice(1)),first=a.softValues[0].values[0];
+  a.softValues[0].values[0]=first+1;
+  assert.deepEqual(a.softValues.slice(1),otherModes,'Градиенты разных мод перекрываются в памяти');
+  a.softValues[0].values[0]=first;assert.deepEqual(a,snapshot);
   direct.nodes[0]=1;assert.deepEqual(a,snapshot,'Снимок сохранил чужой изменяемый список узлов');
 }
 console.log('ок: известные три пружины, обычный/численный интерфейсы, группа, повторные узлы и -0; холодное/повторное направление, одно чтение и независимость состояний');

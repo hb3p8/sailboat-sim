@@ -54,18 +54,22 @@ function referenceTriangle(reference, indices) {
 
 // Один закон энергии для обоих интерфейсов. Корректор может передать свой
 // массив градиента; обычный value сохраняет прежний независимый снимок.
-function bufferedModes(specs,prepare) {
+function bufferedModes(specs,prepare,native) {
   const valid=(gradient,j)=>gradient instanceof Float64Array&&gradient.length===3*specs[j].indices.length;
+  if(native&&(typeof native.valueInto!=='function'||typeof native.singleInto!=='function'))
+    throw new Error('Некорректный численный вычислитель группы материала');
   const gradientGroup={size:specs.length,valueInto(p,gradients) {
     if(!Array.isArray(gradients)||gradients.length!==specs.length||gradients.some((g,j)=>!valid(g,j)))
       throw new Error('Нужны численные массивы группы материала правильной длины');
+    if(native)return native.valueInto(p,gradients);
     const context=prepare(p);return specs.map((s,j)=>s.evaluateInto(p,gradients[j],context));
   }};
+  if(native?.hessianInto)gradientGroup.hessianInto=(p,weights,targets)=>native.hessianInto(p,weights,targets);
   return specs.map(({family,alpha,indices,evaluateInto},j)=>{
     const gradientNodes=Object.freeze(Array.from(indices));
     const valueInto=(p,gradient)=>{
       if(!valid(gradient,j))throw new Error('Нужен численный массив градиента материала правильной длины');
-      return evaluateInto(p,gradient,prepare(p));
+      return native?native.singleInto(p,j,gradient):evaluateInto(p,gradient,prepare(p));
     };
     return {family,alpha,lambda:0,unilateral:false,gradientNodes,valueInto,gradientGroup,gradientSlot:j,
       value(p) {
@@ -107,7 +111,7 @@ function derivativeWeights(i, n, order) {
   return offsets.map((offset, k) => [i + offset, weights[k] * factor]);
 }
 
-function curvatureModes(reference, triangles, rows, cols, B) {
+function curvatureModes(reference, triangles, rows, cols, B,compiled) {
   if (![rows, cols].every(n => Number.isInteger(n) && n >= 4) || rows * cols * 3 !== reference.length)
     throw new Error('Для кривизны нужна равномерная параметрическая сетка не менее 4×4');
   const areas = new Float64Array(rows * cols), modes = [];
@@ -152,7 +156,7 @@ function curvatureModes(reference, triangles, rows, cols, B) {
     const combinations = [[1 / (l * l), 0, 0],
       [x * x / (l * l * y * y), 1 / (y * y), -2 * x / (l * y * y)],
       [-Math.SQRT2 * x / (l * l * y), 0, Math.SQRT2 / (l * y)]];
-    const specs=[];
+    const specs=[],nativeModes=compiled?[]:null;
     for (const combination of combinations) {
       const weights = stencil.map(([i, w]) => [i, w[0], w[1],
         combination[0] * w[2] + combination[1] * w[3] + combination[2] * w[4]]);
@@ -171,6 +175,7 @@ function curvatureModes(reference, triangles, rows, cols, B) {
         return out;
       };
       const restCurvature = dot(rest.normal, second(reference));
+      if(nativeModes)nativeModes.push({restCurvature,weights:[1,2,3].map(slot=>weights.map(w=>w[slot]))});
       specs.push({family:'bending',alpha:1/(B*areas[index]),indices:weights.map(([i])=>i),evaluateInto(p,gradient,f) {
           const H = second(p), curvature = dot(f.normal, H);
           // Производная нормали: (I-n n^T) / |u×v|; затем обратный ход через u×v.
@@ -187,7 +192,9 @@ function curvatureModes(reference, triangles, rows, cols, B) {
           return curvature-restCurvature;
       }});
     }
-    modes.push(...bufferedModes(specs,frame));
+    const native=compiled?.compile({kind:'curvature',center:index,nodes:stencil.map(([node])=>node),
+      derivatives:[0,1].map(slot=>stencil.map(([,w])=>w[slot])),modes:nativeModes});
+    modes.push(...bufferedModes(specs,frame,native));
   }
   return modes;
 }
@@ -196,6 +203,10 @@ export function materialSurface(referencePositions, triangleIndices, parameters 
   if (!referencePositions || referencePositions.length < 9 || referencePositions.length % 3)
     throw new Error('Некорректный размер исходной поверхности');
   checkPositions(referencePositions, referencePositions.length);
+  if(options.materialKernel!=null&&typeof options.materialKernel.createSurface!=='function')
+    throw new Error('Нужна фабрика отдельного вычислителя материала');
+  const compiled=options.materialKernel?.createSurface();
+  if(options.materialKernel&&(!compiled||typeof compiled.compile!=='function'))throw new Error('Нужна компиляция локальной группы материала');
   const { bulkNPerM: K, shearNPerM: G, bendingNm: B } = parameters;
   if (![K, G, B].every(Number.isFinite) || !(K > 0 && G > 0 && B >= 0))
     throw new Error('Нужны положительные модули Н/м и неотрицательная жёсткость изгиба Н·м');
@@ -215,7 +226,8 @@ export function materialSurface(referencePositions, triangleIndices, parameters 
     seen.add(key);
     const triangle = referenceTriangle(reference, indices); triangles.push(triangle);
     constraints.push(...bufferedModes([membraneMode(triangle,0,K),membraneMode(triangle,1,G),
-      membraneMode(triangle,2,G)],triangle.frame));
+      membraneMode(triangle,2,G)],triangle.frame,compiled?.compile({kind:'membrane',nodes:indices,
+        bx:triangle.bx,by:triangle.by})));
     for (let k = 0; k < 3; k++) {
       const from = indices[k], to = indices[(k + 1) % 3], opposite = indices[(k + 2) % 3];
       const name = `${Math.min(from, to)},${Math.max(from, to)}`, previous = edges.get(name);
@@ -235,7 +247,7 @@ export function materialSurface(referencePositions, triangleIndices, parameters 
   }
   const areaM2 = triangles.reduce((sum, t) => sum + t.areaM2, 0);
   if (B > 0 && bendingModel === 'curvature')
-    constraints.push(...curvatureModes(reference, triangles, options.rows, options.cols, B));
+    constraints.push(...curvatureModes(reference, triangles, options.rows, options.cols, B,compiled));
   const evaluate = (p, withGradient = false) => {
     checkPositions(p, reference.length);
     let bulkJ = 0, shearJ = 0, bendingJ = 0, maxHingeChangeRad = 0;

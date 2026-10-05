@@ -105,6 +105,10 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
         v.g.every(([k],i)=>k===g[i][0]));
       if(batch) {
         block.forEach(({g,plan})=>checkPlan(g,plan));
+        if(typeof group.hessianInto==='function') {
+          group.hessianInto(s.q,block.map(t=>t.weight),block.map(t=>t.plan.hessian));
+          block.forEach(assemble);term+=block.length;continue;
+        }
         const plusGradients=block.map(v=>v.plan.plusValues),minusGradients=block.map(v=>v.plan.minusValues);
         for(let j=0;j<size;j++) {
           const k=g[j][0],delta=2e-6*Math.max(1,Math.abs(s.q[k]));plus[k]+=delta;minus[k]-=delta;

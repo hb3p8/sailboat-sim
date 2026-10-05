@@ -37,6 +37,25 @@ make fit
 `make sky` нужны только для изменения этих ассетов, а не для обычной сборки.
 [Зависимости просмотрщика](../../viewer/vendor/README.md) поставляются в git.
 
+## Прототип материала WASM
+
+Отдельный опытный модуль не входит в `make kernel` и не заменяет линейный
+решатель. Нужны LLVM/lld с целью wasm32 и SIMD; проверен clang 22.1.8.
+Выберите новый путь, убедитесь, что файла нет, и сохраните команду, версию
+компилятора, SHA исходника и модуля. Не перезаписывайте прежние результаты.
+Пути LLVM/lld ниже относятся к Homebrew на машине исследования.
+
+```sh
+test ! -e out/acceptance/новый-материал.wasm && PATH=/opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/lld/bin:$PATH /opt/homebrew/opt/llvm/bin/clang --target=wasm32 -O3 -ffp-contract=off -fno-fast-math -msimd128 -nostdlib -Wl,--no-entry -Wl,--export-dynamic -Wl,--export=__heap_base -Wl,--initial-memory=131072 -Wl,--max-memory=16777216 -o out/acceptance/новый-материал.wasm tests/probes/cloth-material-wasm.c
+node tests/cloth-material-wasm.test.mjs --wasm=out/acceptance/новый-материал.wasm --out=out/acceptance/новая-проверка-материала.json
+```
+
+Запрещены `fast-math`, слияние умножения/сложения и перестановка сумм:
+контроль требует точного округления прежнего JS, включая знак нуля.
+[Протокол полных пар](../research/boat-coupling.md#материал-и-местный-корректор-в-wasm)
+отделяет CPU текущего потока от процесса и времени по часам; для инструмента
+нужен Node с `process.threadCpuUsage` (проверен 26.5.0).
+
 ## Границы кода
 
 - `src/sv20/` и `scripts/build_physics.py` производят геометрию, массы и таблицы.

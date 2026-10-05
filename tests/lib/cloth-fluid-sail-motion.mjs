@@ -6,7 +6,7 @@ import {materialSurface,gridTriangles,MODEL_MATERIAL} from './cloth-material.mjs
 import {installSharedForces} from './cloth-shared-input.mjs';
 import {distance} from '../cloth-compliance.mjs';
 
-export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='schur-wasm',hS=r.hS,allowRefinementGrid=false,sheet}={}) {
+export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='schur-wasm',hS=r.hS,allowRefinementGrid=false,sheet,materialKernel}={}) {
   const n=r.rows*r.cols;
   const gridAccepted=r.rows===11&&r.cols===9 || allowRefinementGrid&&
     Number.isInteger(r.rows)&&Number.isInteger(r.cols)&&r.rows>=11&&r.cols>=9&&r.rows<=41&&r.cols<=33&&
@@ -18,7 +18,7 @@ export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='sch
   const addedMass6=Array.from({length:36},(_,i)=>i%7===0?addedDiagonal[i/7]:0);
   const inertia=fluidInertia({dryMassKg:bodyInput.massKg,dryPrincipalInertiaKgM2:bodyInput.principalInertiaKgM2,addedMass6});
   const surface=materialSurface(r.reference,gridTriangles(r.rows,r.cols),MODEL_MATERIAL,
-    {bendingModel:'curvature',rows:r.rows,cols:r.cols});
+    {bendingModel:'curvature',rows:r.rows,cols:r.cols,materialKernel});
   const constraints=[...surface.constraints,...r.hard.map(c=>Object.assign(distance(c.a,c.b,c.rest,0,c.unilateral),{family:c.family}))];
   const {head,end,nodes,fractions}=r.board;
   nodes.forEach((node,j)=>{if(node!==head&&node!==end)for(let d=0;d<3;d++)constraints.push({

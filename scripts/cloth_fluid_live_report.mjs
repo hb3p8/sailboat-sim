@@ -5,6 +5,8 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {fluidSailMotion} from '../tests/lib/cloth-fluid-sail-motion.mjs';
 import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
+import {loadMaterialKernel} from '../tests/probes/cloth-material-wasm.mjs';
+import {verifyMaterialKernel} from '../tests/probes/cloth-material-engine-check.mjs';
 const [input,output]=process.argv.slice(2);assert(input&&output&&process.argv.length===4&&!existsSync(output));
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const serial=v=>ArrayBuffer.isView(v)?Array.from(v):Array.isArray(v)?v.map(serial):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,serial(x)])):v;
@@ -28,7 +30,15 @@ if(f.sheetProof) {
   assert.deepEqual(proof.parameters.sheet,f.sheet);
   for(const [path,sha] of Object.entries(proof.sourceSha256))assert.equal(hash(execFileSync('git',['show',`${proof.revision}:${path}`],{maxBuffer:16*1024*1024})),sha);
 }
-const factor=await loadSparseFactor(readFileSync(f.wasm.path)),c=fluidSailMotion(f.recipe,f.bodyInput,factor,{sheet:f.sheet});
+let materialKernel,materialValidation;
+if(f.materialWasm!==undefined) {
+  assert(f.materialWasm?.path&&/^[a-f0-9]{64}$/.test(f.materialWasm.sha256),'Некорректное происхождение материала');
+  const b=readFileSync(f.materialWasm.path);assert.equal(hash(b),f.materialWasm.sha256,'Изменился WASM материала');
+  materialKernel=await loadMaterialKernel(b);materialValidation=verifyMaterialKernel(materialKernel,f.recipe);
+  assert.equal(r.preparation.material.backend,'wasm');assert.deepEqual(r.preparation.material.validation,materialValidation);
+  assert(Number.isFinite(r.preparation.material.checkMs)&&r.preparation.material.checkMs>=0);
+} else assert.equal(r.preparation.material,undefined,'Материал результата отличается от входа');
+const factor=await loadSparseFactor(readFileSync(f.wasm.path)),c=fluidSailMotion(f.recipe,f.bodyInput,factor,{sheet:f.sheet,materialKernel});
 assert.deepEqual(r.initial,{positions:Array.from(c.motion.pos),body:jsonSerial(c.motion.body)});
 assert(r.steps.length<=300&&Number.isInteger(r.shownStep)&&r.shownStep>=0&&r.shownStep<=r.steps.length);
 const costs=[],delays=[],timings=[];
@@ -66,6 +76,7 @@ const result={schema:'cloth-fluid-live-report-v1',input,sha256:hash(bytes),revis
   valid:true,exactSteps:r.steps.length,shownStep:r.shownStep,lastAcceptedStepShown:r.shownStep===r.steps.length,
   costsMs:{mean:costs.length?costs.reduce((a,b)=>a+b,0)/costs.length:null,max:costs.length?Math.max(...costs):null},
   maxPresentationDelayMs:delays.length?Math.max(...delays):null,
+  ...(materialValidation?{material:{backend:'wasm',module:f.materialWasm,validation:materialValidation}}:{}),
   ...(f.profileWorker?{timing:{profile:true,steps:timings.length,
     loadTotalMs:timings.reduce((sum,t)=>sum+t.loadMs,0),physicsTotalMs:timings.reduce((sum,t)=>sum+t.physicsMs,0),
     snapshotTotalMs:timings.reduce((sum,t)=>sum+t.snapshotMs,0),

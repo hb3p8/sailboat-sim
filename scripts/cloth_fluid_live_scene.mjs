@@ -96,11 +96,19 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
           throw new Error('Верёвка не соответствует сохранённому опыту');
       }
       const wasm=await bytesAt(input.wasm.path);if(await digest(wasm)!==input.wasm.sha256)throw new Error('Изменился WASM');
+      let materialBytes;
+      if(input.materialWasm!==undefined) {
+        if(!input.materialWasm?.path||!/^[a-f0-9]{64}$/.test(input.materialWasm.sha256))throw new Error('Некорректный модуль материала');
+        materialBytes=await bytesAt(input.materialWasm.path);
+        if(await digest(materialBytes)!==input.materialWasm.sha256)throw new Error('Изменился WASM материала');
+      }
       const verifiedAt=performance.now();
-      prepared=await createFluidWorker(input.recipe,input.bodyInput,wasm,{sheet:input.sheet,profile:input.profileWorker??false});
+      prepared=await createFluidWorker(input.recipe,input.bodyInput,wasm,{sheet:input.sheet,profile:input.profileWorker??false,materialBytes});
+      if(Boolean(prepared.ready.material)!==Boolean(input.materialWasm))throw new Error('Расчёт выбрал другой материал');
       if(token!==generation){prepared.terminate();return;}
       client=prepared;fixture=input;snapshot=client.ready;initial={positions:Array.from(snapshot.positions),body:structuredClone(snapshot.body)};
       preparation={verifyMs:verifiedAt-prepareStart,workerMs:performance.now()-verifiedAt,setupMs:client.ready.setupMs,
+        ...(client.ready.material?{material:client.ready.material}:{}),
         ...(input.profileWorker?{compileMs:client.ready.compileMs,modelMs:client.ready.modelMs}:{}),
         visibilityState:document.visibilityState};
       geometry?.dispose();geometry=new BufferGeometry();

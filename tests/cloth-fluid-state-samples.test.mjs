@@ -9,9 +9,10 @@ const wasmSparseFactor=await loadSparseFactor(readFileSync(args[0].slice(7)));
 const positions=[0,0,0,1,2,3],h=.1,alphas=[2,3,4];
 const inertia=fluidInertia({dryMassKg:10,dryPrincipalInertiaKgM2:[2,3,4],addedMass6:new Array(36).fill(0)});
 const load={frame:'inertial-cartesian-cg',clothForceN:new Float64Array(6),forceN:[0,0,0],momentNm:[0,0,0]};
-for(const repeated of [false,true]) {
+for(const repeated of [false,true])for(const frozen of [false,true]) {
   function make(buffered) {
     const counters={ordinary:0,group:0},nodes=repeated?[0,0,1]:[0,1];
+    if(frozen)Object.freeze(nodes);
     const fill=(d,values)=>{
       for(let k=0;k<nodes.length;k++)for(let axis=0;axis<3;axis++)
         values[3*k+axis]=axis===d?(nodes[k]===0?(repeated?-.5:-1):1):(nodes[k]===0?-0:0);
@@ -52,6 +53,15 @@ for(const repeated of [false,true]) {
   a.softValues[0].values[0]=first+1;
   assert.deepEqual(a.softValues.slice(1),otherModes,'Градиенты разных мод перекрываются в памяти');
   a.softValues[0].values[0]=first;assert.deepEqual(a,snapshot);
-  direct.nodes[0]=1;assert.deepEqual(a,snapshot,'Снимок сохранил чужой изменяемый список узлов');
+  if(frozen)assert.throws(()=>{direct.nodes[0]=1;},TypeError);
+  else direct.nodes[0]=1;
+  assert.deepEqual(a,snapshot,'Снимок сохранил чужой изменяемый список узлов');
+  // Замена даже исходно неизменяемого списка не разрешает заимствовать
+  // новые изменяемые индексы. Уже сохранённое состояние остаётся прежним.
+  const replacement=Array.from(a.softValues[0].nodes);
+  direct.m.soft[0].gradientNodes=replacement;
+  const samples=direct.m.readSoft(z.subarray(0,positions.length)),saved=structuredClone(samples);
+  replacement[0]=1;assert.deepEqual(samples,saved);
+  assert.deepEqual(a,snapshot,'Новая топология изменила прежний снимок');
 }
-console.log('ок: известные три пружины, обычный/численный интерфейсы, группа, повторные узлы и -0; холодное/повторное направление, одно чтение и независимость состояний');
+console.log('ок: известные три пружины, обычный/численный интерфейсы, группа, повторные узлы и -0; холодное/повторное направление, одно чтение, независимость состояний, неизменяемые/изменяемые индексы и замена списка');

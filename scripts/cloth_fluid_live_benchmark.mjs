@@ -54,24 +54,28 @@ const [modulePath,input,output]=process.argv.slice(1),r=JSON.parse(readFileSync(
 const {fluidSailMotion}=await import(pathToFileURL(modulePath));
 const {loadSparseFactor}=await import(new URL('./cloth-sparse-wasm.mjs',pathToFileURL(modulePath)));
 const begin=performance.now(),before=process.cpuUsage(),factor=await loadSparseFactor(readFileSync(f.wasm.path));
-const c=fluidSailMotion(f.recipe,f.bodyInput,factor,{sheet:f.sheet}),times=[],states=[];
+const c=fluidSailMotion(f.recipe,f.bodyInput,factor,{sheet:f.sheet}),times=[],stepCpu=[],states=[];
 const serial=v=>ArrayBuffer.isView(v)?Array.from(v):Array.isArray(v)?v.map(serial):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,serial(x)])):v;
 const json=v=>JSON.parse(JSON.stringify(serial(v)));
 assert.deepEqual(r.initial,json({positions:c.motion.pos,body:c.motion.body}));
 for(const s of r.steps) {
-  const start=performance.now(),audit=c.step(s.controls);times.push(performance.now()-start);
+  const cpuBeforeStep=process.cpuUsage(),start=performance.now(),audit=c.step(s.controls);
+  times.push(performance.now()-start);const usage=process.cpuUsage(cpuBeforeStep);
+  stepCpu.push({userMs:usage.user/1000,systemMs:usage.system/1000});
   const state=json({positions:c.motion.pos,body:c.motion.body,forceN:c.forceN,audit});
   assert.deepEqual(state,{positions:s.positions,body:s.body,forceN:s.forceN,audit:s.audit});states.push(state);
 }
 const cpu=process.cpuUsage(before),wallMs=performance.now()-begin,sorted=times.slice(1).sort((a,b)=>a-b);
 writeFileSync(output,JSON.stringify({runtime:process.version,hardware:{cpu:cpus()[0]?.model,platform:process.platform,arch:process.arch},
 firstMs:times[0],followingMeanMs:times.slice(1).reduce((s,v)=>s+v,0)/(times.length-1),followingP90Ms:sorted[Math.ceil(.9*sorted.length)-1],followingMaxMs:Math.max(...times.slice(1)),
-stepTotalMs:times.reduce((s,v)=>s+v,0),cpu:{userMs:cpu.user/1000,systemMs:cpu.system/1000,wallMs},states},null,2)+'\n',{flag:'wx'});`;
+stepTotalMs:times.reduce((s,v)=>s+v,0),stepCpu,
+followingCpu:Object.fromEntries(['userMs','systemMs'].map(k=>[k,stepCpu.slice(1).reduce((sum,v)=>sum+v[k],0)])),
+cpu:{userMs:cpu.user/1000,systemMs:cpu.system/1000,wallMs},states},null,2)+'\n',{flag:'wx'});`;
 const report={schema:'cloth-fluid-live-benchmark-v1',revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
   dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),baselineRevision:baseline,
   toolSha256:hash(readFileSync(fileURLToPath(import.meta.url))),sourceSha256,baselineSha256,changedSources:changed,
   inputs:fixtures.map(({path,sha256,side})=>({path,sha256,side})),runs:[],checkedSteps:0,
-  rule:'Три пары каждого борта, порядок вариантов чередуется. Таймер шага исключает сверку/запись; CPU окна включает сверку и подготовку WASM/модели. Node, не браузер.'};
+  rule:'Три пары каждого борта, порядок вариантов чередуется. Таймер шага и CPU каждого шага исключают сверку/запись; CPU окна включает сверку и подготовку WASM/модели. CPU учитывает все потоки процесса, в том числе возможную компиляцию; измерение шагов добавляет вызовы часов и cpuUsage. Все первые шаги сохранены, followingCpu относится к 2–180. Node, не браузер.'};
 process.once('uncaughtException',e=>{report.phase='failed';report.failure={message:e.message,stack:e.stack};
   writeFileSync(output,JSON.stringify(report,null,2)+'\n',{flag:'wx'});console.error('Парный опыт остановлен: '+e.message);process.exitCode=1;});
 for(let pair=1;pair<=3;pair++)for(const fixture of fixtures) {
@@ -80,6 +84,8 @@ for(let pair=1;pair<=3;pair++)for(const fixture of fixtures) {
     const path=resolve(copies,`${fixture.side}-${pair}-${version}.json`);
     execFileSync(process.execPath,['--input-type=module','-e',runner,resolve(copies,version,'tests/lib/cloth-fluid-sail-motion.mjs'),fixture.path,path],{cwd:root,maxBuffer:1024*1024});
     const bytes=readFileSync(path),r=JSON.parse(bytes);records[version]=r;
+    assert.equal(r.stepCpu.length,180);
+    assert(r.stepCpu.every(v=>Object.values(v).every(n=>Number.isFinite(n)&&n>=0)));
     const {states,...timing}=r;report.runs.push({pair,version,side:fixture.side,path:relative(root,path),sha256:hash(bytes),...timing});
     console.log(`Пара ${pair}, ${fixture.side==='plus'?'первая':'другая'} сторона, ${version==='candidate'?'новый':'прежний'} код: первый ${r.firstMs.toFixed(2)} мс, следующие ${r.followingMeanMs.toFixed(2)} мс; CPU окна ${(r.cpu.userMs+r.cpu.systemMs).toFixed(2)} мс.`);
   }

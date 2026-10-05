@@ -22,8 +22,19 @@ addSource(new URL(import.meta.url));addSource(new URL('./probes/cloth-material-w
 const serial=v=>ArrayBuffer.isView(v)?Array.from(v):Array.isArray(v)?v.map(serial):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,serial(x)])):v;
 const physical=r=>serial({index:r.index,hS:r.hS,positions:r.positions,body:r.body,forceN:r.forceN,audit:r.audit,controls:r.controls});
 function makeWorker(url) {
+ const bodyUrl=new URL('./cloth-fluid-body-motion.mjs',url);
+ // Разделение направлений существует только в проверочном Worker. Длительности
+ // включают дочерние вызовы; рабочий обработчик и физика не меняются.
  const code=`import {parentPort} from 'node:worker_threads';import {fluidWorkerHandler} from ${JSON.stringify(url.href)};
-const handle=fluidWorkerHandler((data,transfer=[])=>parentPort.postMessage(data,transfer));parentPort.on('message',data=>{void handle(data);});`;
+import {FluidBodyEnergyMotion} from ${JSON.stringify(bodyUrl.href)};
+let observed=false,before;const totals={ordinary:{calls:0,inclusiveMs:0},correction:{calls:0,inclusiveMs:0}},original=FluidBodyEnergyMotion.prototype.direction;
+const snapshot=()=>Object.fromEntries(Object.entries(totals).map(([k,v])=>[k,{...v}]));
+FluidBodyEnergyMotion.prototype.direction=function(...args){if(!observed)return original.apply(this,args);
+const row=totals[args[6]?.exact?'correction':'ordinary'],start=performance.now();row.calls++;
+try{return original.apply(this,args);}finally{row.inclusiveMs+=performance.now()-start;}};
+const handle=fluidWorkerHandler((data,transfer=[])=>{if(data.timing)data.directionKinds=Object.fromEntries(Object.entries(totals).map(([k,v])=>[k,
+Object.fromEntries(Object.entries(v).map(([field,value])=>[field,value-before[k][field]]))]));parentPort.postMessage(data,transfer);});
+parentPort.on('message',data=>{if(data.type==='init')observed=data.profile===true;before=snapshot();void handle(data);});`;
  const w=new Worker(new URL('data:text/javascript,'+encodeURIComponent(code)));
  return {postMessage:(...a)=>w.postMessage(...a),terminate:()=>w.terminate(),addEventListener(type,fn){w.on(type,data=>fn(type==='message'?{data}:{message:data.message}));}};
 }
@@ -35,7 +46,7 @@ for(const path of inputs) {
  const input=readFileSync(path),record=JSON.parse(input),f=record.fixture;assert.equal(record.steps.length,180);assert.equal(f.wasm.sha256,hash(bytes));
  const variants=[],initials=[];
  for(const [native,profile] of [[false,false],[true,false],[true,true]]) {
-  const before=Buffer.from(materialBytes),linearBefore=Buffer.from(bytes),client=await createFluidWorker(f.recipe,f.bodyInput,bytes,{sheet:f.sheet,profile,makeWorker,...(native?{materialBytes}:{})}),states=[];
+  const before=Buffer.from(materialBytes),linearBefore=Buffer.from(bytes),client=await createFluidWorker(f.recipe,f.bodyInput,bytes,{sheet:f.sheet,profile,makeWorker,...(native?{materialBytes}:{})}),states=[],timings=[];
   try {
    assert.deepEqual(materialBytes,before);assert.deepEqual(bytes,linearBefore);assert.equal(Boolean(client.ready.material),native);
    initials.push(serial({positions:client.ready.positions,body:client.ready.body}));
@@ -43,13 +54,17 @@ for(const path of inputs) {
    if(profile)assert(Math.abs(client.ready.compileMs+client.ready.modelMs-client.ready.setupMs)<1e-6);
    for(const old of record.steps) {
     const r=await client.step(old.controls),state=physical(r);assert.deepEqual(JSON.parse(JSON.stringify(state)),physical(old));assert.equal(Boolean(r.timing),profile);states.push(state);
-    if(profile){assert.equal(r.timing.linear.factorCalls,r.timing.wasm.numericFactorizations);assert(Math.abs(r.timing.loadMs+r.timing.physicsMs-r.stepMs)<1e-6);}
+    if(profile){assert.equal(r.timing.linear.factorCalls,r.timing.wasm.numericFactorizations);assert(Math.abs(r.timing.loadMs+r.timing.physicsMs-r.stepMs)<1e-6);
+     const kinds=r.directionKinds;assert.equal(kinds.ordinary.calls+kinds.correction.calls,r.timing.stages.direction.calls);
+     assert(Object.values(kinds).every(v=>Number.isInteger(v.calls)&&v.calls>=0&&Number.isFinite(v.inclusiveMs)&&v.inclusiveMs>=0));
+     assert(kinds.ordinary.inclusiveMs+kinds.correction.inclusiveMs<=r.timing.stages.direction.inclusiveMs+1e-6);
+     timings.push({index:r.index,stepMs:r.stepMs,iterations:r.audit.solver.iterations,timing:r.timing,directionKinds:kinds});}
    }
    const saved=structuredClone(states.at(-1));await assert.rejects(client.step({pressureScale:2}),/Нагрузка/);report.rejected++;
    await assert.rejects(client.step(),/После отказа/);report.rejected++;assert.deepEqual(states.at(-1),saved);
   } finally {await client.terminate();}
   variants.push(states);
-  report.results.push({path,sha256:hash(input),side:f.side,backend:native?'wasm':'js',profile,material:client.ready.material,exactSteps:180});
+  report.results.push({path,sha256:hash(input),side:f.side,backend:native?'wasm':'js',profile,material:client.ready.material,exactSteps:180,...(profile?{timings}:{})});
  }
  assert.deepEqual(initials[0],initials[1]);assert.deepEqual(initials[1],initials[2]);
  assert.deepEqual(variants[0],variants[1]);assert.deepEqual(variants[1],variants[2]);report.exactBackendPairs+=180;report.exactProfilePairs+=180;

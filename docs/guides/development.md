@@ -56,6 +56,21 @@ node tests/cloth-material-wasm.test.mjs --wasm=out/acceptance/новый-мат�
 отделяет CPU текущего потока от процесса и времени по часам; для инструмента
 нужен Node с `process.threadCpuUsage` (проверен 26.5.0).
 
+## Прототип сборки матрицы WASM
+
+Отдельный сборщик `tests/probes/cloth-assembly-wasm.c` не входит в
+`make kernel`, не заменяет материал или линейный модуль. Для нового опыта
+выберите новый путь. Компилятор, флаги и SHA фиксируются отдельно;
+запреты перестановки сумм и слияния арифметики те же, что у материала.
+
+```sh
+test ! -e out/acceptance/новая-сборка.wasm && PATH=/opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/lld/bin:$PATH /opt/homebrew/opt/llvm/bin/clang --target=wasm32 -O3 -ffp-contract=off -fno-fast-math -msimd128 -nostdlib -Wl,--no-entry -Wl,--export-dynamic -Wl,--export=__heap_base -Wl,--initial-memory=131072 -Wl,--max-memory=16777216 -o out/acceptance/новая-сборка.wasm tests/probes/cloth-assembly-wasm.c
+node tests/cloth-assembly-wasm.test.mjs --wasm=out/acceptance/новая-сборка.wasm --out=out/acceptance/новая-проверка-сборки.json
+```
+
+Полный изолированный опыт и ограничения — в
+[исследовании](../research/boat-coupling.md#пакетная-сборка-обычной-матрицы).
+
 ## Границы кода
 
 - `src/sv20/` и `scripts/build_physics.py` производят геометрию, массы и таблицы.

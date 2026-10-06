@@ -12,15 +12,19 @@ import {distance} from './cloth-compliance.mjs';
 import {materialSurface,gridTriangles,MODEL_MATERIAL} from './lib/cloth-material.mjs';
 import {boatBodyRotation} from '../sim/axes.js';
 import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
+import {loadAssemblyKernel} from './probes/cloth-assembly-wasm.mjs';
 
 const args=process.argv.slice(2);
-assert(args.every(v=>/^--(out|linear-backend|wasm)=.+$/.test(v)||v==='--without-newton-control')&&
+assert(args.every(v=>/^--(out|linear-backend|wasm|assembly-wasm)=.+$/.test(v)||v==='--without-newton-control')&&
   new Set(args.map(v=>v.split('=')[0])).size===args.length);
 const backend=args.find(v=>v.startsWith('--linear-backend='))?.slice(17)??'reference-dense';
 const wasmPath=args.find(v=>v.startsWith('--wasm='))?.slice(7),output=args.find(v=>v.startsWith('--out='))?.slice(6);
+const assemblyPath=args.find(v=>v.startsWith('--assembly-wasm='))?.slice(16),assemblyBytes=assemblyPath?readFileSync(assemblyPath):undefined;
 assert(['reference-dense','schur-wasm'].includes(backend)&&((backend==='schur-wasm')===Boolean(wasmPath)));
+assert(!assemblyPath||backend==='schur-wasm','Сборщик требует разреженное направление');
 const wasmBytes=wasmPath?readFileSync(wasmPath):undefined;
 const options={linearBackend:backend,wasmSparseFactor:wasmBytes?await loadSparseFactor(wasmBytes):undefined,
+  ...(assemblyBytes?{assemblyKernel:await loadAssemblyKernel(assemblyBytes)}:{}),
   newtonCorrection:!args.includes('--without-newton-control')};
 assert(options.newtonCorrection||backend==='schur-wasm','Отрицательный контроль относится только к schur-wasm');
 const packBytes=readFileSync(new URL('../out/export/physics.json',import.meta.url)),pack=JSON.parse(packBytes);
@@ -43,6 +47,7 @@ const result={schema:'cloth-fluid-body-v1',date:new Date().toISOString(),runtime
   dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),
   sourceSha256:{},physicsSha256:hash(packBytes),input,backend,newtonCorrection:options.newtonCorrection,
   wasm:wasmPath?{path:wasmPath,sha256:hash(wasmBytes)}:null,
+  ...(assemblyPath?{assemblyWasm:{path:assemblyPath,sha256:hash(assemblyBytes)}}:{}),
   cases:{translation:0,spin:0,spring:0,rope:0,gravity:0},
   refinement:[],totalAcceptedSteps:0,maxima:{forceEquivalentN:0,lengthM:0,workIdentityJ:0,energyLimitRatio:0,interfaceLimitRatio:0,convectivePowerW:0,knownCoordinateErrorM:0}};
 process.once('uncaughtException',error=>{
@@ -57,6 +62,7 @@ function source(url) {
   for(const m of bytes.toString().matchAll(/\b(?:from\s*|import\s*)['"](\.{1,2}\/[^'"]+)['"]/g))source(new URL(m[1],url));
 }
 source(new URL(import.meta.url));
+if(assemblyPath)source(new URL('./probes/cloth-assembly-wasm.c',import.meta.url));
 
 const skew=([x,y,z])=>[0,-z,y,z,0,-x,-y,x,0];
 // Независимая матричная форма C=[0,-S(P);-S(P),-S(L)].

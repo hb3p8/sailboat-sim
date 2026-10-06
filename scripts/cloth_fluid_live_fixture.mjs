@@ -10,8 +10,9 @@ const prefix=args.find(v=>v.startsWith('--out-prefix='))?.slice(13),wasm=args.fi
 const sheetInputs=args.filter(v=>v.startsWith('--sheet-input=')).map(v=>v.slice(14));
 const profileWorker=args.includes('--profile-worker');
 const materialWasm=args.find(v=>v.startsWith('--material-wasm='))?.slice(16);
-assert(inputs.length===2&&prefix&&wasm&&[0,2].includes(sheetInputs.length)&&args.length===4+sheetInputs.length+Number(profileWorker)+Number(Boolean(materialWasm)),
-  'Нужны две --input, --out-prefix, --wasm, необязательные две --sheet-input, --profile-worker и --material-wasm');
+const assemblyWasm=args.find(v=>v.startsWith('--assembly-wasm='))?.slice(16);
+assert(inputs.length===2&&prefix&&wasm&&[0,2].includes(sheetInputs.length)&&args.length===4+sheetInputs.length+Number(profileWorker)+Number(Boolean(materialWasm))+Number(Boolean(assemblyWasm)),
+  'Нужны две --input, --out-prefix, --wasm, необязательные две --sheet-input, --profile-worker, --material-wasm и --assembly-wasm');
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const revision=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 const dirty=Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim());
@@ -23,6 +24,7 @@ function addSource(url) {
 }
 for(const p of ['../tests/lib/cloth-fluid-worker.mjs','../tests/lib/cloth-fluid-client.mjs','./cloth_fluid_live_scene.mjs'])addSource(new URL(p,import.meta.url));
 if(materialWasm)addSource(new URL('../tests/probes/cloth-material-wasm.c',import.meta.url));
+if(assemblyWasm)addSource(new URL('../tests/probes/cloth-assembly-wasm.c',import.meta.url));
 const scene=readFileSync('sim/index.html'),physics=readFileSync('out/export/physics.json');
 const sheetRecords=sheetInputs.map(path=>{
   const bytes=readFileSync(path),r=JSON.parse(bytes);
@@ -45,6 +47,7 @@ const records=inputs.map(path=>{
     input:{path,sha256:hash(bytes),revision:s.revision},physicsSha256:s.physicsSha256,
     wasm:{path:wasm,sha256:hash(readFileSync(wasm))},scene:{path:`${prefix}-scene.html`,sha256:hash(scene)},
     ...(materialWasm?{materialWasm:{path:materialWasm,sha256:hash(readFileSync(materialWasm))}}:{}),
+    ...(assemblyWasm?{assemblyWasm:{path:assemblyWasm,sha256:hash(readFileSync(assemblyWasm))}}:{}),
     recipe:s.recipe,bodyInput:s.config.bodyInput,side,...(profileWorker?{profileWorker:true}:{}),
     ...(proof?{sheet:proof.r.parameters.sheet,sheetProof:{path:proof.path,sha256:proof.sha256,revision:proof.r.revision}}:{})}};
 });

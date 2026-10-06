@@ -18,7 +18,9 @@ const ordinary=`} else for(let k=0;k<soft.length;k++) {
     for(let a=0;a<g.length;a++)for(let b=0;b<=a;b++)matrix[plan.entries[entry++]]+=g[a][1]*g[b][1]/c.alpha;
   }`;
 assert.equal(original.split(ordinary).length,2,'Нужна единственная прежняя сборка');
-const candidate=original.replace(ordinary,`} else if(m.assemblyKernel) {
+// После переноса используем рабочую необязательную ветку; ранний граф
+// по-прежнему может получить её только внутри исследовательской копии.
+const candidate=original.includes('} else if(m.assemblyKernel&&n) {')?original:original.replace(ordinary,`} else if(m.assemblyKernel&&n) {
     soft.forEach(({g},k)=>checkPlan(g,m.fluidAssembly.soft[k]));
     m.compiledAssembly??=m.assemblyKernel.compile(matrix.length,m.fluidAssembly.soft);
     m.compiledAssembly.assemble(matrix,soft);

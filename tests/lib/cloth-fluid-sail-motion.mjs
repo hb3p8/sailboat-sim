@@ -6,7 +6,7 @@ import {materialSurface,gridTriangles,MODEL_MATERIAL} from './cloth-material.mjs
 import {installSharedForces} from './cloth-shared-input.mjs';
 import {distance} from '../cloth-compliance.mjs';
 
-export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='schur-wasm',hS=r.hS,allowRefinementGrid=false,sheet,materialKernel}={}) {
+export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='schur-wasm',hS=r.hS,allowRefinementGrid=false,sheet,materialKernel,assemblyKernel}={}) {
   const n=r.rows*r.cols;
   const gridAccepted=r.rows===11&&r.cols===9 || allowRefinementGrid&&
     Number.isInteger(r.rows)&&Number.isInteger(r.cols)&&r.rows>=11&&r.cols>=9&&r.rows<=41&&r.cols<=33&&
@@ -32,7 +32,7 @@ export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='sch
     throw new Error('Верёвка должна освобождать нижний задний угол паруса');
   const velocity=positions.map((v,k)=>(v-previous[k])/r.prevDt);
   const motion=new FluidBodyEnergyMotion({positions,mass:r.mass.slice(0,n),constraints,velocityMS:velocity,dampingHz:6,
-    linearBackend,wasmSparseFactor,gridRows:r.rows,gridCols:r.cols,ropes:sheet?[sheet]:[],
+    linearBackend,wasmSparseFactor,assemblyKernel,gridRows:r.rows,gridCols:r.cols,ropes:sheet?[sheet]:[],
     body:{inertia,originM:bodyInput.originM,orientation9:[1,0,0,0,1,0,0,0,1],velocity6:[0,0,0,0,0,0],
       attachments:r.rigidBody.attachments.filter(node=>!sheet||node!==sheet.node),frame:'body-cg'}});
   const forceN=new Float64Array(3*n),cloth={rows:r.rows,cols:r.cols,n,

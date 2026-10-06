@@ -6,10 +6,12 @@ import {observeFluidStages,stageDifference} from './cloth-fluid-timing.mjs';
 import {createExecutionProbe} from './cloth-execution-probe.mjs';
 import {loadMaterialKernel} from '../probes/cloth-material-wasm.mjs';
 import {verifyMaterialKernel} from '../probes/cloth-material-engine-check.mjs';
+import {loadAssemblyKernel} from '../probes/cloth-assembly-wasm.mjs';
+import {verifyAssemblyKernel} from '../probes/cloth-assembly-engine-check.mjs';
 
 export function fluidWorkerHandler(post) {
   let calculation,factor,linearObserver,stageObserver,executionProbe,index=0,busy=false,failed=false;
-  return async ({id,type,recipe,bodyInput,bytes,materialBytes,controls,sheet,profile=false,probe=false})=>{
+  return async ({id,type,recipe,bodyInput,bytes,materialBytes,assemblyBytes,controls,sheet,profile=false,probe=false})=>{
     if(busy){post({id,type:'error',message:'Предыдущая команда ещё выполняется',index});return;}
     busy=true;
     try {
@@ -20,15 +22,22 @@ export function fluidWorkerHandler(post) {
         if(typeof probe!=='boolean')throw new Error('Независимая проба задаётся логическим значением');
         if(materialBytes!==undefined&&!(materialBytes instanceof ArrayBuffer||ArrayBuffer.isView(materialBytes)))
           throw new Error('Нужны отдельные байты модуля материала');
+        if(assemblyBytes!==undefined&&!(assemblyBytes instanceof ArrayBuffer||ArrayBuffer.isView(assemblyBytes)))
+          throw new Error('Нужны отдельные байты модуля сборки');
         const start=performance.now();factor=await loadSparseFactor(bytes);
-        const materialKernel=materialBytes===undefined?undefined:await loadMaterialKernel(materialBytes),compiledAt=performance.now();
-        let material;
+        const materialKernel=materialBytes===undefined?undefined:await loadMaterialKernel(materialBytes),
+          assemblyKernel=assemblyBytes===undefined?undefined:await loadAssemblyKernel(assemblyBytes),compiledAt=performance.now();
+        let material,assembly;
         if(materialKernel) {
           const checkStart=performance.now(),validation=verifyMaterialKernel(materialKernel,recipe);
           material={backend:'wasm',validation,checkMs:performance.now()-checkStart};
         }
+        if(assemblyKernel) {
+          const checkStart=performance.now(),validation=verifyAssemblyKernel(assemblyKernel,recipe);
+          assembly={backend:'wasm',validation,checkMs:performance.now()-checkStart};
+        }
         if(profile)linearObserver=observeSparseFactor(factor);
-        calculation=fluidSailMotion(recipe,bodyInput,linearObserver?.factor??factor,{sheet,materialKernel});
+        calculation=fluidSailMotion(recipe,bodyInput,linearObserver?.factor??factor,{sheet,materialKernel,assemblyKernel});
         if(profile)stageObserver=observeFluidStages(calculation.motion);
         if(probe)executionProbe=createExecutionProbe();
         const positions=calculation.motion.pos.slice(),body=structuredClone(calculation.motion.body),readyAt=performance.now();
@@ -36,6 +45,7 @@ export function fluidWorkerHandler(post) {
           ...(profile?{profile:true,compileMs:compiledAt-start,modelMs:readyAt-compiledAt}:{}),
           ...(probe?{probe:true}:{}),
           ...(material?{material}:{}),
+          ...(assembly?{assembly}:{}),
           ...(calculation.sheetControl?{sheetControl:calculation.sheetControl}:{})});
       } else if(type==='step') {
         if(!calculation)throw new Error('Расчёт не подготовлен');

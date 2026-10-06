@@ -9,7 +9,7 @@ const point=(p,i)=>Array.from(p.slice(3*i,3*i+3));
 
 export class FluidBodyEnergyMotion {
   constructor({positions,mass,constraints,body,velocityMS,dampingHz=6,
-      linearBackend='reference-dense',wasmSparseFactor,gridRows,gridCols,newtonCorrection=true,ropes=[]}) {
+      linearBackend='reference-dense',wasmSparseFactor,assemblyKernel,gridRows,gridCols,newtonCorrection=true,ropes=[]}) {
     if(positions?.length!==3*mass?.length||!Array.from(mass).every(v=>Number.isFinite(v)&&v>0)||
         !Array.from(positions).every(Number.isFinite)||!Array.isArray(constraints)||
         !(Number.isFinite(dampingHz)&&dampingHz>=0)||!finiteArray(body?.originM,3)||
@@ -37,10 +37,12 @@ export class FluidBodyEnergyMotion {
     this.tolerances=IMPLICIT_TOLERANCES;
     if(typeof newtonCorrection!=='boolean'||!['reference-dense','schur-wasm'].includes(linearBackend)||
         (linearBackend==='schur-wasm'&&typeof wasmSparseFactor?.ldl!=='function')||
+        (assemblyKernel!==undefined&&(linearBackend!=='schur-wasm'||typeof assemblyKernel?.compile!=='function'))||
         ((gridRows!=null||gridCols!=null)&&(!Number.isInteger(gridRows)||gridRows<=0||
           !Number.isInteger(gridCols)||gridCols<=0||gridRows*gridCols!==mass.length)))
       throw new Error('Неизвестный или не загруженный способ общего решения либо сетка');
     Object.assign(this,{linearBackend,wasmSparseFactor,gridRows,gridCols,newtonCorrection});
+    if(assemblyKernel!==undefined)this.assemblyKernel=assemblyKernel;
   }
 
   validateState() {

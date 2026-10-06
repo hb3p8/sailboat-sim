@@ -1,10 +1,12 @@
 // Последовательный канал общего шага: команды не накапливаются в очереди.
 export async function createFluidWorker(recipe, bodyInput, bytes, {
-  makeWorker = url => new Worker(url,{type:'module'}),sheet,profile=false,probe=false,materialBytes } = {}) {
+  makeWorker = url => new Worker(url,{type:'module'}),sheet,profile=false,probe=false,materialBytes,assemblyBytes } = {}) {
   if(typeof profile!=='boolean')throw new Error('Измерение стадий задаётся логическим значением');
   if(typeof probe!=='boolean')throw new Error('Независимая проба задаётся логическим значением');
   if(materialBytes!==undefined&&!(materialBytes instanceof ArrayBuffer||ArrayBuffer.isView(materialBytes)))
     throw new Error('Нужны отдельные байты модуля материала');
+  if(assemblyBytes!==undefined&&!(assemblyBytes instanceof ArrayBuffer||ArrayBuffer.isView(assemblyBytes)))
+    throw new Error('Нужны отдельные байты модуля сборки');
   const worker = makeWorker(new URL('./cloth-fluid-worker.mjs',import.meta.url));
   let pending = null, sequence = 0, closed = false;
   const rejectPending = error => {
@@ -38,8 +40,11 @@ export async function createFluidWorker(recipe, bodyInput, bytes, {
     const ownedBytes = bytes instanceof ArrayBuffer ? bytes.slice(0) : bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
     const ownedMaterial=materialBytes===undefined?undefined:materialBytes instanceof ArrayBuffer?materialBytes.slice(0):
       materialBytes.buffer.slice(materialBytes.byteOffset,materialBytes.byteOffset+materialBytes.byteLength);
+    const ownedAssembly=assemblyBytes===undefined?undefined:assemblyBytes instanceof ArrayBuffer?assemblyBytes.slice(0):
+      assemblyBytes.buffer.slice(assemblyBytes.byteOffset,assemblyBytes.byteOffset+assemblyBytes.byteLength);
     const ready = await request('init',{recipe,bodyInput,bytes:ownedBytes,profile,...(probe?{probe:true}:{}),...(sheet?{sheet}:{}),
-      ...(ownedMaterial?{materialBytes:ownedMaterial}:{})},[ownedBytes,...(ownedMaterial?[ownedMaterial]:[])]);
+      ...(ownedMaterial?{materialBytes:ownedMaterial}:{}),...(ownedAssembly?{assemblyBytes:ownedAssembly}:{})},
+      [ownedBytes,...(ownedMaterial?[ownedMaterial]:[]),...(ownedAssembly?[ownedAssembly]:[])]);
     return {ready,step:controls=>request('step',{controls}),terminate,...(probe?{probe:()=>request('probe')}:{})};
   } catch(e) { terminate(); throw e; }
 }

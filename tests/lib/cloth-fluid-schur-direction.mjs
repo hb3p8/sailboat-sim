@@ -136,6 +136,10 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
       }
       assemble(t);term++;
     }
+  } else if(m.assemblyKernel&&n) {
+    soft.forEach(({g},k)=>checkPlan(g,m.fluidAssembly.soft[k]));
+    m.compiledAssembly??=m.assemblyKernel.compile(matrix.length,m.fluidAssembly.soft);
+    m.compiledAssembly.assemble(matrix,soft);
   } else for(let k=0;k<soft.length;k++) {
     const {c,g}=soft[k],plan=m.fluidAssembly.soft[k];checkPlan(g,plan);let entry=0;
     for(let a=0;a<g.length;a++)for(let b=0;b<=a;b++)matrix[plan.entries[entry++]]+=g[a][1]*g[b][1]/c.alpha;

@@ -68,13 +68,7 @@ export async function loadSparseFactor(bytes, { reuse = true } = {}) {
       for (let i = 0; i < n; i++) for (let r = 0; r < rightSides.length; r++) x[i * width + r] = rightSides[r][i];
       const run = signs ? e.sparse_ldl_solve_many : e.sparse_solve_many;
       run(lStart, outputStart, n, width, ...baseStarts);
-      // Собственный массив каждого ответа переживает следующий вызов и рост
-      // памяти WASM. Прямой цикл копирует числа без вызова функции на координату.
-      return rightSides.map((_, r) => {
-        const answer = new Float64Array(n);
-        for (let i = 0; i < n; i++) answer[i] = x[i * width + r];
-        return answer;
-      });
+      return rightSides.map((_, r) => Float64Array.from({ length: n }, (_, i) => x[i * width + r]));
     };
     const solve = rhs => many([rhs])[0]; solve.many = many; solve.release = release; return solve;
   };

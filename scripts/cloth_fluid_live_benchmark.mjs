@@ -14,6 +14,7 @@ const output=resolve(out),copies=output+'.sources',root=fileURLToPath(new URL('.
 assert(!existsSync(output)&&!existsSync(copies),'Результат и копии исходников нельзя перезаписывать');
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const baseline=execFileSync('git',['rev-parse',prior],{encoding:'utf8'}).trim();
+assert.equal(typeof process.threadCpuUsage,'function','Нужен Node с CPU отдельного потока');
 const sourceSha256={},baselineSha256={},changed=[];
 function copyModule(path) {
   if(Object.hasOwn(sourceSha256,path))return;
@@ -28,14 +29,21 @@ function copyModule(path) {
 copyModule('tests/lib/cloth-fluid-sail-motion.mjs');
 // Загрузчик вызывается динамически в дочернем повторе, вне графа фабрики.
 copyModule('tests/lib/cloth-sparse-wasm.mjs');
-assert(changed.length>0&&changed.every(p=>['tests/lib/cloth-fluid-schur-direction.mjs','tests/lib/cloth-fluid-body-motion.mjs','tests/lib/cloth-material.mjs'].includes(p)),
-  'Опыт ограничен чтением материала и направлением общего расчёта');
+// Сам измеритель не входит в сравниваемый граф физики, но остаётся в записи.
+mkdirSync(copies,{recursive:true});
+writeFileSync(resolve(copies,'benchmark-tool.mjs'),readFileSync(fileURLToPath(import.meta.url)),{flag:'wx'});
+for(const path of ['tests/probes/cloth-material-wasm.mjs','tests/probes/cloth-material-engine-check.mjs',
+  'tests/probes/cloth-assembly-wasm.mjs','tests/probes/cloth-assembly-engine-check.mjs'])copyModule(path);
+assert(changed.length>0&&changed.every(p=>['tests/lib/cloth-fluid-schur-direction.mjs','tests/lib/cloth-fluid-body-motion.mjs',
+  'tests/lib/cloth-material.mjs','tests/lib/cloth-sparse-wasm.mjs'].includes(p)),
+  'Опыт ограничен материалом, направлением и оболочкой общего расчёта');
 const fixtures=inputs.map(path=>{
   const b=readFileSync(path),r=JSON.parse(b),f=r.fixture;
   assert.equal(r.schema,'cloth-fluid-live-result-v1');assert.equal(f.dirty,false);assert.equal(r.steps.length,180);assert.equal(r.shownStep,180);
   assert(f.sheet&&f.sheetProof,'Нужен полный проверенный цикл со свободным углом');
   for(const [p,sha] of Object.entries(f.sourceSha256))assert.equal(hash(execFileSync('git',['show',`${f.revision}:${p}`],{maxBuffer:16*1024*1024})),sha);
-  for(const part of [f.input,f.wasm,f.scene,f.sheetProof])assert.equal(hash(readFileSync(part.path)),part.sha256);
+  for(const part of [f.input,f.wasm,f.scene,f.sheetProof,...(f.materialWasm?[f.materialWasm]:[]),
+    ...(f.assemblyWasm?[f.assemblyWasm]:[])])assert.equal(hash(readFileSync(part.path)),part.sha256);
   assert.equal(hash(readFileSync('out/export/physics.json')),f.physicsSha256);
   const source=JSON.parse(readFileSync(f.input.path)),proof=JSON.parse(readFileSync(f.sheetProof.path));
   assert.equal(source.phase,'complete');assert.equal(source.dirty,false);
@@ -53,14 +61,25 @@ import assert from 'node:assert/strict';import {readFileSync,writeFileSync} from
 const [modulePath,input,output]=process.argv.slice(1),r=JSON.parse(readFileSync(input)),f=r.fixture;
 const {fluidSailMotion}=await import(pathToFileURL(modulePath));
 const {loadSparseFactor}=await import(new URL('./cloth-sparse-wasm.mjs',pathToFileURL(modulePath)));
+const {loadMaterialKernel}=await import(new URL('../probes/cloth-material-wasm.mjs',pathToFileURL(modulePath))),
+{verifyMaterialKernel}=await import(new URL('../probes/cloth-material-engine-check.mjs',pathToFileURL(modulePath))),
+{loadAssemblyKernel}=await import(new URL('../probes/cloth-assembly-wasm.mjs',pathToFileURL(modulePath))),
+{verifyAssemblyKernel}=await import(new URL('../probes/cloth-assembly-engine-check.mjs',pathToFileURL(modulePath)));
 const begin=performance.now(),before=process.cpuUsage(),factor=await loadSparseFactor(readFileSync(f.wasm.path));
-const c=fluidSailMotion(f.recipe,f.bodyInput,factor,{sheet:f.sheet}),times=[],stepCpu=[],states=[];
+const materialKernel=f.materialWasm?await loadMaterialKernel(readFileSync(f.materialWasm.path)):undefined,
+assemblyKernel=f.assemblyWasm?await loadAssemblyKernel(readFileSync(f.assemblyWasm.path)):undefined;
+if(materialKernel)assert.deepEqual(verifyMaterialKernel(materialKernel,f.recipe),r.preparation.material.validation);
+else assert.equal(r.preparation.material,undefined);
+if(assemblyKernel)assert.deepEqual(verifyAssemblyKernel(assemblyKernel,f.recipe),r.preparation.assembly.validation);
+else assert.equal(r.preparation.assembly,undefined);
+const c=fluidSailMotion(f.recipe,f.bodyInput,factor,{sheet:f.sheet,materialKernel,assemblyKernel}),times=[],stepCpu=[],stepThreadCpuMs=[],states=[];
 const serial=v=>ArrayBuffer.isView(v)?Array.from(v):Array.isArray(v)?v.map(serial):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,serial(x)])):v;
 const json=v=>JSON.parse(JSON.stringify(serial(v)));
 assert.deepEqual(r.initial,json({positions:c.motion.pos,body:c.motion.body}));
 for(const s of r.steps) {
-  const cpuBeforeStep=process.cpuUsage(),start=performance.now(),audit=c.step(s.controls);
-  times.push(performance.now()-start);const usage=process.cpuUsage(cpuBeforeStep);
+  const cpuBeforeStep=process.cpuUsage(),threadBeforeStep=process.threadCpuUsage(),start=performance.now(),audit=c.step(s.controls);
+  times.push(performance.now()-start);const thread=process.threadCpuUsage(threadBeforeStep),usage=process.cpuUsage(cpuBeforeStep);
+  stepThreadCpuMs.push((thread.user+thread.system)/1000);
   stepCpu.push({userMs:usage.user/1000,systemMs:usage.system/1000});
   const state=json({positions:c.motion.pos,body:c.motion.body,forceN:c.forceN,audit});
   assert.deepEqual(state,{positions:s.positions,body:s.body,forceN:s.forceN,audit:s.audit});states.push(state);
@@ -68,14 +87,16 @@ for(const s of r.steps) {
 const cpu=process.cpuUsage(before),wallMs=performance.now()-begin,sorted=times.slice(1).sort((a,b)=>a-b);
 writeFileSync(output,JSON.stringify({runtime:process.version,hardware:{cpu:cpus()[0]?.model,platform:process.platform,arch:process.arch},
 firstMs:times[0],followingMeanMs:times.slice(1).reduce((s,v)=>s+v,0)/(times.length-1),followingP90Ms:sorted[Math.ceil(.9*sorted.length)-1],followingMaxMs:Math.max(...times.slice(1)),
-stepTotalMs:times.reduce((s,v)=>s+v,0),stepCpu,
+stepTotalMs:times.reduce((s,v)=>s+v,0),stepTimesMs:times,stepCpu,stepThreadCpuMs,
+followingThreadCpuMs:stepThreadCpuMs.slice(1).reduce((sum,v)=>sum+v,0),
 followingCpu:Object.fromEntries(['userMs','systemMs'].map(k=>[k,stepCpu.slice(1).reduce((sum,v)=>sum+v[k],0)])),
-cpu:{userMs:cpu.user/1000,systemMs:cpu.system/1000,wallMs},states},null,2)+'\n',{flag:'wx'});`;
+cpu:{userMs:cpu.user/1000,systemMs:cpu.system/1000,wallMs},
+modules:{linear:f.wasm,material:f.materialWasm??null,assembly:f.assemblyWasm??null},states},null,2)+'\n',{flag:'wx'});`;
 const report={schema:'cloth-fluid-live-benchmark-v1',revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
   dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),baselineRevision:baseline,
   toolSha256:hash(readFileSync(fileURLToPath(import.meta.url))),sourceSha256,baselineSha256,changedSources:changed,
   inputs:fixtures.map(({path,sha256,side})=>({path,sha256,side})),runs:[],checkedSteps:0,
-  rule:'Три пары каждого борта, порядок вариантов чередуется. Таймер шага и CPU каждого шага исключают сверку/запись; CPU окна включает сверку и подготовку WASM/модели. CPU учитывает все потоки процесса, в том числе возможную компиляцию; измерение шагов добавляет вызовы часов и cpuUsage. Все первые шаги сохранены, followingCpu относится к 2–180. Node, не браузер.'};
+  rule:'Три пары каждого борта, порядок вариантов чередуется. Материал и сборщик выбираются из записи и проходят её проверку до измерения шагов. Таймер шага и CPU каждого шага исключают сверку/запись; CPU рабочего потока сохранён отдельно, CPU окна включает сверку и подготовку WASM/модели. CPU процесса учитывает все потоки, в том числе возможную компиляцию; измерение шагов добавляет вызовы часов и cpuUsage/threadCpuUsage. Все времена/первые шаги сохранены, followingCpu/followingThreadCpuMs относятся к 2–180. Node, не браузер.'};
 process.once('uncaughtException',e=>{report.phase='failed';report.failure={message:e.message,stack:e.stack};
   writeFileSync(output,JSON.stringify(report,null,2)+'\n',{flag:'wx'});console.error('Парный опыт остановлен: '+e.message);process.exitCode=1;});
 for(let pair=1;pair<=3;pair++)for(const fixture of fixtures) {
@@ -86,6 +107,7 @@ for(let pair=1;pair<=3;pair++)for(const fixture of fixtures) {
     const bytes=readFileSync(path),r=JSON.parse(bytes);records[version]=r;
     assert.equal(r.stepCpu.length,180);
     assert(r.stepCpu.every(v=>Object.values(v).every(n=>Number.isFinite(n)&&n>=0)));
+    for(const values of [r.stepTimesMs,r.stepThreadCpuMs])assert(values.length===180&&values.every(v=>Number.isFinite(v)&&v>=0));
     const {states,...timing}=r;report.runs.push({pair,version,side:fixture.side,path:relative(root,path),sha256:hash(bytes),...timing});
     console.log(`Пара ${pair}, ${fixture.side==='plus'?'первая':'другая'} сторона, ${version==='candidate'?'новый':'прежний'} код: первый ${r.firstMs.toFixed(2)} мс, следующие ${r.followingMeanMs.toFixed(2)} мс; CPU окна ${(r.cpu.userMs+r.cpu.systemMs).toFixed(2)} мс.`);
   }

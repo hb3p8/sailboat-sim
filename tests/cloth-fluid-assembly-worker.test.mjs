@@ -13,7 +13,8 @@ import {verifyAssemblyKernel} from './probes/cloth-assembly-engine-check.mjs';
 const args=process.argv.slice(2),inputs=args.filter(v=>v.startsWith('--input=')).map(v=>v.slice(8)),
   wasm=args.find(v=>v.startsWith('--wasm='))?.slice(7),material=args.find(v=>v.startsWith('--material-wasm='))?.slice(16),
   assembly=args.find(v=>v.startsWith('--assembly-wasm='))?.slice(16),out=args.find(v=>v.startsWith('--out='))?.slice(6);
-assert(inputs.length===2&&wasm&&material&&assembly&&out&&args.length===6&&args.every(v=>/^--(input|wasm|material-wasm|assembly-wasm|out)=.+$/.test(v))&&!existsSync(out)&&!existsSync(out+'.sources'));
+const baselineWasm=args.find(v=>v.startsWith('--baseline-wasm='))?.slice(16),baselineBytes=baselineWasm?readFileSync(baselineWasm):undefined;
+assert(inputs.length===2&&wasm&&material&&assembly&&out&&args.length===6+Boolean(baselineWasm)&&args.every(v=>/^--(input|wasm|baseline-wasm|material-wasm|assembly-wasm|out)=.+$/.test(v))&&!existsSync(out)&&!existsSync(out+'.sources'));
 const bytes=readFileSync(wasm),materialBytes=readFileSync(material),assemblyBytes=readFileSync(assembly),hash=b=>createHash('sha256').update(b).digest('hex'),root=fileURLToPath(new URL('../',import.meta.url)),sourceSha256={};
 function source(url) {
   const path=relative(root,fileURLToPath(url));if(sourceSha256[path])return;const b=readFileSync(url);sourceSha256[path]=hash(b);
@@ -31,16 +32,18 @@ const handle=fluidWorkerHandler((data,transfer=[])=>parentPort.postMessage(data,
 }
 const report={schema:'cloth-fluid-assembly-worker-v1',revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),runtime:process.version,v8:process.versions.v8,sourceSha256,
   wasm:{path:wasm,sha256:hash(bytes)},materialWasm:{path:material,sha256:hash(materialBytes)},assemblyWasm:{path:assembly,sha256:hash(assemblyBytes)},exactBackendPairs:0,exactProfilePairs:0,rejected:0,results:[]};
+if(baselineBytes){report.baselineWasm={path:baselineWasm,sha256:hash(baselineBytes)};report.exactLinearPairs=0;}
 process.once('uncaughtException',e=>{report.phase='failed';report.failure={message:e.message,stack:e.stack};writeFileSync(out,JSON.stringify(report,null,2)+'\n',{flag:'wx'});console.error('Сборка Worker остановлена: '+e.message);process.exitCode=1;});
 assert.equal(new Set(inputs.map(p=>JSON.parse(readFileSync(p)).fixture.side)).size,2);
 for(const path of inputs) {
   const input=readFileSync(path),record=JSON.parse(input),f=record.fixture;assert.equal(record.steps.length,180);
-  assert.equal(f.wasm.sha256,hash(bytes));assert.equal(f.materialWasm.sha256,hash(materialBytes));
+  assert.equal(f.wasm.sha256,hash(baselineBytes??bytes));assert.equal(f.materialWasm.sha256,hash(materialBytes));
   const variants=[],initials=[];
-  for(const [native,profile] of [[false,false],[true,false],[true,true]]) {
-    const originals=[bytes,materialBytes,assemblyBytes].map(v=>Buffer.from(v)),client=await createFluidWorker(f.recipe,f.bodyInput,bytes,{sheet:f.sheet,profile,makeWorker,materialBytes,...(native?{assemblyBytes}:{})}),states=[];
+  for(const [native,profile,linearBytes] of [[false,false,bytes],[true,false,bytes],[true,true,bytes],...(baselineBytes?[[true,false,baselineBytes]]:[])]) {
+    const owned=[bytes,materialBytes,assemblyBytes,...(baselineBytes?[baselineBytes]:[])],originals=owned.map(v=>Buffer.from(v)),
+      client=await createFluidWorker(f.recipe,f.bodyInput,linearBytes,{sheet:f.sheet,profile,makeWorker,materialBytes,...(native?{assemblyBytes}:{})}),states=[];
     try {
-      [bytes,materialBytes,assemblyBytes].forEach((v,i)=>assert.deepEqual(v,originals[i]));assert.equal(Boolean(client.ready.assembly),native);
+      owned.forEach((v,i)=>assert.deepEqual(v,originals[i]));assert.equal(Boolean(client.ready.assembly),native);
       initials.push(serial({positions:client.ready.positions,body:client.ready.body}));assert.equal(client.ready.material.backend,'wasm');
       if(native){assert.equal(client.ready.assembly.backend,'wasm');assert.equal(client.ready.assembly.validation.abi,1);assert.equal(client.ready.assembly.validation.matrices,8);assert.equal(client.ready.assembly.validation.elements,184332);assert(client.ready.assembly.checkMs>=0);}
       if(profile)assert(Math.abs(client.ready.compileMs+client.ready.modelMs-client.ready.setupMs)<1e-6);
@@ -51,9 +54,10 @@ for(const path of inputs) {
       const saved=structuredClone(states.at(-1));await assert.rejects(client.step({pressureScale:2}),/Нагрузка/);report.rejected++;
       await assert.rejects(client.step(),/После отказа/);report.rejected++;assert.deepEqual(states.at(-1),saved);
     } finally {await client.terminate();}
-    variants.push(states);report.results.push({path,sha256:hash(input),side:f.side,assembly:native?'wasm':'js',profile,preparation:{material:client.ready.material,...(native?{assembly:client.ready.assembly}:{})},exactSteps:180});
+    variants.push(states);report.results.push({path,sha256:hash(input),side:f.side,...(baselineBytes?{linearSha256:hash(linearBytes)}:{}),assembly:native?'wasm':'js',profile,preparation:{material:client.ready.material,...(native?{assembly:client.ready.assembly}:{})},exactSteps:180});
   }
   assert.deepEqual(initials[0],initials[1]);assert.deepEqual(initials[1],initials[2]);assert.deepEqual(variants[0],variants[1]);assert.deepEqual(variants[1],variants[2]);report.exactBackendPairs+=180;report.exactProfilePairs+=180;
+  if(baselineBytes){assert.deepEqual(initials[1],initials[3]);assert.deepEqual(variants[1],variants[3]);report.exactLinearPairs+=180;}
   console.log(`Сборка Worker, ${f.side==='plus'?'первая':'другая'} сторона: 180 строгих пар сборки и 180 пар наблюдения, включая знак нуля.`);
 }
 const first=JSON.parse(readFileSync(inputs[0])).fixture;
@@ -70,4 +74,4 @@ for(const corruption of ['value','zero','skip']) {
 }
 assert.throws(()=>verifyAssemblyKernel(kernel,{...first.recipe,rows:21}),/постановку/);report.rejected++;
 report.phase='complete';writeFileSync(out,JSON.stringify(report,null,2)+'\n',{flag:'wx'});
-console.log(`Сборка: ${report.exactBackendPairs} строгих пар, ${report.exactProfilePairs} пар наблюдения, ${report.rejected} отказов — пройдены.`);
+console.log(`Сборка: ${report.exactBackendPairs} строгих пар, ${report.exactProfilePairs} пар наблюдения${baselineBytes?`, ${report.exactLinearPairs} пар линейного модуля`:''}, ${report.rejected} отказов — пройдены.`);

@@ -8,6 +8,9 @@ export async function loadSparseFactor(bytes, { reuse = true } = {}) {
   const prepare = (pattern, diagonal) => {
     const instance = new WebAssembly.Instance(module), e = instance.exports;
     counts.instancesCreated++;
+    const planned = diagonal && typeof e.sparse_ldl_factor_runs === 'function';
+    if (planned && (typeof e.sparse_ldl_prepare_runs !== 'function' || typeof e.sparse_ldl_runs_abi !== 'function' || e.sparse_ldl_runs_abi() !== 1))
+      throw new Error('Несовместимая подготовка участков LDL');
     const { n, rowPtr, cols, colPtr, colRows, colEntries, rowToCol } = pattern;
     let cursor = Number(e.__heap_base.value);
     const allocate = (length, size) => { cursor = Math.ceil(cursor / 8) * 8; const start = cursor; cursor += length * size; return start; };
@@ -16,6 +19,7 @@ export async function loadSparseFactor(bytes, { reuse = true } = {}) {
     const lStart = allocate(cols.length, 8), workStart = allocate(n, 8), xStart = allocate(0, 8);
     const signStart = diagonal ? allocate(n, 4) : 0;
     const columnStart = diagonal ? allocate(colRows.length, 8) : 0;
+    const runStart = planned ? allocate(colRows.length, 4) : 0;
     const outputStart = diagonal ? allocate(0, 8) : xStart;
     const grow = end => {
       if (end <= e.memory.buffer.byteLength) return;
@@ -25,8 +29,9 @@ export async function loadSparseFactor(bytes, { reuse = true } = {}) {
     // Один ответ использует две дорожки SIMD; место готовится до первого решения.
     grow(outputStart + 16 * n);
     indices.forEach((a, i) => new Int32Array(e.memory.buffer, starts[i], a.length).set(a));
+    if (planned) e.sparse_ldl_prepare_runs(n, starts[2], starts[3], runStart);
     counts.symbolicUploads++;
-    return { e, n, lStart, workStart, signStart, columnStart, outputStart, baseStarts, starts, grow };
+    return { e, n, lStart, workStart, signStart, columnStart, runStart, planned, outputStart, baseStarts, starts, grow };
   };
   const factor = (matrix, pattern, signs) => {
     const diagonal = Boolean(signs);
@@ -39,7 +44,7 @@ export async function loadSparseFactor(bytes, { reuse = true } = {}) {
     // решатель отдаёт своё место: сохранённые функции никогда не перезаписываются.
     const workspace = reuse && free.length ? free.pop() : prepare(pattern, diagonal);
     if (workspace.releasedBefore) counts.instancesReused++;
-    const { e, n, lStart, workStart, signStart, columnStart, outputStart, baseStarts, starts, grow } = workspace;
+    const { e, n, lStart, workStart, signStart, columnStart, runStart, planned, outputStart, baseStarts, starts, grow } = workspace;
     let released = false;
     const release = () => {
       if (released) return;
@@ -51,7 +56,8 @@ export async function loadSparseFactor(bytes, { reuse = true } = {}) {
     new Float64Array(e.memory.buffer, lStart, matrix.length).set(matrix);
     if (signs) new Int32Array(e.memory.buffer, signStart, n).set(signs);
     counts.numericFactorizations++;
-    const failure = signs ? e.sparse_ldl_factor(lStart, workStart, n, ...baseStarts, starts[5], columnStart, signStart) : e.sparse_factor(lStart, workStart, n, ...baseStarts);
+    const failure = planned ? e.sparse_ldl_factor_runs(lStart, workStart, n, ...baseStarts, starts[5], columnStart, signStart, runStart) :
+      signs ? e.sparse_ldl_factor(lStart, workStart, n, ...baseStarts, starts[5], columnStart, signStart) : e.sparse_factor(lStart, workStart, n, ...baseStarts);
     if (failure) {
       release();
       const error=new Error(`Матрица направления не положительна или связи зависимы: ${failure}`);

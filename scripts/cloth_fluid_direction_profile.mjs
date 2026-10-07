@@ -6,6 +6,7 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {resolve,dirname,relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {instrumentDirection,instrumentSparse} from '../tests/probes/cloth-direction-instrument.mjs';
 const args=process.argv.slice(2),inputs=args.filter(v=>v.startsWith('--input=')).map(v=>v.slice(8)),out=args.find(v=>v.startsWith('--out='))?.slice(6);
 assert(inputs.length===2&&out&&args.length===3&&args.every(v=>/^--(input|out)=.+$/.test(v)));
 const root=fileURLToPath(new URL('../',import.meta.url)),output=resolve(out),copies=output+'.sources',hash=b=>createHash('sha256').update(b).digest('hex');
@@ -14,51 +15,9 @@ function copy(path){if(sourceSha256[path])return;const b=readFileSync(resolve(ro
  for(const m of b.toString().matchAll(/\b(?:from\s*|import\s*)['"](\.{1,2}\/[^'"]+)['"]/g))copy(relative(root,resolve(root,dirname(path),m[1])));}
 for(const p of ['tests/lib/cloth-fluid-sail-motion.mjs','tests/lib/cloth-sparse-wasm.mjs','tests/probes/cloth-material-wasm.mjs','tests/probes/cloth-material-wasm.c','tests/probes/cloth-material-engine-check.mjs','tests/probes/cloth-assembly-wasm.mjs','tests/probes/cloth-assembly-wasm.c','tests/probes/cloth-assembly-engine-check.mjs',relative(root,fileURLToPath(import.meta.url))])copy(p);
 const direction='tests/lib/cloth-fluid-schur-direction.mjs',original=readFileSync(resolve(root,direction),'utf8');
-let instrumented=original;
-function insert(marker,text){assert.equal(instrumented.split(marker).length,2,'Граница направления должна быть единственной');instrumented=instrumented.replace(marker,text+marker);}
-insert('  const nc=m.pos.length',`  const kind=exact?'correction':'ordinary';let mark=performance.now();
-  const checkpoint=name=>{const now=performance.now(),row=directionPhases[kind][name];row.calls++;row.ms+=now-mark;mark=now;};
-`);
-insert('  for(let i=0;i<nc;i++)add(i,i',`  if(!directionWork[kind])directionWork[kind]={matrixEntries:matrix.length,softConstraints:soft.length,
-    gradientValues:soft.reduce((sum,t)=>sum+t.g.length,0),pairAdds:soft.reduce((sum,t)=>sum+t.g.length*(t.g.length+1)/2,0)};
-  checkpoint('prepare');
-`);
-insert('  const activeSet=new Set(active)',"  checkpoint('clothMatrix');\n");
-insert('  // Шесть производных скоростей:',"  checkpoint('constraints');\n");
-insert('  // Порядок координат задан',"  checkpoint('bodyCoupling');\n");
-insert('  // Начальное +0 и последовательность',"  checkpoint('linear');\n");
-insert('\n  return result;\n}',"\n  checkpoint('finish');");
-instrumented=`const phaseNames=['prepare','clothMatrix','constraints','bodyCoupling','linear','finish'];
-const directionPhases=Object.fromEntries(['ordinary','correction'].map(k=>[k,Object.fromEntries(phaseNames.map(p=>[p,{calls:0,ms:0}]))]));
-const directionWork={};
-export const directionProfile=()=>({work:structuredClone(directionWork),phases:structuredClone(directionPhases)});
-`+instrumented;
-// Сохраняются обе версии; изменение касается только копии, загружаемой опытом.
+const instrumented=instrumentDirection(original);
 writeFileSync(resolve(copies,direction+'.original'),original,{flag:'wx'});writeFileSync(resolve(copies,direction),instrumented);
-// Отдельные неперекрывающиеся интервалы оболочки, включая передачу семи
-// правых частей. Новые таймеры существуют только в копии опыта.
-const linearPath='tests/lib/cloth-sparse-wasm.mjs',linearOriginal=readFileSync(resolve(root,linearPath),'utf8');
-let linearInstrumented=linearOriginal;
-function linearInsert(marker,text){assert.equal(linearInstrumented.split(marker).length,2,'Граница линейной оболочки должна быть единственной');linearInstrumented=linearInstrumented.replace(marker,text+marker);}
-linearInsert('    const diagonal = Boolean(signs);',`    let linearMark=performance.now();
-    const checkpoint=name=>{const t=performance.now(),r=sparsePhases[name];r.calls++;r.ms+=t-linearMark;linearMark=t;};
-`);
-linearInsert('    new Float64Array(e.memory.buffer, lStart, matrix.length).set(matrix);',"    checkpoint('factorPrepare');\n");
-linearInsert('    counts.numericFactorizations++;',"    checkpoint('matrixUpload');\n");
-linearInsert('    if (failure) {',"    checkpoint('factorNative');\n");
-linearInsert('      if (released) throw',"      linearMark=performance.now();\n");
-linearInsert('      for (let i = 0; i < n; i++) for',"      checkpoint('rhsPrepare');\n");
-linearInsert('      const run = signs ?',"      checkpoint('rhsUpload');\n");
-linearInsert('      return rightSides.map',"      checkpoint('solveNative');\n");
-const readBlocks=[...linearInstrumented.matchAll(/      return rightSides\.map[\s\S]*?(?=\n    };\n    const solve)/g)];
-assert.equal(readBlocks.length,1,'Нужен единственный блок копирования ответов');
-const readMarker=readBlocks[0][0];
-linearInstrumented=linearInstrumented.replace(readMarker,readMarker.replace('return ','const result = ')+"\n      checkpoint('rhsRead');return result;");
-const finishMarker=' solve.release = release; return solve;';assert.equal(linearInstrumented.split(finishMarker).length,2);
-linearInstrumented=linearInstrumented.replace(finishMarker," solve.release = release; checkpoint('factorFinish');return solve;");
-linearInstrumented=`const sparsePhases=Object.fromEntries(['factorPrepare','matrixUpload','factorNative','factorFinish','rhsPrepare','rhsUpload','solveNative','rhsRead'].map(k=>[k,{calls:0,ms:0}]));
-export const sparseProfile=()=>structuredClone(sparsePhases);
-`+linearInstrumented;
+const linearPath='tests/lib/cloth-sparse-wasm.mjs',linearOriginal=readFileSync(resolve(root,linearPath),'utf8'),linearInstrumented=instrumentSparse(linearOriginal);
 writeFileSync(resolve(copies,linearPath+'.original'),linearOriginal,{flag:'wx'});writeFileSync(resolve(copies,linearPath),linearInstrumented);
 const fixtures=inputs.map(path=>{const b=readFileSync(path),r=JSON.parse(b),f=r.fixture;assert.equal(r.steps.length,180);assert.equal(r.shownStep,180);assert.equal(f.dirty,false);assert(f.materialWasm);
  for(const [p,h] of Object.entries(f.sourceSha256))assert.equal(hash(execFileSync('git',['show',f.revision+':'+p],{maxBuffer:16*1024*1024})),h);

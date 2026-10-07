@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {runInNewContext} from 'node:vm';
 import {resolve} from 'node:path';
-import {instrumentDirection,instrumentSparse} from './probes/cloth-direction-instrument.mjs';
+import {instrumentDirection,instrumentSparse,instrumentMaterialHessian} from './probes/cloth-direction-instrument.mjs';
 const original=readFileSync('tests/lib/cloth-fluid-schur-direction.mjs','utf8'),linear=readFileSync('tests/lib/cloth-sparse-wasm.mjs','utf8'),saved={};
 const old=execFileSync('git',['show','be1f260:scripts/cloth_fluid_direction_profile.mjs'],{encoding:'utf8'}),start=old.indexOf('let instrumented=original;'),end=old.indexOf('const fixtures=inputs.map',start);
 assert(start>=0&&end>start);
@@ -14,4 +14,20 @@ assert.equal(instrumentDirection(original),saved[resolve('копия','tests/lib
 assert.equal(instrumentSparse(linear),saved[resolve('копия','tests/lib/cloth-sparse-wasm.mjs')]);
 assert.throws(()=>instrumentDirection(original.replace('  const nc=m.pos.length','  const nc=this.pos.length')),/Граница/);
 assert.throws(()=>instrumentSparse(linear.replace('    counts.numericFactorizations++;','    counts.numericFactorizations+=1;')),/Граница/);
-console.log('Общий генератор таймеров: обе прежние копии совпали побайтно; изменённые границы отвергнуты.');
+// Подробные часы отказывают при изменённой либо повторённой границе:
+// тихий перенос отметки мог бы приписать время чужому вычислению.
+const material=readFileSync('tests/probes/cloth-material-wasm.mjs','utf8');
+for(const marker of ['    const assemble=({g,plan})=>{',
+  'matrix[plan.entries[entry++]]+=.5*(H[a*size+b]+H[b*size+a]);',
+  '          group.hessianInto(s.q,block.map(t=>t.weight),block.map(t=>t.plan.hessian));']) {
+  assert.throws(()=>instrumentDirection(original.replace(marker,''),{correction:true}),/Граница/);
+  assert.throws(()=>instrumentDirection(original+'\n'+marker,{correction:true}),/Граница/);
+}
+for(const marker of ['      return {hessianInto(p,weights,targets) {',
+  'targets.forEach(g=>separate(p,g));hessianOffset??=allocate(3*size*size);prepareInput(p);',
+  '        new Float64Array(e.memory.buffer,weightsOffset,3).set(weights);calls++;',
+  '        for(let j=0;j<3;j++)targets[j].set(hessianViews[j]);']) {
+  assert.throws(()=>instrumentMaterialHessian(material.replace(marker,'')),/Граница/);
+  assert.throws(()=>instrumentMaterialHessian(material+'\n'+marker),/Граница/);
+}
+console.log('Общий генератор: две прежние копии побайтно точны; 16 изменённых/повторённых границ отвергнуты.');

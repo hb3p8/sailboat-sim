@@ -18,6 +18,15 @@ for(const [name,mutate] of [
   ['вложенное-время',x=>{x.records[0].times.candidate.profile.directions.ordinary.linear.ms=1e9;}],
   ['счётчики-wasm',x=>{x.records[0].times.candidate.profile.sparse.factorNative.calls++;}],
   ['время-wasm',x=>{x.records[0].times.candidate.profile.sparse.factorNative.ms=1e9;}],
+  ...(r.correctionProfile?[
+    ['режим-корректора',x=>{x.correctionProfile=false;}],
+    ['счётчик-местных-матриц',x=>{x.records[0].times.candidate.profile.correction.local.calls++;}],
+    ['время-общей-сборки',x=>{x.records[0].times.candidate.profile.correction.scatter.ms=1e9;}],
+    ['отрицательное-местное-время',x=>{x.records[0].times.candidate.profile.correction.local.ms=-1;}],
+    ['счётчик-передачи-материала',x=>{x.records[0].times.candidate.profile.materialHessian.upload.calls++;}],
+    ['время-чтения-материала',x=>{x.records[0].times.candidate.profile.materialHessian.read.ms=1e9;}],
+    ['отрицательное-время-материала',x=>{x.records[0].times.candidate.profile.materialHessian.native.ms=-1;}],
+  ]:[]),
 ]){const x=structuredClone(r);mutate(x);const path=cases+'/'+name+'.json',target=cases+'/'+name+'-report.json';writeFileSync(path,JSON.stringify(x)+'\n',{flag:'wx'});
   let error;try{execFileSync(process.execPath,[tool,'--input='+path,'--fixture='+fixture,'--out='+target],{stdio:'pipe'});}catch(e){error=e;}
   assert(error?.status===1&&String(error.stderr).includes('AssertionError'),name);assert(!existsSync(target));report.rejected.push({name,path,sha256:hash(readFileSync(path)),message:String(error.stderr)});}

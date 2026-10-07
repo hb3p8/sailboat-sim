@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Разбор скорости расчёта паруса</title>
+<style>body{font:17px/1.5 system-ui,sans-serif;background:#f2f6f8;color:#163443;max-width:1000px;margin:30px auto;padding:0 20px}button,select{font:inherit;padding:8px;margin:8px 14px 8px 0}pre{white-space:pre-wrap;background:white;padding:20px;border-radius:8px}small{display:block}label{display:inline-block}</style>
+<h1>Разбор скорости расчёта паруса</h1>
+<p>Два варианта считают одни и те же данные в одном отдельном потоке браузера. Проверяются все числа. Этот стенд измеряет расчёт, а не плавность изображения.</p>
+<label>Опыт <select id="mode"><option value="native">Только разложения</option><option value="plain">Полные шаги</option><option value="profile">Полные шаги со стадиями</option></select></label>
+<label>Пара <select id="pair"><option>1</option><option>2</option><option>3</option></select></label><br>
+<button id="run">Выполнить опыт</button><button id="download" disabled>Скачать результат</button>
+<small id="input"></small><pre id="status" role="status">Готов к запуску.</pre><pre id="summary">Результата ещё нет.</pre>
+<script type="module">
+import {shaProbe} from './cloth-sparse-browser-probe.mjs';
+const input=new URLSearchParams(location.search).get('input'),run=document.querySelector('#run'),download=document.querySelector('#download'),status=document.querySelector('#status'),summary=document.querySelector('#summary');
+document.querySelector('#input').textContent='Вход: '+input;let result;
+run.addEventListener('click',async()=>{
+  run.disabled=true;download.disabled=true;result=undefined;status.textContent='Проверка файлов и подготовка…';status.dataset.phase='running';status.dataset.exactPairs='0';
+  const mode=document.querySelector('#mode').value,pair=Number(document.querySelector('#pair').value),worker=new Worker(new URL('./cloth-sparse-browser-worker.mjs',import.meta.url),{type:'module'}),visibility=[{at:performance.now(),state:document.visibilityState}],track=()=>visibility.push({at:performance.now(),state:document.visibilityState});
+  document.addEventListener('visibilitychange',track);
+  const finish=()=>{document.removeEventListener('visibilitychange',track);worker.terminate();run.disabled=false;};
+  worker.onerror=e=>{status.textContent='Ошибка Worker: '+e.message;finish();};
+  worker.onmessage=async({data})=>{
+    if(data.type==='progress'){status.textContent=data.message;return;}
+    if(data.type==='error'){status.textContent=data.message;finish();return;}
+    if(data.type!=='result')return;
+    const pageBytes=await fetch(location.href,{cache:'no-store'}).then(r=>r.arrayBuffer());
+    result={...data.result,page:{url:location.href,sha256:await shaProbe(pageBytes),width:innerWidth,height:innerHeight,dpr:devicePixelRatio,visibility,endedVisibility:document.visibilityState},collectedAt:new Date().toISOString()};finish();download.disabled=false;
+    status.textContent=result.phase==='complete'?'Готово. Все пары совпали точно.':'Опыт остановлен: '+result.failure?.message;
+    status.dataset.phase=result.phase;status.dataset.exactPairs=String(result.exactPairs);
+    const times={baseline:0,candidate:0};for(const r of result.records)for(const v of Object.keys(times))times[v]+=mode==='native'?r.times[v].nativeMs:r.times[v].stepMs;
+    summary.textContent=`Опыт: ${mode}, пара ${pair}\nТочных пар: ${result.exactPairs}\nСумма измеренных вызовов, мс: прежний ${times.baseline.toFixed(3)}, участки ${times.candidate.toFixed(3)}\nИзменение: ${(100*(times.candidate/times.baseline-1)).toFixed(2)}%\nПолное окно с проверками: ${result.wallMs.toFixed(1)} мс\nВремя по часам; это не CPU и не частота кадров.`;
+  };
+  worker.postMessage({input,pair,mode});
+});
+download.addEventListener('click',()=>{if(!result)return;const blob=new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`sparse-isolated-${result.mode}-pair${result.pair}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+</script>
+</html>

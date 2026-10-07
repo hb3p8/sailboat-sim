@@ -9,12 +9,12 @@ import {fileURLToPath} from 'node:url';
 const args=process.argv.slice(2),input=args.find(a=>a.startsWith('--input='))?.slice(8),out=args.find(a=>a.startsWith('--out='))?.slice(6);
 assert(args.length===2&&input&&out&&args.every(a=>/^--(input|out)=.+$/.test(a))&&!existsSync(out)&&!existsSync(out+'.sources'));
 const bytes=readFileSync(input),source=JSON.parse(bytes),hash=b=>createHash('sha256').update(b).digest('hex'),root=fileURLToPath(new URL('../',import.meta.url));
-assert.equal(source.phase,'complete');assert(source.linearCandidate&&source.checkedSteps===1080&&source.inputs.length===2);
+assert.equal(source.phase,'complete');assert(source.checkedSteps===1080&&source.inputs.length===2);
 for(const [variant,mapping] of [['baseline',source.baselineSha256],['candidate',source.sourceSha256]])for(const [path,h] of Object.entries(mapping))
   assert.equal(hash(readFileSync(resolve(input+'.sources',variant,path))),h);
 for(const f of source.inputs){assert.equal(hash(readFileSync(f.path)),f.sha256);const r=JSON.parse(readFileSync(f.path));
   for(const part of [r.fixture.wasm,r.fixture.materialWasm,r.fixture.assemblyWasm])assert.equal(hash(readFileSync(part.path)),part.sha256);}
-assert.equal(hash(readFileSync(source.linearCandidate.path)),source.linearCandidate.sha256);
+if(source.linearCandidate)assert.equal(hash(readFileSync(source.linearCandidate.path)),source.linearCandidate.sha256);
 mkdirSync(out+'.sources',{recursive:true});writeFileSync(out+'.sources/pair-tool.mjs',readFileSync(fileURLToPath(import.meta.url)),{flag:'wx'});
 const runner=String.raw`
 import assert from 'node:assert/strict';import {readFileSync,writeFileSync} from 'node:fs';import {pathToFileURL} from 'node:url';import {cpus} from 'node:os';
@@ -26,7 +26,7 @@ for(const variant of pair%2?['baseline','candidate']:['candidate','baseline']){
     {fluidSailMotion}=await import(url),{loadSparseFactor}=await import(new URL('./cloth-sparse-wasm.mjs',url)),
     {loadMaterialKernel}=await import(new URL('../probes/cloth-material-wasm.mjs',url)),{verifyMaterialKernel}=await import(new URL('../probes/cloth-material-engine-check.mjs',url)),
     {loadAssemblyKernel}=await import(new URL('../probes/cloth-assembly-wasm.mjs',url)),{verifyAssemblyKernel}=await import(new URL('../probes/cloth-assembly-engine-check.mjs',url));
-  const factor=await loadSparseFactor(readFileSync(variant==='candidate'?candidate:f.wasm.path)),
+  const factor=await loadSparseFactor(readFileSync(variant==='candidate'&&candidate!=='-'?candidate:f.wasm.path)),
     materialKernel=await loadMaterialKernel(readFileSync(f.materialWasm.path)),assemblyKernel=await loadAssemblyKernel(readFileSync(f.assemblyWasm.path));
   assert.deepEqual(verifyMaterialKernel(materialKernel,f.recipe),record.preparation.material.validation);
   assert.deepEqual(verifyAssemblyKernel(assemblyKernel,f.recipe),record.preparation.assembly.validation);
@@ -51,7 +51,7 @@ const result={schema:'cloth-sparse-pair-benchmark-v1',revision:execFileSync('git
   rule:'Три пары каждого борта в новых процессах. Внутри процесса два независимых графа/модели/памяти; порядок каждой пары шагов чередуется, первого шага прежний→новый в 1/3 и обратно в 2. CPU потока/процесса и время каждого шага исключают сверку/сериализацию; подготовка и первые шаги сохранены. Общего CPU окна на вариант здесь нет: он общий для процесса. Это Node, не браузер/60 Гц.'};
 process.once('uncaughtException',e=>{result.phase='failed';result.failure={message:e.message,stack:e.stack};writeFileSync(out,JSON.stringify(result,null,2)+'\n',{flag:'wx'});console.error('Чередование шагов остановлено: '+e.message);process.exitCode=1;});
 for(let pair=1;pair<=3;pair++)for(const f of source.inputs){const path=resolve(out+'.sources',`${f.side}-${pair}.json`);
-  execFileSync(process.execPath,['--input-type=module','-e',runner,resolve(input+'.sources'),f.path,resolve(source.linearCandidate.path),String(pair),path],{cwd:root,maxBuffer:1024*1024});
+  execFileSync(process.execPath,['--input-type=module','-e',runner,resolve(input+'.sources'),f.path,source.linearCandidate?resolve(source.linearCandidate.path):'-',String(pair),path],{cwd:root,maxBuffer:1024*1024});
   const b=readFileSync(path),r=JSON.parse(b);assert.equal(r.states.baseline.length,180);assert.deepEqual(r.states.candidate,r.states.baseline);
   for(const variant of ['baseline','candidate'])assert(r.times[variant].length===180&&r.times[variant].every(x=>Object.values(x).every(v=>Number.isFinite(v)&&v>=0)));
   const {states,...summary}=r;result.runs.push({side:f.side,path:relative(root,path),sha256:hash(b),...summary});result.exactPairs+=180;

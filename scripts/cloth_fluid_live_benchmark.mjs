@@ -38,8 +38,8 @@ writeFileSync(resolve(copies,'benchmark-tool.mjs'),readFileSync(fileURLToPath(im
 for(const path of ['tests/probes/cloth-material-wasm.mjs','tests/probes/cloth-material-engine-check.mjs',
   'tests/probes/cloth-assembly-wasm.mjs','tests/probes/cloth-assembly-engine-check.mjs'])copyModule(path);
 assert((changed.length>0||candidateWasm)&&changed.every(p=>['tests/lib/cloth-fluid-schur-direction.mjs','tests/lib/cloth-fluid-body-motion.mjs',
-  'tests/lib/cloth-material.mjs','tests/lib/cloth-sparse-wasm.mjs'].includes(p)),
-  'Опыт ограничен материалом, направлением и оболочкой общего расчёта');
+  'tests/lib/cloth-material.mjs','tests/lib/cloth-sparse-wasm.mjs','tests/lib/cloth-fluid-inertia.mjs'].includes(p)),
+  'Опыт ограничен материалом, направлением, малыми матричными операциями и оболочкой общего расчёта');
 const linearCandidate=candidateWasm?{path:candidateWasm,sha256:hash(readFileSync(candidateWasm))}:undefined;
 const fixtures=inputs.map(path=>{
   const b=readFileSync(path),r=JSON.parse(b),f=r.fixture;

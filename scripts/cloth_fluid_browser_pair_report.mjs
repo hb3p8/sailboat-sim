@@ -11,6 +11,10 @@ const hash=b=>createHash('sha256').update(b).digest('hex'),bytes=readFileSync(in
 assert.equal(f.schema,'cloth-fluid-browser-pair-fixture-v1');assert.equal(r.schema,'cloth-fluid-browser-pair-v1');assert.equal(f.phase,'complete');assert.equal(r.phase,'complete');assert.equal(f.dirty,false);
 assert.equal(r.input.path,'/'+fixture);assert.equal(r.input.sha256,hash(fb));assert.equal(r.fixtureRevision,f.revision);assert.equal(r.fixtureDirty,false);assert.equal(r.profile,f.profile);assert([1,2,3].includes(r.pair));
 assert.deepEqual(r.graphs,f.graphs);assert.deepEqual(r.modules,f.modules);
+assert.equal(typeof f.profile,'boolean');
+assert.deepEqual(Object.keys(f.graphs.baseline.originalSha256).sort(),Object.keys(f.graphs.candidate.originalSha256).sort());
+assert.deepEqual(f.changedSources,Object.entries(f.graphs.baseline.originalSha256).filter(([p,h])=>f.graphs.candidate.originalSha256[p]!==h).map(([p])=>p));
+for(const g of Object.values(f.graphs))assert.deepEqual(g.instrumented,f.profile?['tests/lib/cloth-fluid-schur-direction.mjs','tests/lib/cloth-sparse-wasm.mjs']:[]);
 for(const [p,h] of Object.entries(f.sourceSha256)){assert.equal(hash(readFileSync(resolve(copies,p))),h);assert.equal(hash(execFileSync('git',['show',f.revision+':'+p],{maxBuffer:16*1024*1024})),h);}
 for(const [v,g] of Object.entries(f.graphs))for(const [p,h] of Object.entries(g.originalSha256)){
   const original=execFileSync('git',['show',g.revision+':'+p],{maxBuffer:16*1024*1024});assert.equal(hash(original),h);let expected=original;

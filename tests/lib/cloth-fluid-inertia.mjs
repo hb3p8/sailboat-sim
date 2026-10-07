@@ -2,10 +2,26 @@
 // Вода хранится отдельной матрицей энергии и не становится весом.
 export const cross3=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
 export const dotN=(a,b)=>a.reduce((s,v,d)=>s+v*b[d],0);
-export const matrixVector=(m,v)=>Array.from({length:v.length},(_,d)=>dotN(m.slice(d*v.length,(d+1)*v.length),v));
+export const matrixVector=(m,v)=>{
+  const n=v.length,result=new Array(n);
+  for(let d=0;d<n;d++) {
+    let sum=0;const start=d*n,end=Math.min(start+n,m.length);
+    // Начальный +0/порядок сумм и пропущенные элементы Array.slice/reduce прежние.
+    for(let k=start;k<end;k++)if(k in m)sum+=m[k]*v[k-start];
+    result[d]=sum;
+  }
+  return result;
+};
 export const rotate3=(m,v)=>matrixVector(m,v);
 export const transpose3=m=>[0,3,6,1,4,7,2,5,8].map(i=>m[i]);
-export const product3=(a,b)=>Array.from({length:9},(_,i)=>[0,1,2].reduce((s,k)=>s+a[3*Math.floor(i/3)+k]*b[3*k+i%3],0));
+export const product3=(a,b)=>{
+  const result=new Array(9);
+  for(let row=0;row<3;row++)for(let col=0;col<3;col++) {
+    let sum=0;for(let k=0;k<3;k++)sum+=a[3*row+k]*b[3*k+col];
+    result[3*row+col]=sum;
+  }
+  return result;
+};
 export const finiteArray=(a,n)=>a?.length===n&&Array.from(a).every(Number.isFinite);
 
 export function checkRotation(r) {

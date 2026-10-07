@@ -5,16 +5,16 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {resolve,dirname,relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {instrumentDirection,instrumentSparse} from '../tests/probes/cloth-direction-instrument.mjs';
+import {instrumentDirection,instrumentSparse,instrumentMaterialHessian} from '../tests/probes/cloth-direction-instrument.mjs';
 const args=process.argv.slice(2),input=args.find(a=>a.startsWith('--input='))?.slice(8),baseline=args.find(a=>a.startsWith('--baseline='))?.slice(11),
-  wasm=args.find(a=>a.startsWith('--wasm='))?.slice(7),out=args.find(a=>a.startsWith('--out='))?.slice(6),profile=args.includes('--profile-direction');
-assert(args.length===(profile?5:4)&&input&&baseline&&wasm&&out&&args.every(a=>/^--(input|baseline|wasm|out)=.+$/.test(a)||a==='--profile-direction'));
+  wasm=args.find(a=>a.startsWith('--wasm='))?.slice(7),out=args.find(a=>a.startsWith('--out='))?.slice(6),correctionProfile=args.includes('--profile-correction'),profile=args.includes('--profile-direction')||correctionProfile;
+assert(!(args.includes('--profile-direction')&&correctionProfile)&&args.length===(profile?5:4)&&input&&baseline&&wasm&&out&&args.every(a=>/^--(input|baseline|wasm|out)=.+$/.test(a)||['--profile-direction','--profile-correction'].includes(a)));
 assert(!existsSync(out)&&!existsSync(out+'.sources'),'Нужен новый путь');
 const root=fileURLToPath(new URL('../',import.meta.url)),hash=b=>createHash('sha256').update(b).digest('hex'),bytes=readFileSync(input),capture=JSON.parse(bytes),
   revision=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),baseRevision=execFileSync('git',['rev-parse',baseline],{encoding:'utf8'}).trim();
 assert.equal(capture.schema,'cloth-sparse-capture-v1');assert.equal(capture.phase,'complete');assert.equal(capture.dirty,false);
 const manifest={schema:'cloth-fluid-browser-pair-fixture-v1',phase:'preparing',revision,dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),
-  baselineRevision:baseRevision,profile,source:{path:input,sha256:hash(bytes)},inputs:capture.inputs,modules:{...capture.modules,linear:{path:relative(root,resolve(wasm)),sha256:hash(readFileSync(wasm))}},
+  baselineRevision:baseRevision,profile,correctionProfile,source:{path:input,sha256:hash(bytes)},inputs:capture.inputs,modules:{...capture.modules,linear:{path:relative(root,resolve(wasm)),sha256:hash(readFileSync(wasm))}},
   graphs:{},sourceSha256:{},changedSources:[],
   rule:'Один линейный/материальный/сборочный модуль в обоих вариантах. Два независимых графа и модели; полные пары/прежние истории. Подробные таймеры только в сохранённых копиях, отдельно от обычного замера.'};
 for(const part of [...manifest.inputs,...Object.values(manifest.modules)])assert.equal(hash(readFileSync(part.path)),part.sha256);
@@ -28,8 +28,8 @@ const entries=['tests/lib/cloth-fluid-sail-motion.mjs','tests/lib/cloth-sparse-w
 for(const variant of ['baseline','candidate']){
   const graph={revision:variant==='baseline'?baseRevision:revision,originalSha256:{},sourceSha256:{},instrumented:[]};manifest.graphs[variant]=graph;
   function copy(path){if(graph.sourceSha256[path])return;const original=variant==='baseline'?execFileSync('git',['show',baseRevision+':'+path],{maxBuffer:16*1024*1024}):readFileSync(path);graph.originalSha256[path]=hash(original);
-    let b=original;if(profile&&['tests/lib/cloth-fluid-schur-direction.mjs','tests/lib/cloth-sparse-wasm.mjs'].includes(path)){
-      save(variant+'/'+path+'.original',original);b=Buffer.from(path.includes('schur')?instrumentDirection(original.toString()):instrumentSparse(original.toString()));graph.instrumented.push(path);}
+    let b=original;if(profile&&(['tests/lib/cloth-fluid-schur-direction.mjs','tests/lib/cloth-sparse-wasm.mjs'].includes(path)||correctionProfile&&path==='tests/probes/cloth-material-wasm.mjs')){
+      save(variant+'/'+path+'.original',original);b=Buffer.from(path.includes('schur')?instrumentDirection(original.toString(),{correction:correctionProfile}):path.includes('material')?instrumentMaterialHessian(original.toString()):instrumentSparse(original.toString()));graph.instrumented.push(path);}
     graph.sourceSha256[path]=save(variant+'/'+path,b);
     for(const m of original.toString().matchAll(/\b(?:from\s*|import\s*)['"](\.{1,2}\/[^'"]+)['"]/g))copy(relative(root,resolve(root,dirname(path),m[1])));}
   entries.forEach(copy);

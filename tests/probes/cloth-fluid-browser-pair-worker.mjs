@@ -10,7 +10,7 @@ self.addEventListener('message',async({data})=>{
     const fixtureBytes=await fetch(input,{cache:'no-store'}).then(r=>{check(r.ok,'Не прочитан вход');return r.arrayBuffer();}),f=JSON.parse(new TextDecoder().decode(fixtureBytes)),graphRoot=new URL('../../',import.meta.url);
     check(f.phase==='complete'&&f.schema==='cloth-fluid-browser-pair-fixture-v1','Неверный вход пары');
     result={schema:'cloth-fluid-browser-pair-v1',phase:'preparing',input:{path:input,sha256:await shaProbe(fixtureBytes)},fixtureRevision:f.revision,fixtureDirty:f.dirty,pair,profile:f.profile,
-      graphs:f.graphs,modules:f.modules,preparation:{},records:[],exactPairs:0,
+      graphs:f.graphs,modules:f.modules,preparation:{},records:[],exactPairs:0,...(f.correctionProfile?{correctionProfile:true}:{}),
       environment:{userAgent:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency,crossOriginIsolated:self.crossOriginIsolated},
       rule:'Порядок каждой пары шагов чередуется, первый прежний→новый в 1/3, наоборот в 2. Сверка/сериализация вне таймеров. Время по часам не CPU/FPS; все первые шаги/подготовка сохранены.'};
     const files={...f.sourceSha256};for(const [v,g] of Object.entries(f.graphs))for(const [p,h] of Object.entries(g.sourceSha256))files[v+'/'+p]=h;
@@ -31,11 +31,13 @@ self.addEventListener('message',async({data})=>{
         equalProbe(JSON.parse(JSON.stringify(serialProbe({positions:c.motion.pos,body:c.motion.body}))),old.initial);}
       for(const s of old.steps){const times={},states={},order=(s.index+pair)%2?['baseline','candidate']:['candidate','baseline'];
         for(const v of order){const {c,factor,linear,stages}=contexts[v],a=api[v],before=stages?.snapshot(),linearBefore=linear?.snapshot(),wasmBefore=factor.statistics(),
-            directionBefore=f.profile?a.directionProfile():undefined,sparseBefore=f.profile?a.sparseProfile():undefined;
+            directionBefore=f.profile?a.directionProfile():undefined,sparseBefore=f.profile?a.sparseProfile():undefined,
+            correctionBefore=f.correctionProfile?a.correctionProfile():undefined,materialBefore=f.correctionProfile?a.materialHessianProfile():undefined;
           const t=performance.now();let audit,loaded;if(f.profile){c.prepareLoad(s.controls);loaded=performance.now();audit=c.solve();}else audit=c.step(s.controls);
           const ended=performance.now();times[v]={stepMs:ended-t,wasm:difference(factor.statistics(),wasmBefore)};
           if(f.profile)times[v].profile={loadMs:loaded-t,physicsMs:ended-loaded,stages:a.stageDifference(stages.snapshot(),before),linear:difference(linear.snapshot(),linearBefore),
-            directions:difference(a.directionProfile().phases,directionBefore.phases),sparse:difference(a.sparseProfile(),sparseBefore)};
+            directions:difference(a.directionProfile().phases,directionBefore.phases),sparse:difference(a.sparseProfile(),sparseBefore),
+            ...(f.correctionProfile?{correction:difference(a.correctionProfile(),correctionBefore),materialHessian:difference(a.materialHessianProfile(),materialBefore)}:{})};
           states[v]=serialProbe({positions:c.motion.pos,body:c.motion.body,forceN:c.forceN,audit});equalProbe(JSON.parse(JSON.stringify(states[v])),{positions:s.positions,body:s.body,forceN:s.forceN,audit:s.audit},'прежний шаг '+s.index);}
         equalProbe(states.baseline,states.candidate,'строгая пара '+s.index);result.exactPairs++;result.records.push({side:part.side,step:s.index,order,times,states});
         if(s.index%30===0)self.postMessage({type:'progress',message:`${part.side==='plus'?'Первая':'Другая'} сторона: ${s.index}/180; ${result.exactPairs} точных пар.`});}

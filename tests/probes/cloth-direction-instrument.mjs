@@ -1,6 +1,7 @@
 // Только таймеры в отдельной копии. Порядок операций модели не изменяется.
 import assert from 'node:assert/strict';
-export function instrumentDirection(original) {
+export function instrumentDirection(original,{correction=false}={}) {
+  assert.equal(typeof correction,'boolean');
   let code=original;
   const insert=(marker,text)=>{assert.equal(code.split(marker).length,2,'Граница направления должна быть единственной');code=code.replace(marker,text+marker);};
   insert('  const nc=m.pos.length',`  const kind=exact?'correction':'ordinary';let mark=performance.now();
@@ -15,11 +16,33 @@ export function instrumentDirection(original) {
   insert('  // Порядок координат задан',"  checkpoint('bodyCoupling');\n");
   insert('  // Начальное +0 и последовательность',"  checkpoint('linear');\n");
   insert('\n  return result;\n}',"\n  checkpoint('finish');");
+  if(correction) {
+    const replace=(before,after)=>{assert.equal(code.split(before).length,2,'Граница корректора должна быть единственной');code=code.replace(before,after);};
+    replace('    const assemble=({g,plan})=>{','    const assemble=({g,plan})=>{\n      const scatterStart=performance.now();');
+    replace('matrix[plan.entries[entry++]]+=.5*(H[a*size+b]+H[b*size+a]);',
+      "matrix[plan.entries[entry++]]+=.5*(H[a*size+b]+H[b*size+a]);\n      correctionDetail.scatter.calls++;correctionDetail.scatter.ms+=performance.now()-scatterStart;");
+    replace('          group.hessianInto(s.q,block.map(t=>t.weight),block.map(t=>t.plan.hessian));',
+      '          const localStart=performance.now();\n          group.hessianInto(s.q,block.map(t=>t.weight),block.map(t=>t.plan.hessian));\n          correctionDetail.local.calls++;correctionDetail.local.ms+=performance.now()-localStart;');
+    code="const correctionDetail={local:{calls:0,ms:0},scatter:{calls:0,ms:0}};\nexport const correctionProfile=()=>structuredClone(correctionDetail);\n"+code;
+  }
   return `const phaseNames=['prepare','clothMatrix','constraints','bodyCoupling','linear','finish'];
 const directionPhases=Object.fromEntries(['ordinary','correction'].map(k=>[k,Object.fromEntries(phaseNames.map(p=>[p,{calls:0,ms:0}]))]));
 const directionWork={};
 export const directionProfile=()=>({work:structuredClone(directionWork),phases:structuredClone(directionPhases)});
 `+code;
+}
+export function instrumentMaterialHessian(original) {
+  let code=original;
+  const replace=(before,after)=>{assert.equal(code.split(before).length,2,'Граница местного корректора должна быть единственной');code=code.replace(before,after);};
+  replace('      return {hessianInto(p,weights,targets) {',`      return {hessianInto(p,weights,targets) {
+        let materialMark=performance.now();const checkpoint=name=>{const t=performance.now(),r=materialHessianPhases[name];r.calls++;r.ms+=t-materialMark;materialMark=t;};`);
+  replace('targets.forEach(g=>separate(p,g));hessianOffset??=allocate(3*size*size);prepareInput(p);',
+    "targets.forEach(g=>separate(p,g));hessianOffset??=allocate(3*size*size);checkpoint('prepare');prepareInput(p);");
+  replace('        new Float64Array(e.memory.buffer,weightsOffset,3).set(weights);calls++;',
+    "        new Float64Array(e.memory.buffer,weightsOffset,3).set(weights);checkpoint('upload');calls++;");
+  replace('        for(let j=0;j<3;j++)targets[j].set(hessianViews[j]);',
+    "        checkpoint('native');for(let j=0;j<3;j++)targets[j].set(hessianViews[j]);checkpoint('read');");
+  return "const materialHessianPhases=Object.fromEntries(['prepare','upload','native','read'].map(k=>[k,{calls:0,ms:0}]));\nexport const materialHessianProfile=()=>structuredClone(materialHessianPhases);\n"+code;
 }
 export function instrumentSparse(original) {
   let code=original;

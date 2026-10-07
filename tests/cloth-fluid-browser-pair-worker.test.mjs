@@ -20,7 +20,9 @@ try{
   assert.equal(result.profile,fixture.profile);let k=0;
   for(const part of fixture.inputs){const old=JSON.parse(readFileSync(part.path));for(const step of old.steps){const x=result.records[k++];assert.equal(x.step,step.index);assert.equal(x.side,part.side);
     assert.deepEqual(x.states.baseline,x.states.candidate);assert.deepEqual(JSON.parse(JSON.stringify(x.states.baseline)),{positions:step.positions,body:step.body,forceN:step.forceN,audit:step.audit});
-    if(fixture.profile)for(const v of ['baseline','candidate']){const p=x.times[v].profile;assert.equal(p.directions.ordinary.linear.calls+p.directions.correction.linear.calls,x.times[v].wasm.numericFactorizations);assert.equal(p.sparse.factorNative.calls,p.linear.factorCalls);}}}
+    if(fixture.profile)for(const v of ['baseline','candidate']){const p=x.times[v].profile;assert.equal(p.directions.ordinary.linear.calls+p.directions.correction.linear.calls,x.times[v].wasm.numericFactorizations);assert.equal(p.sparse.factorNative.calls,p.linear.factorCalls);
+      if(fixture.correctionProfile){assert.equal(p.correction.local.calls,p.materialHessian.native.calls);assert.equal(new Set(Object.values(p.materialHessian).map(a=>a.calls)).size,1);
+        assert(p.correction.local.ms+p.correction.scatter.ms<=p.directions.correction.clothMatrix.ms+1e-6);assert(Object.values(p.materialHessian).reduce((s,a)=>s+a.ms,0)<=p.correction.local.ms+1e-6);}}}}
   const hash=b=>createHash('sha256').update(b).digest('hex');writeFileSync(out,JSON.stringify({schema:'cloth-fluid-browser-pair-worker-check-v1',phase:'complete',runtime:process.version,
     fixture:{path:input,sha256:hash(readFileSync(input))},testSha256:hash(readFileSync(new URL(import.meta.url))),progressMessages:messages.filter(x=>x.type==='progress').length,result},null,2)+'\n',{flag:'wx'});
   console.log(`Диагностический настоящий Worker: 360 строгих пар и прежних шагов${fixture.profile?', отдельные обычные/точные направления':''} — пройдены.`);

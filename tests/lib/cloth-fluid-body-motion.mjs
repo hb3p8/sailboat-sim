@@ -98,7 +98,17 @@ export class FluidBodyEnergyMotion {
     // Каждое промежуточное состояние владеет своими градиентами. Неудачный
     // поиск шага не меняет уже рассчитанный остаток или его направление.
     const samples=[],buffered=c=>typeof c.valueInto==='function'&&Array.isArray(c.gradientNodes);
-    const sample=c=>({nodes:c.gradientNodes.slice(),values:new Float64Array(3*c.gradientNodes.length)});
+    // Блок принадлежит только этому состоянию. Моды получают непересекающиеся
+    // представления; новый вызов не использует память прежнего снимка.
+    let capacity=0;for(const c of this.soft)if(buffered(c))capacity+=24*c.gradientNodes.length;
+    let memory,offset=0;
+    const sample=c=>{
+      const nodes=c.gradientNodes.slice(),length=3*c.gradientNodes.length,bytes=8*length;
+      // Пользовательская связь может изменить последующий список узлов во
+      // время чтения. Его увеличение сохраняет прежний путь новым блоком.
+      if(!memory||offset+bytes>memory.byteLength){memory=new ArrayBuffer(Math.max(capacity,bytes));offset=0;}
+      const values=new Float64Array(memory,offset,length);offset+=bytes;return {nodes,values};
+    };
     for(let j=0;j<this.soft.length;) {
       const c=this.soft[j],group=c.gradientGroup,block=group?.size>1?this.soft.slice(j,j+group.size):[c];
       if(group&&block.length===group.size&&block.every((v,k)=>v.gradientGroup===group&&v.gradientSlot===k&&buffered(v))) {

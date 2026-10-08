@@ -1,5 +1,6 @@
 // Браузер и проверка Node используют тот же обработчик общего шага.
 import {fluidSailMotion} from './cloth-fluid-sail-motion.mjs';
+import {liveWindSailMotion} from './cloth-live-wind-sail-motion.mjs';
 import {loadSparseFactor} from './cloth-sparse-wasm.mjs';
 import {observeSparseFactor} from './cloth-worker-timing.mjs';
 import {observeFluidStages,stageDifference} from './cloth-fluid-timing.mjs';
@@ -11,7 +12,7 @@ import {verifyAssemblyKernel} from '../probes/cloth-assembly-engine-check.mjs';
 
 export function fluidWorkerHandler(post) {
   let calculation,factor,linearObserver,stageObserver,executionProbe,index=0,busy=false,failed=false;
-  return async ({id,type,recipe,bodyInput,bytes,materialBytes,assemblyBytes,controls,sheet,profile=false,probe=false})=>{
+  return async ({id,type,recipe,bodyInput,bytes,materialBytes,assemblyBytes,controls,sheet,liveWind,profile=false,probe=false})=>{
     if(busy){post({id,type:'error',message:'Предыдущая команда ещё выполняется',index});return;}
     busy=true;
     try {
@@ -37,7 +38,9 @@ export function fluidWorkerHandler(post) {
           assembly={backend:'wasm',validation,checkMs:performance.now()-checkStart};
         }
         if(profile)linearObserver=observeSparseFactor(factor);
-        calculation=fluidSailMotion(recipe,bodyInput,linearObserver?.factor??factor,{sheet,materialKernel,assemblyKernel});
+        if(liveWind!==undefined&&(!liveWind||typeof liveWind!=='object'||!liveWind.pack))throw new Error('Живому ветру нужен отдельный физический пакет');
+        calculation=liveWind===undefined?fluidSailMotion(recipe,bodyInput,linearObserver?.factor??factor,{sheet,materialKernel,assemblyKernel}):
+          liveWindSailMotion(recipe,bodyInput,linearObserver?.factor??factor,{...liveWind,sheet,materialKernel,assemblyKernel});
         if(profile)stageObserver=observeFluidStages(calculation.motion);
         if(probe)executionProbe=createExecutionProbe();
         const positions=calculation.motion.pos.slice(),body=structuredClone(calculation.motion.body),readyAt=performance.now();
@@ -46,6 +49,7 @@ export function fluidWorkerHandler(post) {
           ...(probe?{probe:true}:{}),
           ...(material?{material}:{}),
           ...(assembly?{assembly}:{}),
+          ...(calculation.liveWind?{liveWind:calculation.liveWind}:{}),
           ...(calculation.sheetControl?{sheetControl:calculation.sheetControl}:{})});
       } else if(type==='step') {
         if(!calculation)throw new Error('Расчёт не подготовлен');

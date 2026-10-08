@@ -11,8 +11,9 @@ const sheetInputs=args.filter(v=>v.startsWith('--sheet-input=')).map(v=>v.slice(
 const profileWorker=args.includes('--profile-worker');
 const materialWasm=args.find(v=>v.startsWith('--material-wasm='))?.slice(16);
 const assemblyWasm=args.find(v=>v.startsWith('--assembly-wasm='))?.slice(16);
-assert(inputs.length===2&&prefix&&wasm&&[0,2].includes(sheetInputs.length)&&args.length===4+sheetInputs.length+Number(profileWorker)+Number(Boolean(materialWasm))+Number(Boolean(assemblyWasm)),
-  'Нужны две --input, --out-prefix, --wasm, необязательные две --sheet-input, --profile-worker, --material-wasm и --assembly-wasm');
+const liveWind=args.includes('--live-wind');
+assert(inputs.length===2&&prefix&&wasm&&[0,2].includes(sheetInputs.length)&&args.length===4+sheetInputs.length+Number(profileWorker)+Number(Boolean(materialWasm))+Number(Boolean(assemblyWasm))+Number(liveWind),
+  'Нужны две --input, --out-prefix, --wasm, необязательные две --sheet-input, --profile-worker, --material-wasm, --assembly-wasm и --live-wind');
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const revision=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 const dirty=Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim());
@@ -49,7 +50,8 @@ const records=inputs.map(path=>{
     ...(materialWasm?{materialWasm:{path:materialWasm,sha256:hash(readFileSync(materialWasm))}}:{}),
     ...(assemblyWasm?{assemblyWasm:{path:assemblyWasm,sha256:hash(readFileSync(assemblyWasm))}}:{}),
     recipe:s.recipe,bodyInput:s.config.bodyInput,side,...(profileWorker?{profileWorker:true}:{}),
-    ...(proof?{sheet:proof.r.parameters.sheet,sheetProof:{path:proof.path,sha256:proof.sha256,revision:proof.r.revision}}:{})}};
+    ...(proof?{sheet:proof.r.parameters.sheet,sheetProof:{path:proof.path,sha256:proof.sha256,revision:proof.r.revision}}:{}),
+    ...(liveWind?{liveWind:{model:'rig-current-surface-body-projected-v1',wind:{speedMPS:6,fromDeg:s.config.tack*140}}}:{})}};
 });
 assert.equal(new Set(records.map(r=>r.path)).size,2);
 for(const r of records)assert(!existsSync(r.path),'Сохранённый вход нельзя перезаписывать');

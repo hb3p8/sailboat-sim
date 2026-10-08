@@ -4,6 +4,7 @@ import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {fluidSailMotion} from '../tests/lib/cloth-fluid-sail-motion.mjs';
+import {liveWindSailMotion} from '../tests/lib/cloth-live-wind-sail-motion.mjs';
 import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
 import {loadMaterialKernel} from '../tests/probes/cloth-material-wasm.mjs';
 import {verifyMaterialKernel} from '../tests/probes/cloth-material-engine-check.mjs';
@@ -19,7 +20,13 @@ assert.equal(r.schema,'cloth-fluid-live-result-v1');assert.equal(f.schema,'cloth
 assert(f.profileWorker===undefined||typeof f.profileWorker==='boolean');
 for(const [path,sha] of Object.entries(f.sourceSha256))assert.equal(hash(readFileSync(path)),sha,'Изменился исходник '+path);
 for(const part of [f.input,f.wasm,f.scene])assert.equal(hash(readFileSync(part.path)),part.sha256,'Изменился сохранённый вход '+part.path);
-assert.equal(hash(readFileSync('out/export/physics.json')),f.physicsSha256);
+const physicsBytes=readFileSync('out/export/physics.json');
+assert.equal(hash(physicsBytes),f.physicsSha256);
+if(f.liveWind!==undefined) {
+  assert.equal(f.liveWind?.model,'rig-current-surface-body-projected-v1','Неизвестная модель живого ветра');
+  assert(Number.isFinite(f.liveWind.wind?.speedMPS)&&f.liveWind.wind.speedMPS>=0&&f.liveWind.wind.speedMPS<=12);
+  assert(Number.isFinite(f.liveWind.wind?.fromDeg)&&Math.abs(f.liveWind.wind.fromDeg)<=180);
+}
 const source=JSON.parse(readFileSync(f.input.path));
 assert.deepEqual(f.recipe,source.recipe);assert.deepEqual(f.bodyInput,source.config.bodyInput);
 assert.equal(Boolean(f.sheet),Boolean(f.sheetProof),'Верёвке требуется доказательство');
@@ -48,7 +55,9 @@ if(f.assemblyWasm!==undefined) {
   assert.equal(r.preparation.assembly.backend,'wasm');assert.deepEqual(r.preparation.assembly.validation,assemblyValidation);
   assert(Number.isFinite(r.preparation.assembly.checkMs)&&r.preparation.assembly.checkMs>=0);
 } else assert.equal(r.preparation.assembly,undefined,'Сборка результата отличается от входа');
-const factor=await loadSparseFactor(readFileSync(f.wasm.path)),c=fluidSailMotion(f.recipe,f.bodyInput,factor,{sheet:f.sheet,materialKernel,assemblyKernel});
+const factor=await loadSparseFactor(readFileSync(f.wasm.path));
+const c=(f.liveWind?liveWindSailMotion:fluidSailMotion)(f.recipe,f.bodyInput,factor,{sheet:f.sheet,materialKernel,assemblyKernel,
+  ...(f.liveWind?{pack:JSON.parse(physicsBytes),wind:f.liveWind.wind}:{})});
 assert.deepEqual(r.initial,{positions:Array.from(c.motion.pos),body:jsonSerial(c.motion.body)});
 assert(r.steps.length<=300&&Number.isInteger(r.shownStep)&&r.shownStep>=0&&r.shownStep<=r.steps.length);
 const costs=[],delays=[],timings=[];
@@ -84,6 +93,7 @@ for(let i=0;i<r.steps.length;i++) {
 }
 const result={schema:'cloth-fluid-live-report-v1',input,sha256:hash(bytes),revision:f.revision,dirty:f.dirty,
   valid:true,exactSteps:r.steps.length,shownStep:r.shownStep,lastAcceptedStepShown:r.shownStep===r.steps.length,
+  ...(f.liveWind?{liveWind:{...f.liveWind,scope:'Воздух пересчитывается по принятой форме; опора и инерция воды лабораторные, гидросилы/руль/SV20 не приняты.'}}:{}),
   costsMs:{mean:costs.length?costs.reduce((a,b)=>a+b,0)/costs.length:null,max:costs.length?Math.max(...costs):null},
   maxPresentationDelayMs:delays.length?Math.max(...delays):null,
   ...(materialValidation?{material:{backend:'wasm',module:f.materialWasm,validation:materialValidation}}:{}),

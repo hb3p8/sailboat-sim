@@ -27,6 +27,14 @@ for(const [name,mutate] of [
     ['время-чтения-материала',x=>{x.records[0].times.candidate.profile.materialHessian.read.ms=1e9;}],
     ['отрицательное-время-материала',x=>{x.records[0].times.candidate.profile.materialHessian.native.ms=-1;}],
   ]:[]),
+  ...(r.materialProfile?[
+    ['режим-материала',x=>{x.materialProfile=false;}],
+    ['время-подготовки-снимков',x=>{x.records[0].times.candidate.profile.readSoft.prepare.ms=1e9;}],
+    ['счётчик-снимков',x=>{x.records[0].times.candidate.profile.readSoft.evaluate.calls++;}],
+    ['время-вызова-группы',x=>{x.records[0].times.candidate.profile.materialValues.group.native.ms=1e9;}],
+    ['счётчик-одиночного-материала',x=>{x.records[0].times.candidate.profile.materialValues.single.read.calls++;}],
+    ['отрицательное-чтение-материала',x=>{x.records[0].times.candidate.profile.materialValues.group.read.ms=-1;}],
+  ]:[]),
 ]){const x=structuredClone(r);mutate(x);const path=cases+'/'+name+'.json',target=cases+'/'+name+'-report.json';writeFileSync(path,JSON.stringify(x)+'\n',{flag:'wx'});
   let error;try{execFileSync(process.execPath,[tool,'--input='+path,'--fixture='+fixture,'--out='+target],{stdio:'pipe'});}catch(e){error=e;}
   assert(error?.status===1&&String(error.stderr).includes('AssertionError'),name);assert(!existsSync(target));report.rejected.push({name,path,sha256:hash(readFileSync(path)),message:String(error.stderr)});}

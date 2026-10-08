@@ -44,6 +44,35 @@ export function instrumentMaterialHessian(original) {
     "        checkpoint('native');for(let j=0;j<3;j++)targets[j].set(hessianViews[j]);checkpoint('read');");
   return "const materialHessianPhases=Object.fromEntries(['prepare','upload','native','read'].map(k=>[k,{calls:0,ms:0}]));\nexport const materialHessianProfile=()=>structuredClone(materialHessianPhases);\n"+code;
 }
+export function instrumentReadSoft(original) {
+  let code=original;
+  const replace=(before,after)=>{assert.equal(code.split(before).length,2,'Граница чтения материала должна быть единственной');code=code.replace(before,after);};
+  replace('  readSoft(q) {',`  readSoft(q) {
+    let softMark=performance.now();const checkpoint=name=>{const t=performance.now(),r=readSoftPhases[name];r.calls++;r.ms+=t-softMark;softMark=t;};`);
+  replace('        const values=block.map(sample),C=group.valueInto(q,values.map(v=>v.values));',
+    "        const values=block.map(sample),targets=values.map(v=>v.values);checkpoint('prepare');const C=group.valueInto(q,targets);checkpoint('evaluate');");
+  replace('values.forEach((v,k)=>{v.C=C[k];samples.push(v);});j+=block.length;',
+    "values.forEach((v,k)=>{v.C=C[k];samples.push(v);});j+=block.length;checkpoint('finish');");
+  replace('        const v=sample(c);v.C=c.valueInto(q,v.values);samples.push(v);j++;',
+    "        const v=sample(c);checkpoint('prepare');v.C=c.valueInto(q,v.values);checkpoint('evaluate');samples.push(v);j++;checkpoint('finish');");
+  replace('      } else {samples.push(c.value(q));j++;}',
+    "      } else {checkpoint('prepare');const v=c.value(q);checkpoint('evaluate');samples.push(v);j++;checkpoint('finish');}");
+  return "const readSoftPhases=Object.fromEntries(['prepare','evaluate','finish'].map(k=>[k,{calls:0,ms:0}]));\nexport const readSoftProfile=()=>structuredClone(readSoftPhases);\n"+code;
+}
+export function instrumentMaterialValues(original) {
+  let code=original;
+  const replace=(before,after)=>{assert.equal(code.split(before).length,2,'Граница значений материала должна быть единственной');code=code.replace(before,after);};
+  replace('      const execute=(p,requested)=>{',`      let valueMark,valueKind;const checkpoint=name=>{const t=performance.now(),r=materialValuePhases[valueKind][name];r.calls++;r.ms+=t-valueMark;valueMark=t;};
+      const execute=(p,requested)=>{`);
+  replace('        prepareInput(p);\n        calls++;',"        checkpoint('prepare');prepareInput(p);checkpoint('upload');\n        calls++;");
+  replace("        if(failed)throw new Error('Вырожденная нормаль участка кривизны');", "        if(failed)throw new Error('Вырожденная нормаль участка кривизны');checkpoint('native');");
+  replace('      },valueInto(p,gradients) {',"      },valueInto(p,gradients) {\n        valueKind='group';valueMark=performance.now();");
+  replace('        return [output[0],output[1],output[2]];',"        const values=[output[0],output[1],output[2]];checkpoint('read');return values;");
+  replace('      },singleInto(p,j,g) {',"      },singleInto(p,j,g) {\n        valueKind='single';valueMark=performance.now();");
+  replace('        separate(p,g);execute(p,j);g.set(gradientViews[j]);return output[j];',
+    "        separate(p,g);execute(p,j);g.set(gradientViews[j]);const value=output[j];checkpoint('read');return value;");
+  return "const materialValuePhases=Object.fromEntries(['group','single'].map(k=>[k,Object.fromEntries(['prepare','upload','native','read'].map(n=>[n,{calls:0,ms:0}]))]));\nexport const materialValuesProfile=()=>structuredClone(materialValuePhases);\n"+code;
+}
 export function instrumentSparse(original) {
   let code=original;
   const insert=(marker,text)=>{assert.equal(code.split(marker).length,2,'Граница линейной оболочки должна быть единственной');code=code.replace(marker,text+marker);};

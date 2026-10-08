@@ -10,7 +10,7 @@ self.addEventListener('message',async({data})=>{
     const fixtureBytes=await fetch(input,{cache:'no-store'}).then(r=>{check(r.ok,'Не прочитан вход');return r.arrayBuffer();}),f=JSON.parse(new TextDecoder().decode(fixtureBytes)),graphRoot=new URL('../../',import.meta.url);
     check(f.phase==='complete'&&f.schema==='cloth-fluid-browser-pair-fixture-v1','Неверный вход пары');
     result={schema:'cloth-fluid-browser-pair-v1',phase:'preparing',input:{path:input,sha256:await shaProbe(fixtureBytes)},fixtureRevision:f.revision,fixtureDirty:f.dirty,pair,profile:f.profile,
-      graphs:f.graphs,modules:f.modules,preparation:{},records:[],exactPairs:0,...(f.correctionProfile?{correctionProfile:true}:{}),
+      graphs:f.graphs,modules:f.modules,preparation:{},records:[],exactPairs:0,...(f.correctionProfile?{correctionProfile:true}:{}),...(f.materialProfile?{materialProfile:true}:{}),
       environment:{userAgent:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency,crossOriginIsolated:self.crossOriginIsolated},
       rule:'Порядок каждой пары шагов чередуется, первый прежний→новый в 1/3, наоборот в 2. Сверка/сериализация вне таймеров. Время по часам не CPU/FPS; все первые шаги/подготовка сохранены.'};
     const files={...f.sourceSha256};for(const [v,g] of Object.entries(f.graphs))for(const [p,h] of Object.entries(g.sourceSha256))files[v+'/'+p]=h;
@@ -21,7 +21,8 @@ self.addEventListener('message',async({data})=>{
       api[v]={...await import(url),...await import(new URL('./cloth-sparse-wasm.mjs',url)),...await import(new URL('./cloth-worker-timing.mjs',url)),...await import(new URL('./cloth-fluid-timing.mjs',url)),
         ...await import(new URL('../probes/cloth-material-wasm.mjs',url)),...await import(new URL('../probes/cloth-material-engine-check.mjs',url)),
         ...await import(new URL('../probes/cloth-assembly-wasm.mjs',url)),...await import(new URL('../probes/cloth-assembly-engine-check.mjs',url)),
-        ...(f.profile?await import(new URL('./cloth-fluid-schur-direction.mjs',url)):{}),};}
+        ...(f.profile?await import(new URL('./cloth-fluid-schur-direction.mjs',url)):{}),
+        ...(f.materialProfile?await import(new URL('./cloth-fluid-body-motion.mjs',url)):{}),};}
     for(const part of f.inputs){const old=JSON.parse(new TextDecoder().decode(await fetchProbe(part))),recipe=old.fixture,contexts={};
       for(const v of pair%2?['baseline','candidate']:['candidate','baseline']){
         const a=api[v],t=performance.now(),factor=await a.loadSparseFactor(bytes.linear),materialKernel=await a.loadMaterialKernel(bytes.material),assemblyKernel=await a.loadAssemblyKernel(bytes.assembly),compiled=performance.now();
@@ -32,12 +33,14 @@ self.addEventListener('message',async({data})=>{
       for(const s of old.steps){const times={},states={},order=(s.index+pair)%2?['baseline','candidate']:['candidate','baseline'];
         for(const v of order){const {c,factor,linear,stages}=contexts[v],a=api[v],before=stages?.snapshot(),linearBefore=linear?.snapshot(),wasmBefore=factor.statistics(),
             directionBefore=f.profile?a.directionProfile():undefined,sparseBefore=f.profile?a.sparseProfile():undefined,
-            correctionBefore=f.correctionProfile?a.correctionProfile():undefined,materialBefore=f.correctionProfile?a.materialHessianProfile():undefined;
+            correctionBefore=f.correctionProfile?a.correctionProfile():undefined,materialBefore=f.correctionProfile?a.materialHessianProfile():undefined,
+            readSoftBefore=f.materialProfile?a.readSoftProfile():undefined,valuesBefore=f.materialProfile?a.materialValuesProfile():undefined;
           const t=performance.now();let audit,loaded;if(f.profile){c.prepareLoad(s.controls);loaded=performance.now();audit=c.solve();}else audit=c.step(s.controls);
           const ended=performance.now();times[v]={stepMs:ended-t,wasm:difference(factor.statistics(),wasmBefore)};
           if(f.profile)times[v].profile={loadMs:loaded-t,physicsMs:ended-loaded,stages:a.stageDifference(stages.snapshot(),before),linear:difference(linear.snapshot(),linearBefore),
             directions:difference(a.directionProfile().phases,directionBefore.phases),sparse:difference(a.sparseProfile(),sparseBefore),
-            ...(f.correctionProfile?{correction:difference(a.correctionProfile(),correctionBefore),materialHessian:difference(a.materialHessianProfile(),materialBefore)}:{})};
+            ...(f.correctionProfile?{correction:difference(a.correctionProfile(),correctionBefore),materialHessian:difference(a.materialHessianProfile(),materialBefore)}:{}),
+            ...(f.materialProfile?{readSoft:difference(a.readSoftProfile(),readSoftBefore),materialValues:difference(a.materialValuesProfile(),valuesBefore)}:{})};
           states[v]=serialProbe({positions:c.motion.pos,body:c.motion.body,forceN:c.forceN,audit});equalProbe(JSON.parse(JSON.stringify(states[v])),{positions:s.positions,body:s.body,forceN:s.forceN,audit:s.audit},'прежний шаг '+s.index);}
         equalProbe(states.baseline,states.candidate,'строгая пара '+s.index);result.exactPairs++;result.records.push({side:part.side,step:s.index,order,times,states});
         if(s.index%30===0)self.postMessage({type:'progress',message:`${part.side==='plus'?'Первая':'Другая'} сторона: ${s.index}/180; ${result.exactPairs} точных пар.`});}

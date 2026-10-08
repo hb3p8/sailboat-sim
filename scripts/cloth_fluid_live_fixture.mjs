@@ -21,7 +21,7 @@ const root=fileURLToPath(new URL('../',import.meta.url)),sourceSha256={};
 function addSource(url) {
   const p=relative(root,fileURLToPath(url));if(Object.hasOwn(sourceSha256,p))return;
   const bytes=readFileSync(url);sourceSha256[p]=hash(bytes);
-  for(const x of bytes.toString().matchAll(/\b(?:from\s*|import\s*)['"](\.{1,2}\/[^'"]+)['"]/g))addSource(new URL(x[1],url));
+  for(const x of bytes.toString().matchAll(/\b(?:from\s*|import\s*\(?\s*)['"](\.{1,2}\/[^'"]+)['"]/g))addSource(new URL(x[1],url));
 }
 for(const p of ['../tests/lib/cloth-fluid-worker.mjs','../tests/lib/cloth-fluid-client.mjs','./cloth_fluid_live_scene.mjs'])addSource(new URL(p,import.meta.url));
 if(materialWasm)addSource(new URL('../tests/probes/cloth-material-wasm.c',import.meta.url));

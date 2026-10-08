@@ -1,6 +1,5 @@
 // Браузер и проверка Node используют тот же обработчик общего шага.
 import {fluidSailMotion} from './cloth-fluid-sail-motion.mjs';
-import {liveWindSailMotion} from './cloth-live-wind-sail-motion.mjs';
 import {loadSparseFactor} from './cloth-sparse-wasm.mjs';
 import {observeSparseFactor} from './cloth-worker-timing.mjs';
 import {observeFluidStages,stageDifference} from './cloth-fluid-timing.mjs';
@@ -39,8 +38,10 @@ export function fluidWorkerHandler(post) {
         }
         if(profile)linearObserver=observeSparseFactor(factor);
         if(liveWind!==undefined&&(!liveWind||typeof liveWind!=='object'||!liveWind.pack))throw new Error('Живому ветру нужен отдельный физический пакет');
-        calculation=liveWind===undefined?fluidSailMotion(recipe,bodyInput,linearObserver?.factor??factor,{sheet,materialKernel,assemblyKernel}):
-          liveWindSailMotion(recipe,bodyInput,linearObserver?.factor??factor,{...liveWind,sheet,materialKernel,assemblyKernel});
+        // Воздух импортирует kernel с верхнеуровневым await. Загружаем его
+        // после установки обработчика: ранняя init не должна теряться.
+        const factory=liveWind===undefined?fluidSailMotion:(await import('./cloth-live-wind-sail-motion.mjs')).liveWindSailMotion;
+        calculation=factory(recipe,bodyInput,linearObserver?.factor??factor,{...liveWind,sheet,materialKernel,assemblyKernel});
         if(profile)stageObserver=observeFluidStages(calculation.motion);
         if(probe)executionProbe=createExecutionProbe();
         const positions=calculation.motion.pos.slice(),body=structuredClone(calculation.motion.body),readyAt=performance.now();

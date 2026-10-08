@@ -23,6 +23,9 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   document.body.append(panel);
   const collapse=document.createElement('button');collapse.id='fluid-collapse';collapse.textContent='Свернуть панель';panel.prepend(collapse);
   collapse.onclick=()=>{const compact=panel.classList.toggle('fluid-compact');collapse.textContent=compact?'Показать управление':'Свернуть панель';};
+  const inspect=document.createElement('button');inspect.id='fluid-inspect';inspect.textContent='Показать запись';inspect.disabled=true;panel.querySelector('#fluid-save').after(inspect);
+  const recordDialog=document.createElement('dialog');recordDialog.innerHTML='<p>Запись принятого опыта</p><textarea aria-label="Запись опыта" readonly style="width:min(75vw,700px);height:50vh"></textarea><p><button>Закрыть</button></p>';
+  document.body.append(recordDialog);recordDialog.querySelector('button').onclick=()=>recordDialog.close();
   // Ветер доступен только отдельной постановке. Ползунок старой нагрузки
   // остаётся прежним для воспроизведения замороженных серий.
   panel.querySelector('#fluid-pressure').closest('label').id='fluid-pressure-label';
@@ -65,6 +68,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   function buttons() {
     el('run').disabled=(!running&&busy)||!client||steps.length>=300;el('step').disabled=busy||running||!client||steps.length>=300;
     el('save').disabled=busy||running||!snapshot;
+    inspect.disabled=el('save').disabled;
     for(const id of ['sheet-in','sheet-hold','sheet-out'])el(id).disabled=!client?.ready.sheetControl||steps.length>=300;
     el('cycle').disabled=busy||!client?.ready.sheetControl;
   }
@@ -160,14 +164,18 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   for(const [id,direction] of [['sheet-in',-1],['sheet-hold',0],['sheet-out',1]])el(id).onclick=()=>{automaticCycle=false;sheetDirection=direction;sheetReadout();};
   el('run').onclick=()=>{if(running){stop();buttons();}else start();};
   el('step').onclick=()=>{void step();};
-  el('save').onclick=()=>{
+  function recordedText() {
     const serial=v=>ArrayBuffer.isView(v)?Array.from(v):Array.isArray(v)?v.map(serial):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,serial(x)])):v;
     const record={schema:'cloth-fluid-live-result-v1',fixture,initial,steps:serial(steps),shownStep,wallMs,preparation,
       environment:{userAgent:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency,
         devicePixelRatio,viewport:[innerWidth,innerHeight],visibilityState:document.visibilityState,crossOriginIsolated},
       scope:fixture.liveWind?'Живой ветер по принятой форме/движению; прежняя проекционная аэродинамика, лабораторные масса и вода. Руль/гидросилы/сухой бюджет SV20 ещё не подключены.':
         'Живой лабораторный опыт; неподвижное поле с управляемым масштабом давления, внешним моментом и необязательной верёвкой. Нет закона воздуха, руля, гидросил и измеренных масс SV20; пик идеальной нерастяжимой верёвки не принят как реальная нагрузка.'};
-    const url=URL.createObjectURL(new Blob([JSON.stringify(record,null,2)+'\n'],{type:'application/json'}));
+    return JSON.stringify(record,null,2)+'\n';
+  }
+  inspect.onclick=()=>{recordDialog.querySelector('textarea').value=recordedText();recordDialog.showModal();};
+  el('save').onclick=()=>{
+    const url=URL.createObjectURL(new Blob([recordedText()],{type:'application/json'}));
     const a=document.createElement('a');a.href=url;a.download=`${prefix}-${fixture.side}-${Date.now()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
   return {

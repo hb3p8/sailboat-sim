@@ -13,8 +13,10 @@ const materialWasm=args.find(v=>v.startsWith('--material-wasm='))?.slice(16);
 const assemblyWasm=args.find(v=>v.startsWith('--assembly-wasm='))?.slice(16);
 const liveWind=args.includes('--live-wind');
 const sv20=args.includes('--sv20');
-assert((!sv20||liveWind)&&inputs.length===2&&prefix&&wasm&&[0,2].includes(sheetInputs.length)&&args.length===4+sheetInputs.length+Number(profileWorker)+Number(Boolean(materialWasm))+Number(Boolean(assemblyWasm))+Number(liveWind)+Number(sv20),
-  'Нужны две --input, --out-prefix, --wasm, необязательные две --sheet-input, --profile-worker, --material-wasm, --assembly-wasm, --live-wind и --sv20 (только с ветром)');
+const windBase=args.find(v=>v.startsWith('--wind-base='))?.slice(12),windPeak=args.find(v=>v.startsWith('--wind-peak='))?.slice(12);
+const baseMPS=Number(windBase??6),peakMPS=Number(windPeak??7);
+assert(Number.isFinite(baseMPS)&&Number.isFinite(peakMPS)&&baseMPS>=0&&peakMPS<=12&&peakMPS>=baseMPS&&(!(windBase||windPeak)||sv20)&&(!sv20||liveWind)&&inputs.length===2&&prefix&&wasm&&[0,2].includes(sheetInputs.length)&&args.length===4+sheetInputs.length+Number(profileWorker)+Number(Boolean(materialWasm))+Number(Boolean(assemblyWasm))+Number(liveWind)+Number(sv20)+Number(windBase!==undefined)+Number(windPeak!==undefined),
+  'Нужны две --input, --out-prefix, --wasm, необязательные две --sheet-input, --profile-worker, --material-wasm, --assembly-wasm, --live-wind, --sv20 (только с ветром), --wind-base/--wind-peak (для SV20)');
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const revision=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 const dirty=Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim());
@@ -52,7 +54,7 @@ const records=inputs.map(path=>{
     ...(assemblyWasm?{assemblyWasm:{path:assemblyWasm,sha256:hash(readFileSync(assemblyWasm))}}:{}),
     recipe:s.recipe,bodyInput:s.config.bodyInput,side,...(profileWorker?{profileWorker:true}:{}),
     ...(proof?{sheet:proof.r.parameters.sheet,sheetProof:{path:proof.path,sha256:proof.sha256,revision:proof.r.revision}}:{}),
-    ...(liveWind?{liveWind:{model:'rig-current-surface-body-projected-v1',wind:{speedMPS:6,fromDeg:s.config.tack*140},...(sv20?{bodyProfile:'sv20-rig-budget-point-v1',worldVelocityDampingHz:0}:{})}}:{})}};
+    ...(liveWind?{liveWind:{model:'rig-current-surface-body-projected-v1',wind:{speedMPS:sv20?baseMPS:6,fromDeg:s.config.tack*140},...(sv20?{bodyProfile:'sv20-rig-budget-point-v1',worldVelocityDampingHz:0,cycleWind:{baseMPS,peakMPS}}:{})}}:{})}};
 });
 assert.equal(new Set(records.map(r=>r.path)).size,2);
 for(const r of records)assert(!existsSync(r.path),'Сохранённый вход нельзя перезаписывать');

@@ -8,6 +8,8 @@ export function liveWindCycleControls(index,side) {
 }
 
 // Тот же ветер/шкот; после возврата шкота просим 10° на полсекунды и возвращаем.
-export function sv20WindCycleControls(index,side) {
-  return {...liveWindCycleControls(index,side),rudderDeg:index>=120&&index<150?(side==='plus'?10:-10):0};
+export function sv20WindCycleControls(index,side,{baseMPS=6,peakMPS=7}={}) {
+  if(!Number.isFinite(baseMPS)||!Number.isFinite(peakMPS)||baseMPS<0||peakMPS>12||peakMPS<baseMPS)throw new Error('Нужны скорости сценария 0–12 м/с');
+  return {...liveWindCycleControls(index,side),windSpeedMPS:index>=30&&index<90?peakMPS:baseMPS,
+    rudderDeg:index>=120&&index<150?(side==='plus'?10:-10):0};
 }

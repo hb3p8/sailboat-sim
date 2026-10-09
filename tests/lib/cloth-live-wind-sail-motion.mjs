@@ -37,7 +37,11 @@ export function liveWindSailMotion(r,bodyInput,factor,{pack,wind,sheet,materialK
     const audit=base.motion.step(load,base.hS,r.iterations);load=undefined;
     if(Math.abs(audit.discreteBalanceResidualJ)>audit.workLimitJ||Math.abs(audit.bodyWorkCancellationResidualJ)>audit.interfaceWorkLimitJ)
       throw new Error('Живой шаг не выполнил прежнюю проверку работы сил');
-    timeS+=base.hS;return {...audit,air:airAudit,...(water?{water:waterAudit}:{} )};
+    timeS+=base.hS;
+    let application;
+    if(water){let minHeightM=Infinity,submergedNodes=0;for(let i=2;i<base.motion.pos.length;i+=3){minHeightM=Math.min(minHeightM,base.motion.pos[i]);if(base.motion.pos[i]<0)submergedNodes++;}
+      application={phase:'accepted-state-after-step',flatWaterLevelM:0,minHeightM,submergedNodes,clothWaterLoadModel:false,dryCloth:submergedNodes===0};}
+    return {...audit,air:airAudit,...(water?{water:waterAudit,application}:{} )};
   }
   return {...base,liveWind:{model:air.model,wind:commands,...(isSV20?{bodyProfile,worldVelocityDampingHz:base.motion.dampingHz}:{}),
     scope:isSV20?'SV20: явный сухой бюджет, спокойная вода/руль до исходного начала глиссирования, без экипажа/волн; мировое численное торможение выключено.':'живой ветер, лабораторная опора; руль/гидросилы/SV20 ещё не подключены'},prepareLoad,solve,step(c){prepareLoad(c);return solve();}};

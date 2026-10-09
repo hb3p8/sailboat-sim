@@ -17,7 +17,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   if(!/^[\w-]+$/.test(prefix))throw new Error('Укажите имя подготовленной серии в fluid-live');
   for(const el of document.querySelectorAll('input,select,button'))el.disabled=true;
   const style=document.createElement('style');
-  style.textContent='#fluid-live-panel{position:fixed;left:12px;top:12px;z-index:30;width:min(420px,calc(100vw - 48px));padding:12px;border-radius:10px;background:#10202ef0;color:#e6edf4;font:13px system-ui}#fluid-live-panel.fluid-compact{top:auto;bottom:12px}#fluid-live-panel.fluid-compact>*:not(b):not(#fluid-collapse):not(#fluid-status):not(#fluid-run){display:none!important}#fluid-live-panel [hidden]{display:none!important}#fluid-live-panel p{margin:8px 0}#fluid-live-panel button,#fluid-live-panel select{font:inherit;margin:4px;padding:6px}#fluid-live-panel label{display:block;margin:8px 0}#fluid-live-panel input{width:150px;vertical-align:middle}#hud,#game,#panel,#help,#topcard,#compass,#perf,#gperf,#keys{visibility:hidden}';
+  style.textContent='#fluid-live-panel{position:fixed;left:12px;top:12px;z-index:30;width:min(420px,calc(100vw - 48px));padding:12px;border-radius:10px;background:#10202ef0;color:#e6edf4;font:13px system-ui}#fluid-live-panel.fluid-compact{top:auto;bottom:12px}#fluid-live-panel.fluid-compact>*:not(b):not(#fluid-collapse):not(#fluid-status):not(#fluid-run):not(#fluid-application){display:none!important}#fluid-live-panel [hidden]{display:none!important}#fluid-live-panel p{margin:8px 0}#fluid-live-panel button,#fluid-live-panel select{font:inherit;margin:4px;padding:6px}#fluid-live-panel label{display:block;margin:8px 0}#fluid-live-panel input{width:150px;vertical-align:middle}#hud,#game,#panel,#help,#topcard,#compass,#perf,#gperf,#keys{visibility:hidden}';
   document.head.append(style);
   const panel=document.createElement('section');panel.id='fluid-live-panel';
   panel.innerHTML='<b>Генакер: отпускание и возврат верёвки</b><p>Лабораторный опыт. Нагрузка на парус сохранена заранее. Движение опоры рассчитано с назначенными массами; настоящий ветер, руль и силы воды ещё не подключены.</p><label>Сторона при перезапуске <select id="fluid-side"><option value="plus">Первая</option><option value="minus">Другая</option></select></label><label>Нагрузка на парус <input id="fluid-pressure" type="range" min="0" max="150" value="100" step="5"> <output id="fluid-pressure-value">100%</output></label><label>Внешний поворачивающий момент <input id="fluid-yaw" type="range" min="-100" max="100" value="0" step="10"> <output id="fluid-yaw-value">0 Н·м</output></label><p id="fluid-sheet-state">Верёвка ещё не подготовлена.</p><button id="fluid-sheet-in" disabled>Подтягивать</button><button id="fluid-sheet-hold" disabled>Держать</button><button id="fluid-sheet-out" disabled>Отпускать</button><p id="fluid-sheet-command"></p><button id="fluid-cycle" disabled>Показать цикл</button><button id="fluid-prepare">Начать заново</button><button id="fluid-run" disabled>Запустить</button><button id="fluid-step" disabled>Один шаг</button><button id="fluid-save" disabled>Скачать запись</button><p id="fluid-status">Подготовьте опыт. Один запуск — до 5 секунд модельного времени.</p><p id="fluid-speed"></p>';
@@ -37,6 +37,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   const rudderControls=document.createElement('div');rudderControls.id='fluid-rudder-controls';rudderControls.hidden=true;
   rudderControls.innerHTML='<label>Цель руля <input id="fluid-rudder" type="range" min="-25" max="25" value="0" step="1"> <output id="fluid-rudder-value">0°</output></label><p id="fluid-boat-state"></p>';
   windControls.after(rudderControls);
+  const applicationReadout=document.createElement('p');applicationReadout.id='fluid-application';applicationReadout.style.color='#ffd08a';applicationReadout.hidden=true;rudderControls.after(applicationReadout);
   // Клавиши панели должны выполнять обычное действие браузера. Они не
   // управляют прежним рулём, камерой или парусами замороженного Boat.
   for(const type of ['keydown','keyup']) {
@@ -50,7 +51,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   let shownStep=0,initial,preparation,snapshotCGM,sheetDirection=0,automaticCycle=false;
   const cycleDirection=()=>steps.length<30?0:steps.length<60?1:steps.length<90?0:steps.length<120?-1:0;
   const controls=()=>{
-    if(fixture?.liveWind&&automaticCycle){const command=(fixture.liveWind.bodyProfile?sv20WindCycleControls:liveWindCycleControls)(steps.length,fixture.side);
+    if(fixture?.liveWind&&automaticCycle){const command=fixture.liveWind.bodyProfile?sv20WindCycleControls(steps.length,fixture.side,fixture.liveWind.cycleWind):liveWindCycleControls(steps.length,fixture.side);
       el('wind-speed').value=String(command.windSpeedMPS);el('wind-from').value=String(command.windFromDeg);el('wind-speed').oninput();el('wind-from').oninput();
       if(fixture.liveWind.bodyProfile){el('rudder').value=String(command.rudderDeg);el('rudder').oninput();}return command;}
     return {...((fixture?.liveWind)?{windSpeedMPS:Number(el('wind-speed').value),windFromDeg:Number(el('wind-from').value)}:
@@ -91,6 +92,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
       if(fixture.liveWind)el('air-state').textContent=`Ветер ${result.audit.air.windSpeedMPS.toFixed(1)} м/с · направление ${result.audit.air.windFromDeg.toFixed(0)}° · нагрузка на парус ${Math.hypot(...result.audit.air.totalForceN).toFixed(1)} Н`;
       if(fixture.liveWind?.bodyProfile){const {phi,psi}=sv20BodyAngles(result.body.orientation9),V=rotate3(result.body.orientation9,result.body.velocity6.slice(0,3));
         el('boat-state').textContent=`Ход ${Math.hypot(V[0],V[1]).toFixed(2)} м/с · крен ${(phi*180/Math.PI).toFixed(1)}° · курс ${(psi*180/Math.PI).toFixed(1)}° · руль ${result.audit.water.rudderDeg.toFixed(1)}°`;}
+      if(result.audit.application){el('application').hidden=result.audit.application.dryCloth;el('application').textContent='Парус касается воды: водная нагрузка на ткань пока не рассчитана. Этот участок выходит за проверенную область.';}
       sheetReadout();
       panel.dataset.step=String(result.index);panel.dataset.modelSeconds=String(result.index*result.hS);
       status.textContent=`Принято ${result.index} шагов · время модели ${(result.index*result.hS).toFixed(2)} с · последний расчёт ${result.stepMs.toFixed(1)} мс`;
@@ -156,6 +158,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
       rudderControls.hidden=!input.liveWind?.bodyProfile;
       panel.querySelector('p').textContent=input.liveWind?.bodyProfile?'Парус и яхта движутся вместе. Эксперимент: спокойная вода до начала глиссирования, без экипажа; масса из пакета SV20, доля генакера оценочная.':liveWind?'Ветер пересчитывает нагрузку по движущемуся парусу. Корпус показывает общую лабораторную опору: руль, плавучесть и сопротивление воды ещё не подключены.':'Лабораторный опыт. Нагрузка на парус сохранена заранее. Движение опоры рассчитано с назначенными массами; настоящий ветер, руль и силы воды ещё не подключены.';
       if(liveWind){el('wind-speed').value=String(input.liveWind.wind.speedMPS);el('wind-from').value=String(input.liveWind.wind.fromDeg);el('wind-speed').oninput();el('wind-from').oninput();el('air-state').textContent='Нагрузка появится после первого шага.';}
+      el('application').hidden=true;
       if(input.liveWind?.bodyProfile){el('rudder').value='0';el('rudder').oninput();el('boat-state').textContent='Ход и крен появятся после первого шага.';}
       preparation={verifyMs:verifiedAt-prepareStart,workerMs:performance.now()-verifiedAt,setupMs:client.ready.setupMs,
         ...(client.ready.material?{material:client.ready.material}:{}),
@@ -168,7 +171,8 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
       geometry.setAttribute('color',new BufferAttribute(new Float32Array(snapshot.positions.length).fill(1),3));
       geometry.setIndex(gridTriangles(input.recipe.rows,input.recipe.cols).flat());genSail.geometry=geometry;
       sheetReadout();
-      status.textContent='Готово. Выберите команду верёвки и запустите опыт. «Показать цикл» повторит отпускание на 25 см и возврат за 3 секунды модели.'+(liveWind?' В цикле ветер меняет скорость 6→7→6 м/с и направление 140→130→160→140° для выбранной стороны.':'')+(input.dirty?' Вход подготовлен с незакоммиченными изменениями.':'');
+      const cycleWind=input.liveWind?.cycleWind??{baseMPS:6,peakMPS:7};
+      status.textContent='Готово. Выберите команду верёвки и запустите опыт. «Показать цикл» повторит отпускание на 25 см и возврат за 3 секунды модели.'+(liveWind?` В цикле ветер меняет скорость ${cycleWind.baseMPS}→${cycleWind.peakMPS}→${cycleWind.baseMPS} м/с и направление 140→130→160→140° для выбранной стороны.`:'')+(input.dirty?' Вход подготовлен с незакоммиченными изменениями.':'');
       el('speed').textContent='';
     } catch(error) {
       prepared?.terminate();if(token===generation){status.textContent=error.message;panel.dataset.error=error.message;}

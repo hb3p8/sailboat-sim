@@ -30,9 +30,18 @@ for(let i=0;i<moving.pos.length/3;i++){const F=Array.from(load.forceN.slice(3*i,
   for(let d=0;d<3;d++){force[d]+=F[d];moment[d]+=M[d];power+=F[d]*moving.vel[3*i+d];}}
 force.forEach((x,d)=>close(x,load.audit.totalForceN[d]));moment.forEach((x,d)=>close(x,load.audit.momentNm[d]));
 close(power,force.reduce((s,x,d)=>s+x*v[d],0)+moment.reduce((s,x,d)=>s+x*omega[d],0));
+// Перенос начала механики в ЦТ не должен менять геометрию/скорость воздуха.
+const geometryCGM=[2.83,0,-.05],spinCG=cross3(omega,geometryCGM),atCG=structuredClone(moving);
+atCG.body.originM=moving.body.originM.map((x,d)=>x+geometryCGM[d]);
+atCG.body.velocity6=[...v.map((x,d)=>x+spinCG[d]),...omega];
+const cgAir=createClothLiveWind(pack,r,{geometryCGM});let cgLoad;
+for(let k=0;k<30;k++)cgLoad=cgAir.evaluate(atCG,{windSpeedMPS:6,windFromDeg:140},k*r.hS);
+load.forceN.forEach((x,k)=>close(x,cgLoad.forceN[k]));
+const shiftedMoment=cross3(geometryCGM,load.audit.totalForceN);
+load.audit.momentNm.forEach((x,d)=>close(x-shiftedMoment[d],cgLoad.audit.momentNm[d]));
 const held=structuredClone(a);sample(state(),8);assert.deepEqual(a,held);
 let rejected=0;for(const controls of [{windSpeedMPS:-1},{windSpeedMPS:13},{windFromDeg:NaN},{windFromDeg:181}]){assert.throws(()=>createClothLiveWind(pack,r).evaluate(quiet,controls),/ветер/);rejected++;assert.deepEqual(quiet,before);}
 const hash=b=>createHash('sha256').update(b).digest('hex');writeFileSync(out,JSON.stringify({schema:'cloth-live-wind-check-v1',phase:'complete',rejected,
   staticForceN:a.audit.totalForceN,staticMomentNm:a.audit.momentNm,powerW:power,frame:'inertial-cartesian-cg',
   sources:Object.fromEntries(['tests/lib/cloth-live-wind.mjs','out/export/physics.json'].map(p=>[p,hash(readFileSync(p))]))},null,2)+'\n',{flag:'wx'});
-console.log('Живой ветер: штиль, движение с потоком, перенос/поворот, сила/три момента/мощность, владение и 4 отказа — пройдены.');
+console.log('Живой ветер: штиль, движение с потоком, перенос/поворот/начало в ЦТ, сила/три момента/мощность, владение и 4 отказа — пройдены.');

@@ -4,9 +4,9 @@ import {Boat} from '../../sim/physics.js';
 import {Cloth} from '../../sim/cloth.js';
 import {checkRotation,rotate3,transpose3,cross3,finiteArray} from './cloth-fluid-inertia.mjs';
 
-export function createClothLiveWind(pack,recipe) {
+export function createClothLiveWind(pack,recipe,{geometryCGM}={}) {
   const n=recipe.rows*recipe.cols;
-  if(!pack?.environment||!pack.rig?.gennaker||recipe.reference?.length!==3*n)
+  if(!pack?.environment||!pack.rig?.gennaker||recipe.reference?.length!==3*n||geometryCGM!==undefined&&!finiteArray(geometryCGM,3))
     throw new Error('Живому ветру нужны физический пакет и проверенный крой');
   const b=new Boat(pack,undefined,{gennakerUp:true,mainUp:false,jibUp:false,localPressure:false});
   b.wind.o.gradient=false;b.wind.o.gust=0;b.wind.o.shift=0;
@@ -23,13 +23,14 @@ export function createClothLiveWind(pack,recipe) {
   b.rig.cloth=c;b.rigSide=recipe.positions[3*(recipe.cols+1)+1]<0?-1:1;
   b.psi=0;b.phi=0;b.th=0;b.u=0;b.v=0;b.r=0;b.p_=0;
   let pose,RT,speedMPS=6,fromDeg=140;
+  const cg=geometryCGM===undefined?undefined:Array.from(geometryCGM);
   const pointWorld=p=>rotate3(pose.orientation9,p).map((v,d)=>v+pose.originM[d]);
   const rigidVelocity=p=>{
     const spin=cross3(pose.velocity6.slice(3),p);
     return rotate3(pose.orientation9,pose.velocity6.slice(0,3).map((v,d)=>v+spin[d]));
   };
   b.apparentAt=(x,y,z)=>{
-    const local=[x,y,z],world=pointWorld(local),w=b.wind.sample(world[0],world[1],Math.max(.3,world[2]),b.t,1),v=rigidVelocity(local);
+    const local=cg?[x,y,z].map((v,d)=>v-cg[d]):[x,y,z],world=pointWorld(local),w=b.wind.sample(world[0],world[1],Math.max(.3,world[2]),b.t,1),v=rigidVelocity(local);
     const relative=rotate3(RT,[w.x-v[0],w.y-v[1],-v[2]]);
     return {x:relative[0],y:relative[1],speed:Math.hypot(relative[0],relative[1]),angle:Math.atan2(relative[1],relative[0]),ws:w.speed};
   };
@@ -43,7 +44,7 @@ export function createClothLiveWind(pack,recipe) {
     for(let i=0;i<n;i++) {
       const p=rotate3(RT,Array.from(motion.pos.slice(3*i,3*i+3),(v,d)=>v-pose.originM[d]));
       const rigid=rigidVelocity(p),relative=rotate3(RT,Array.from(motion.vel.slice(3*i,3*i+3),(v,d)=>v-rigid[d]));
-      for(let d=0;d<3;d++){c.pos[3*i+d]=p[d];c.prev[3*i+d]=p[d]-recipe.hS*relative[d];}
+      for(let d=0;d<3;d++){const geometry=cg?p[d]+cg[d]:p[d];c.pos[3*i+d]=geometry;c.prev[3*i+d]=geometry-recipe.hS*relative[d];}
     }
     b.rig.latRebuild=true;b.o.genSheetLen=motion.ropeLengthsM?.[0]??b.o.genSheetLen;
     b.rig.forces(b,b.apparentWind(),recipe.hS);c.forcesAt(b,recipe.hS,b.rigSide,pack.environment);

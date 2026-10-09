@@ -26,6 +26,7 @@ if(f.liveWind!==undefined) {
   assert.equal(f.liveWind?.model,'rig-current-surface-body-projected-v1','Неизвестная модель живого ветра');
   assert(Number.isFinite(f.liveWind.wind?.speedMPS)&&f.liveWind.wind.speedMPS>=0&&f.liveWind.wind.speedMPS<=12);
   assert(Number.isFinite(f.liveWind.wind?.fromDeg)&&Math.abs(f.liveWind.wind.fromDeg)<=180);
+  assert(f.liveWind.bodyProfile===undefined||f.liveWind.bodyProfile==='sv20-rig-budget-point-v1','Неизвестная опора живого ветра');
 }
 const source=JSON.parse(readFileSync(f.input.path));
 assert.deepEqual(f.recipe,source.recipe);assert.deepEqual(f.bodyInput,source.config.bodyInput);
@@ -57,7 +58,8 @@ if(f.assemblyWasm!==undefined) {
 } else assert.equal(r.preparation.assembly,undefined,'Сборка результата отличается от входа');
 const factor=await loadSparseFactor(readFileSync(f.wasm.path));
 const c=(f.liveWind?liveWindSailMotion:fluidSailMotion)(f.recipe,f.bodyInput,factor,{sheet:f.sheet,materialKernel,assemblyKernel,
-  ...(f.liveWind?{pack:JSON.parse(physicsBytes),wind:f.liveWind.wind}:{})});
+  ...(f.liveWind?{pack:JSON.parse(physicsBytes),wind:f.liveWind.wind,...(f.liveWind.bodyProfile?{bodyProfile:f.liveWind.bodyProfile}:{})}:{})});
+if(c.massBudget){assert.deepEqual(r.preparation.massBudget,c.massBudget);assert.deepEqual(r.preparation.geometryCGM,c.geometryCGM);}
 assert.deepEqual(r.initial,{positions:Array.from(c.motion.pos),body:jsonSerial(c.motion.body)});
 assert(r.steps.length<=300&&Number.isInteger(r.shownStep)&&r.shownStep>=0&&r.shownStep<=r.steps.length);
 const costs=[],delays=[],timings=[];
@@ -93,7 +95,8 @@ for(let i=0;i<r.steps.length;i++) {
 }
 const result={schema:'cloth-fluid-live-report-v1',input,sha256:hash(bytes),revision:f.revision,dirty:f.dirty,
   valid:true,exactSteps:r.steps.length,shownStep:r.shownStep,lastAcceptedStepShown:r.shownStep===r.steps.length,
-  ...(f.liveWind?{liveWind:{...f.liveWind,scope:'Воздух пересчитывается по принятой форме; опора и инерция воды лабораторные, гидросилы/руль/SV20 не приняты.'}}:{}),
+  ...(f.liveWind?{liveWind:{...f.liveWind,scope:f.liveWind.bodyProfile?'Явный сухой бюджет SV20, спокойная вода/руль до 2 м/с; доля генакера оценочная, без экипажа/волн/глиссирования.':'Воздух пересчитывается по принятой форме; опора и инерция воды лабораторные, гидросилы/руль/SV20 не приняты.'}}:{}),
+  ...(c.massBudget?{massBudget:c.massBudget}:{}),
   costsMs:{mean:costs.length?costs.reduce((a,b)=>a+b,0)/costs.length:null,max:costs.length?Math.max(...costs):null},
   maxPresentationDelayMs:delays.length?Math.max(...delays):null,
   ...(materialValidation?{material:{backend:'wasm',module:f.materialWasm,validation:materialValidation}}:{}),

@@ -2,15 +2,16 @@
 import {createFluidWorker} from '../tests/lib/cloth-fluid-client.mjs';
 import {gridTriangles} from '../tests/lib/cloth-material.mjs';
 import {rotate3,transpose3} from '../tests/lib/cloth-fluid-inertia.mjs';
-import {bodyPointLocalX,bodyPointLocalY,bodyPointLocalZ,bodyPoseSceneMatrix} from '../sim/axes.js';
-import {liveWindCycleControls} from '../tests/lib/cloth-live-wind-controls.mjs';
+import {bodyPointLocalX,bodyPointLocalY,bodyPointLocalZ,bodyPoseSceneMatrix,rudderRotY} from '../sim/axes.js';
+import {liveWindCycleControls,sv20WindCycleControls} from '../tests/lib/cloth-live-wind-controls.mjs';
+import {sv20BodyAngles} from '../tests/lib/cloth-sv20-water.mjs';
 const digest=async b=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',b)),v=>v.toString(16).padStart(2,'0')).join('');
 async function bytesAt(path) {
   if(!/^[\w./-]+$/.test(path)||path.includes('..'))throw new Error('Некорректный путь входа');
   const r=await fetch('/'+path,{cache:'no-store'});if(!r.ok)throw new Error(`Не удалось прочитать ${path}: ${r.status}`);
   return r.arrayBuffer();
 }
-export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,jibSail,scene,sea,sunTarget,camera,BufferGeometry,BufferAttribute,indicators=[]}) {
+export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,jibSail,scene,sea,sunTarget,camera,BufferGeometry,BufferAttribute,indicators=[],rudderPivot,crewGroup,windVisual}) {
   if(!renderer.backend.isWebGPUBackend)throw new Error('Живой стенд требует WebGPU');
   const prefix=new URLSearchParams(location.search).get('fluid-live');
   if(!/^[\w-]+$/.test(prefix))throw new Error('Укажите имя подготовленной серии в fluid-live');
@@ -33,6 +34,9 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   const windControls=document.createElement('div');windControls.id='fluid-wind-controls';windControls.hidden=true;
   windControls.innerHTML='<label>Скорость ветра <input id="fluid-wind-speed" type="range" min="0" max="12" value="6" step="0.5"> <output id="fluid-wind-speed-value">6 м/с</output></label><label>Направление к исходному курсу <input id="fluid-wind-from" type="range" min="-180" max="180" value="140" step="5"> <output id="fluid-wind-from-value">140°</output></label><p id="fluid-air-state"></p>';
   panel.querySelector('#fluid-yaw-label').after(windControls);
+  const rudderControls=document.createElement('div');rudderControls.id='fluid-rudder-controls';rudderControls.hidden=true;
+  rudderControls.innerHTML='<label>Цель руля <input id="fluid-rudder" type="range" min="-25" max="25" value="0" step="1"> <output id="fluid-rudder-value">0°</output></label><p id="fluid-boat-state"></p>';
+  windControls.after(rudderControls);
   // Клавиши панели должны выполнять обычное действие браузера. Они не
   // управляют прежним рулём, камерой или парусами замороженного Boat.
   for(const type of ['keydown','keyup']) {
@@ -43,18 +47,22 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   }
   const el=id=>panel.querySelector('#fluid-'+id),status=el('status');
   let client,fixture,geometry,snapshot,running=false,busy=false,generation=0,timer,wallMs=0,steps=[];
-  let shownStep=0,initial,preparation,sheetDirection=0,automaticCycle=false;
+  let shownStep=0,initial,preparation,snapshotCGM,sheetDirection=0,automaticCycle=false;
   const cycleDirection=()=>steps.length<30?0:steps.length<60?1:steps.length<90?0:steps.length<120?-1:0;
   const controls=()=>{
-    if(fixture?.liveWind&&automaticCycle){const command=liveWindCycleControls(steps.length,fixture.side);
-      el('wind-speed').value=String(command.windSpeedMPS);el('wind-from').value=String(command.windFromDeg);el('wind-speed').oninput();el('wind-from').oninput();return command;}
+    if(fixture?.liveWind&&automaticCycle){const command=(fixture.liveWind.bodyProfile?sv20WindCycleControls:liveWindCycleControls)(steps.length,fixture.side);
+      el('wind-speed').value=String(command.windSpeedMPS);el('wind-from').value=String(command.windFromDeg);el('wind-speed').oninput();el('wind-from').oninput();
+      if(fixture.liveWind.bodyProfile){el('rudder').value=String(command.rudderDeg);el('rudder').oninput();}return command;}
     return {...((fixture?.liveWind)?{windSpeedMPS:Number(el('wind-speed').value),windFromDeg:Number(el('wind-from').value)}:
       {pressureScale:Number(el('pressure').value)/100,yawMomentNm:Number(el('yaw').value)}),
+      ...(fixture?.liveWind?.bodyProfile?{rudderDeg:Number(el('rudder').value)}:{}),
       ...(client.ready.sheetControl?{sheetRateMPS:(automaticCycle?cycleDirection():sheetDirection)*client.ready.sheetControl.maxSpeedMPS}:{})};
   };
   for(const [id,suffix] of [['pressure','%'],['yaw',' Н·м']])el(id).oninput=()=>{el(id+'-value').textContent=el(id).value+suffix;};
   for(const [id,suffix] of [['wind-speed',' м/с'],['wind-from','°']])el(id).oninput=()=>{el(id+'-value').textContent=el(id).value+suffix;};
   for(const id of ['wind-speed','wind-from'])el(id).addEventListener('input',()=>{automaticCycle=false;sheetReadout();});
+  el('rudder').oninput=()=>{el('rudder-value').textContent=el('rudder').value+'°';};
+  el('rudder').addEventListener('input',()=>{automaticCycle=false;sheetReadout();});
   function sheetReadout() {
     const limits=client?.ready.sheetControl,rope=snapshot?.audit?.ropes?.[0];
     el('sheet-state').textContent=!limits?'В этой постановке нижний угол закреплён.':
@@ -81,6 +89,8 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
       snapshot=result;steps.push({...result,positions:Array.from(result.positions),forceN:Array.from(result.forceN),sentAt,receivedAt,
         visibilityState:document.visibilityState});
       if(fixture.liveWind)el('air-state').textContent=`Ветер ${result.audit.air.windSpeedMPS.toFixed(1)} м/с · направление ${result.audit.air.windFromDeg.toFixed(0)}° · нагрузка на парус ${Math.hypot(...result.audit.air.totalForceN).toFixed(1)} Н`;
+      if(fixture.liveWind?.bodyProfile){const {phi,psi}=sv20BodyAngles(result.body.orientation9),V=rotate3(result.body.orientation9,result.body.velocity6.slice(0,3));
+        el('boat-state').textContent=`Ход ${Math.hypot(V[0],V[1]).toFixed(2)} м/с · крен ${(phi*180/Math.PI).toFixed(1)}° · курс ${(psi*180/Math.PI).toFixed(1)}° · руль ${result.audit.water.rudderDeg.toFixed(1)}°`;}
       sheetReadout();
       panel.dataset.step=String(result.index);panel.dataset.modelSeconds=String(result.index*result.hS);
       status.textContent=`Принято ${result.index} шагов · время модели ${(result.index*result.hS).toFixed(2)} с · последний расчёт ${result.stepMs.toFixed(1)} мс`;
@@ -132,18 +142,23 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
       const verifiedAt=performance.now();
       let liveWind;
       if(input.liveWind){if(input.liveWind.model!=='rig-current-surface-body-projected-v1')throw new Error('Неизвестная постановка живого ветра');
-        liveWind={pack:JSON.parse(new TextDecoder().decode(await bytesAt('out/export/physics.json'))),wind:input.liveWind.wind};}
+        if(input.liveWind.bodyProfile!==undefined&&input.liveWind.bodyProfile!=='sv20-rig-budget-point-v1')throw new Error('Неизвестный профиль SV20');
+        liveWind={pack:JSON.parse(new TextDecoder().decode(await bytesAt('out/export/physics.json'))),wind:input.liveWind.wind,...(input.liveWind.bodyProfile?{bodyProfile:input.liveWind.bodyProfile}:{})};}
       prepared=await createFluidWorker(input.recipe,input.bodyInput,wasm,{sheet:input.sheet,profile:input.profileWorker??false,materialBytes,assemblyBytes,...(liveWind?{liveWind}:{})});
       if(Boolean(prepared.ready.material)!==Boolean(input.materialWasm))throw new Error('Расчёт выбрал другой материал');
       if(Boolean(prepared.ready.assembly)!==Boolean(input.assemblyWasm))throw new Error('Расчёт выбрал другую сборку');
+      if(Boolean(prepared.ready.massBudget)!==Boolean(input.liveWind?.bodyProfile))throw new Error('Расчёт выбрал другую массу опоры');
       if(token!==generation){prepared.terminate();return;}
-      client=prepared;fixture=input;snapshot=client.ready;initial={positions:Array.from(snapshot.positions),body:structuredClone(snapshot.body)};
+      client=prepared;fixture=input;snapshot=client.ready;snapshotCGM=client.ready.geometryCGM?.slice();initial={positions:Array.from(snapshot.positions),body:structuredClone(snapshot.body)};
       panel.querySelector('#fluid-pressure-label').hidden=Boolean(liveWind);panel.querySelector('#fluid-yaw-label').hidden=Boolean(liveWind);windControls.hidden=!liveWind;
-      panel.querySelector('p').textContent=liveWind?'Ветер пересчитывает нагрузку по движущемуся парусу. Корпус показывает общую лабораторную опору: руль, плавучесть и сопротивление воды ещё не подключены.':'Лабораторный опыт. Нагрузка на парус сохранена заранее. Движение опоры рассчитано с назначенными массами; настоящий ветер, руль и силы воды ещё не подключены.';
+      rudderControls.hidden=!input.liveWind?.bodyProfile;
+      panel.querySelector('p').textContent=input.liveWind?.bodyProfile?'Парус и яхта движутся вместе. Эксперимент: спокойная вода, ход до 2 м/с, без экипажа; масса из пакета SV20, доля генакера оценочная.':liveWind?'Ветер пересчитывает нагрузку по движущемуся парусу. Корпус показывает общую лабораторную опору: руль, плавучесть и сопротивление воды ещё не подключены.':'Лабораторный опыт. Нагрузка на парус сохранена заранее. Движение опоры рассчитано с назначенными массами; настоящий ветер, руль и силы воды ещё не подключены.';
       if(liveWind){el('wind-speed').value=String(input.liveWind.wind.speedMPS);el('wind-from').value=String(input.liveWind.wind.fromDeg);el('wind-speed').oninput();el('wind-from').oninput();el('air-state').textContent='Нагрузка появится после первого шага.';}
+      if(input.liveWind?.bodyProfile){el('rudder').value='0';el('rudder').oninput();el('boat-state').textContent='Ход и крен появятся после первого шага.';}
       preparation={verifyMs:verifiedAt-prepareStart,workerMs:performance.now()-verifiedAt,setupMs:client.ready.setupMs,
         ...(client.ready.material?{material:client.ready.material}:{}),
         ...(client.ready.assembly?{assembly:client.ready.assembly}:{}),
+        ...(client.ready.massBudget?{massBudget:client.ready.massBudget,geometryCGM:client.ready.geometryCGM}:{}),
         ...(input.profileWorker?{compileMs:client.ready.compileMs,modelMs:client.ready.modelMs}:{}),
         visibilityState:document.visibilityState};
       geometry?.dispose();geometry=new BufferGeometry();
@@ -169,7 +184,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
     const record={schema:'cloth-fluid-live-result-v1',fixture,initial,steps:serial(steps),shownStep,wallMs,preparation,
       environment:{userAgent:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency,
         devicePixelRatio,viewport:[innerWidth,innerHeight],visibilityState:document.visibilityState,crossOriginIsolated},
-      scope:fixture.liveWind?'Живой ветер по принятой форме/движению; прежняя проекционная аэродинамика, лабораторные масса и вода. Руль/гидросилы/сухой бюджет SV20 ещё не подключены.':
+      scope:fixture.liveWind?.bodyProfile?'SV20: единый сухой бюджет с явной оценкой доли генакера, спокойная вода/малый ход/руль, без экипажа/течения/волн/глиссирования. Прежний проекционный воздух; G1–G4/C1 не приняты.':fixture.liveWind?'Живой ветер по принятой форме/движению; прежняя проекционная аэродинамика, лабораторные масса и вода. Руль/гидросилы/сухой бюджет SV20 ещё не подключены.':
         'Живой лабораторный опыт; неподвижное поле с управляемым масштабом давления, внешним моментом и необязательной верёвкой. Нет закона воздуха, руля, гидросил и измеренных масс SV20; пик идеальной нерастяжимой верёвки не принят как реальная нагрузка.'};
     return JSON.stringify(record,null,2)+'\n';
   }
@@ -183,20 +198,27 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
     update() {
       if(!snapshot||!geometry)return;
       const {originM,orientation9}=snapshot.body,RT=transpose3(orientation9),positions=snapshot.positions;
+      const geometryCGM=snapshotCGM;
+      const geometryOriginM=geometryCGM?originM.map((v,d)=>v-rotate3(orientation9,geometryCGM)[d]):originM;
       // Полотно задано в мире. Сначала в связанные оси, затем единый перевод сцены.
       const a=geometry.attributes.position;
       for(let i=0;i<positions.length/3;i++) {
         const p=rotate3(RT,[positions[3*i]-originM[0],positions[3*i+1]-originM[1],positions[3*i+2]-originM[2]]);
-        a.setXYZ(i,bodyPointLocalX(p[0]),bodyPointLocalY(p[2]),bodyPointLocalZ(p[1]));
+        const g=geometryCGM?p.map((v,d)=>v+geometryCGM[d]):p;
+        a.setXYZ(i,bodyPointLocalX(g[0]),bodyPointLocalY(g[2]),bodyPointLocalZ(g[1]));
       }
       a.needsUpdate=true;geometry.computeVertexNormals();geometry.computeBoundingSphere();
-      boatGroup.matrixAutoUpdate=false;boatGroup.matrix.set(...bodyPoseSceneMatrix(originM,orientation9));boatGroup.matrixWorldNeedsUpdate=true;
+      boatGroup.matrixAutoUpdate=false;boatGroup.matrix.set(...bodyPoseSceneMatrix(geometryOriginM,orientation9));boatGroup.matrixWorldNeedsUpdate=true;
+      if(crewGroup)crewGroup.visible=!geometryCGM;
+      if(rudderPivot&&geometryCGM)rudderPivot.rotation.y=rudderRotY((snapshot.audit?.water.rudderDeg??0)*Math.PI/180);
+      const shownWind=snapshot.audit?.air??snapshot.liveWind?.wind;
+      if(windVisual&&shownWind){windVisual.direction.value=shownWind.windFromDeg*Math.PI/180;windVisual.speed.value=shownWind.windSpeedMPS;windVisual.gust.value=0;windVisual.shade.value=0;windVisual.time.value=snapshot.index*snapshot.hS;}
       // Лабораторные оси не привязаны к акватории; фоновые объекты не участвуют.
       for(const object of scene.children)if(object!==boatGroup&&object!==sea&&!object.isLight&&object!==sunTarget)object.visible=false;
       genSail.visible=true;mainSail.visible=false;jibSail.visible=false;
       // Ленточки читают остановленный Rig; воздух Worker им пока не передаётся.
       for(const indicator of indicators)indicator.visible=false;
-      const [x,y,z]=originM;camera.position.set(x+9,z+5,-y+16);camera.lookAt(x+3,z+4,-y);
+      const [x,y,z]=geometryOriginM;camera.position.set(x+9,z+5,-y+16);camera.lookAt(x+3,z+4,-y);
       shownStep=snapshot.index??0;panel.dataset.shownStep=String(shownStep);
       const saved=steps[shownStep-1];if(saved&&saved.presentedAt===undefined)saved.presentedAt=performance.now();
     }

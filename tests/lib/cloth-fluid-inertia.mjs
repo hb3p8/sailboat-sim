@@ -45,19 +45,31 @@ function positiveMatrix(m,n,semidefinite) {
   }
 }
 
-export function fluidInertia({dryMassKg,dryPrincipalInertiaKgM2,addedMass6=new Array(36).fill(0)}) {
+export function fluidInertia({dryMassKg,dryPrincipalInertiaKgM2,dryInertia9,addedMass6=new Array(36).fill(0)}) {
   const I=Array.from(dryPrincipalInertiaKgM2??[]),A=Array.from(addedMass6);
-  if(!(Number.isFinite(dryMassKg)&&dryMassKg>0)||!finiteArray(I,3)||I.some(v=>v<=0)||
-      I.some((v,d)=>v>I[(d+1)%3]+I[(d+2)%3])||!finiteArray(A,36))
+  const full=dryInertia9!==undefined,J=full?Array.from(dryInertia9):undefined;
+  if(!(Number.isFinite(dryMassKg)&&dryMassKg>0)||!finiteArray(A,36)||
+      (full?dryPrincipalInertiaKgM2!==undefined||!finiteArray(J,9):!finiteArray(I,3)||I.some(v=>v<=0)||
+      I.some((v,d)=>v>I[(d+1)%3]+I[(d+2)%3])))
     throw new Error('Некорректная сухая масса, физическая инерция или водная матрица');
-  const referenceLengthM=Math.sqrt(I.reduce((s,v)=>s+v,0)/(2*dryMassKg));
+  if(full) {
+    positiveMatrix(J,3,false);
+    const trace=J[0]+J[4]+J[8];
+    // Второй момент распределения массы должен быть неотрицательным.
+    // Это матричный аналог треугольных неравенств главных инерций.
+    positiveMatrix(J.map((v,k)=>(k%4===0?.5*trace:0)-v),3,true);
+  }
+  const referenceLengthM=Math.sqrt((full?J[0]+J[4]+J[8]:I.reduce((s,v)=>s+v,0))/(2*dryMassKg));
   const coordinateScale=[1,1,1,1/referenceLengthM,1/referenceLengthM,1/referenceLengthM];
   const scaled=m=>m.map((v,i)=>v*coordinateScale[Math.floor(i/6)]*coordinateScale[i%6]);
   positiveMatrix(scaled(A),6,true);
-  const M=A.slice(),dryDiagonal=[dryMassKg,dryMassKg,dryMassKg,...I];
-  dryDiagonal.forEach((v,d)=>{M[7*d]+=v;});positiveMatrix(scaled(M),6,false);
+  const M=A.slice();
+  if(full) {
+    for(let d=0;d<3;d++){M[7*d]+=dryMassKg;for(let e=0;e<3;e++)M[6*(d+3)+e+3]+=J[3*d+e];}
+  } else [dryMassKg,dryMassKg,dryMassKg,...I].forEach((v,d)=>{M[7*d]+=v;});
+  positiveMatrix(scaled(M),6,false);
   const frozenM=Object.freeze(M),frozenA=Object.freeze(A);
-  return Object.freeze({dryMassKg,dryPrincipalInertiaKgM2:Object.freeze(I),referenceLengthM,
+  return Object.freeze({dryMassKg,...(full?{dryInertia9:Object.freeze(J)}:{dryPrincipalInertiaKgM2:Object.freeze(I)}),referenceLengthM,
     matrix6:frozenM,addedMass6:frozenA,
     momentum(velocity6) {
       if(!finiteArray(velocity6,6))throw new Error('Нужны шесть конечных скоростей');

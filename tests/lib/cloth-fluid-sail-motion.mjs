@@ -5,8 +5,9 @@ import {fluidInertia} from './cloth-fluid-inertia.mjs';
 import {materialSurface,gridTriangles,MODEL_MATERIAL} from './cloth-material.mjs';
 import {installSharedForces} from './cloth-shared-input.mjs';
 import {distance} from '../cloth-compliance.mjs';
+import {sv20SailMass} from './cloth-sv20-mass.mjs';
 
-export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='schur-wasm',hS=r.hS,allowRefinementGrid=false,sheet,materialKernel,assemblyKernel}={}) {
+export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='schur-wasm',hS=r.hS,allowRefinementGrid=false,sheet,materialKernel,assemblyKernel,sv20Pack}={}) {
   const n=r.rows*r.cols;
   const gridAccepted=r.rows===11&&r.cols===9 || allowRefinementGrid&&
     Number.isInteger(r.rows)&&Number.isInteger(r.cols)&&r.rows>=11&&r.cols>=9&&r.rows<=41&&r.cols<=33&&
@@ -16,7 +17,10 @@ export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='sch
     throw new Error('Нужна проверенная лабораторная постановка 11×9');
   const addedDiagonal=[60,1000,1200,250,4500,3500];
   const addedMass6=Array.from({length:36},(_,i)=>i%7===0?addedDiagonal[i/7]:0);
-  const inertia=fluidInertia({dryMassKg:bodyInput.massKg,dryPrincipalInertiaKgM2:bodyInput.principalInertiaKgM2,addedMass6});
+  const bodyMass=sv20Pack?sv20SailMass(sv20Pack,r):undefined;
+  const inertia=bodyMass?.inertia??fluidInertia({dryMassKg:bodyInput.massKg,dryPrincipalInertiaKgM2:bodyInput.principalInertiaKgM2,addedMass6});
+  const originM=bodyMass?.cgM??bodyInput.originM;
+  const bodySheet=bodyMass&&sheet?{...sheet,localM:sheet.localM.map((v,d)=>v-originM[d])}:sheet;
   const surface=materialSurface(r.reference,gridTriangles(r.rows,r.cols),MODEL_MATERIAL,
     {bendingModel:'curvature',rows:r.rows,cols:r.cols,materialKernel});
   const constraints=[...surface.constraints,...r.hard.map(c=>Object.assign(distance(c.a,c.b,c.rest,0,c.unilateral),{family:c.family}))];
@@ -32,8 +36,8 @@ export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='sch
     throw new Error('Верёвка должна освобождать нижний задний угол паруса');
   const velocity=positions.map((v,k)=>(v-previous[k])/r.prevDt);
   const motion=new FluidBodyEnergyMotion({positions,mass:r.mass.slice(0,n),constraints,velocityMS:velocity,dampingHz:6,
-    linearBackend,wasmSparseFactor,assemblyKernel,gridRows:r.rows,gridCols:r.cols,ropes:sheet?[sheet]:[],
-    body:{inertia,originM:bodyInput.originM,orientation9:[1,0,0,0,1,0,0,0,1],velocity6:[0,0,0,0,0,0],
+    linearBackend,wasmSparseFactor,assemblyKernel,gridRows:r.rows,gridCols:r.cols,ropes:bodySheet?[bodySheet]:[],
+    body:{inertia,originM,orientation9:[1,0,0,0,1,0,0,0,1],velocity6:[0,0,0,0,0,0],
       attachments:r.rigidBody.attachments.filter(node=>!sheet||node!==sheet.node),frame:'body-cg'}});
   const forceN=new Float64Array(3*n),cloth={rows:r.rows,cols:r.cols,n,
     pos:motion.pos,prev:Float64Array.from(previous),frc:forceN,nrm:new Float64Array(3*n),pattern(){},velocityDt(){return hS;}};
@@ -66,6 +70,7 @@ export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='sch
       throw new Error('Шаг не выполнил проверку работы сил');
     return audit;
   }
-  return {motion,forceN,addedMass6,material:MODEL_MATERIAL,hS,sheetControl,prepareLoad,solve,
+  return {motion,forceN,addedMass6:bodyMass?.audit.addedMass6??addedMass6,material:MODEL_MATERIAL,hS,sheetControl,prepareLoad,solve,
+    ...(bodyMass?{massBudget:bodyMass.audit,geometryCGM:Array.from(bodyMass.cgM)}:{}),
     step(controls){prepareLoad(controls);return solve();}};
 }

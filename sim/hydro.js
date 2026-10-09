@@ -9,6 +9,40 @@
 
 import { wrapPi, DEG } from './util.js';
 
+// Один расчёт киля, его следа и руля для обычного и общего механического шага.
+// Скорости задаются в точках крыльев; старый Boat отдельно передаёт качку,
+// чтобы сохранить прежний порядок вычитаний и численный результат.
+export function appendageForces(P,{keelU,keelV,rudderU,rudderSway,rudderRoll=0,rudderAngle}) {
+  const env=P.environment,keel=P.foils.keel,rud=P.foils.rudder;
+  const kf=foilForce(env,keel,keelU,keelV,0,0);
+  const jc=keel.junction_cda_m2||0,bl=P.foils.bulb;
+  let bulbCda=0;
+  if(bl&&Math.abs(keelU)>.05) {
+    const re=Math.abs(keelU)*bl.length_m/env.nu_water;
+    const cf=.075/Math.pow(Math.log10(re)-2,2);
+    bulbCda=cf*bl.form_factor*bl.wetted_m2;
+  }
+  const keelFx=kf.fx-Math.sign(keelU||1)*.5*env.rho_water*(jc+bulbCda)*keelU*keelU;
+  const dx=keel.x_m-rud.x_m,bh=Math.abs(keel.z_centre_m)+.5*keel.span_m;
+  const far=1+dx/Math.hypot(dx,bh),wake=Math.max(0,Math.min(1,keelU/.5));
+  const eps=far*(kf.cl||0)/(Math.PI*keel.effective_ar*.9)*wake;
+  const rf=foilForce(env,rud,rudderU,rudderSway-rudderU*eps-rudderRoll,rudderAngle,.004);
+  return {kf,rf,keelFx,rudFx:rf.fx,eps};
+}
+
+// Прежние доли критического демпфирования, из тех же масс/геометрии.
+// Сопротивления знаковые; вызывающий код прикладывает их против скорости.
+export function waterDamping(P,hyd,{massKg,crewKg=0,rollInertia,rollRate,heaveRate,pitchRate}) {
+  const m=P.mass,env=P.environment,mh=(massKg+crewKg)*(1+(m.added_heave!=null?m.added_heave:1.2));
+  const ip=m.iyy_kg_m2*(1+(m.added_pitch!=null?m.added_pitch:.9));
+  const wn=Math.sqrt(massKg*env.g*Math.max(.05,P.hydrostatics.gm_m)/rollInertia);
+  const rollMomentNm=-2*.18*wn*rollInertia*rollRate;
+  if(!hyd)return {rollMomentNm,heaveResistanceN:0,pitchResistanceNm:0,mh,ip};
+  const kh=env.rho_water*env.g*Math.max(.5,hyd.awp),kp=env.rho_water*env.g*Math.max(.5,hyd.ilong);
+  return {rollMomentNm,heaveResistanceN:2*.40*Math.sqrt(kh*mh)*heaveRate,
+    pitchResistanceNm:2*.30*Math.sqrt(kp*ip)*pitchRate,mh,ip};
+}
+
 // Коэффициент поперечного обтекания полоски корпуса. Для мелкого широкого
 // днища это около единицы; величина одна и общая, а не набор подгоночных.
 const HULL_CROSSFLOW_CD = 1.0;

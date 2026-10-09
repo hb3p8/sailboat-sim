@@ -15,8 +15,9 @@ const physics=readFileSync('out/export/physics.json');assert.equal(hash(physics)
 const serial=v=>ArrayBuffer.isView(v)?Array.from(v):Array.isArray(v)?v.map(serial):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,serial(x)])):v;
 const json=v=>JSON.parse(JSON.stringify(serial(v)));
 const make=async()=>liveWindSailMotion(f.recipe,f.bodyInput,await loadSparseFactor(readFileSync(f.wasm.path)),
-  {pack:JSON.parse(physics),wind:f.liveWind.wind,sheet:f.sheet,materialKernel:await loadMaterialKernel(readFileSync(f.materialWasm.path)),assemblyKernel:await loadAssemblyKernel(readFileSync(f.assemblyWasm.path))});
+  {pack:JSON.parse(physics),wind:f.liveWind.wind,sheet:f.sheet,...(f.liveWind.bodyProfile?{bodyProfile:f.liveWind.bodyProfile}:{}),materialKernel:await loadMaterialKernel(readFileSync(f.materialWasm.path)),assemblyKernel:await loadAssemblyKernel(readFileSync(f.assemblyWasm.path))});
 const free=await make(),recordedAir=await make(),differences={};
+if(f.liveWind.bodyProfile){assert.deepEqual(r.preparation.massBudget,json(free.massBudget));assert.deepEqual(r.preparation.geometryCGM,free.geometryCGM);}
 function compare(a,b,path) {
   if(typeof a==='number'&&typeof b==='number') {
     assert(Number.isFinite(a)&&Number.isFinite(b));if(a===b)return;
@@ -32,10 +33,12 @@ for(const s of r.steps) {
   const a=free.step(s.controls),state=json({positions:free.motion.pos,body:free.motion.body,forceN:free.forceN,audit:a});
   compare(state.positions,s.positions,'free.positionsM');compare(state.body,s.body,'free.body');compare(state.forceN,s.forceN,'free.forceN');compare(state.audit,s.audit,'free.audit');
   reference.steps.push({...s,...state,stepMs:0,sentAt:0,receivedAt:0,presentedAt:0});
-  recordedAir.prepareLoad(s.controls);
+  const preparedLoad=recordedAir.prepareLoad(s.controls);
   compare(Array.from(recordedAir.forceN),s.forceN,'airOnRecordedState.forceN');
+  if(f.liveWind.bodyProfile){compare(preparedLoad.forceN,s.audit.water.totalForceN,'waterOnRecordedState.forceN');compare(preparedLoad.momentNm,s.audit.water.totalMomentNm,'waterOnRecordedState.momentNm');
+    preparedLoad.forceN=Array.from(s.audit.water.totalForceN);preparedLoad.momentNm=Array.from(s.audit.water.totalMomentNm);}
   recordedAir.forceN.set(s.forceN);const m=recordedAir.solve();
-  const expectedAudit={...s.audit};delete expectedAudit.air;const actualAudit=json(m);delete actualAudit.air;
+  const expectedAudit={...s.audit};delete expectedAudit.air;delete expectedAudit.water;const actualAudit=json(m);delete actualAudit.air;delete actualAudit.water;
   try {assert.deepEqual(json(recordedAir.motion.pos),s.positions);assert.deepEqual(json(recordedAir.motion.body),s.body);assert.deepEqual(actualAudit,expectedAudit);exactRecordedAirSteps++;}
   catch(e){mechanicalRefusals.push({step:s.index,message:e.message.slice(0,1000)});}
 }

@@ -27,10 +27,11 @@ import { Cloth } from './cloth.js';
 import { Buoyancy } from './buoyancy.js';
 import { wrapPi, clamp, DEG } from './util.js';
 import { lerpTable, foilCoeffs, hullResistance, hullLateral, hullHeelYaw,
-         foilForce, planing, humpSquat } from './hydro.js';
+         planing, humpSquat, appendageForces, waterDamping } from './hydro.js';
 import { Rig, windage, sailCoeffs, STRIPS, NCHORD, LATTICE_EVERY,
          BOOM_INERTIA, BOOM_DAMP } from './aero.js';
 import { telemetryOf } from './telemetry.js';
+import { rudderAngleAfter } from './rudder.js';
 import { fetchFactor, shelterFactor, channelTurn,
          WIND_SHORE_A, WIND_SHORE_L } from './terrain.js';
 
@@ -101,7 +102,7 @@ const SHOAL_DRAG = 1.5;
 // порыв сначала кладёт, и только потом его откренивают.
 // Доли критического демпфирования вертикальной и килевой качки. Вертикальная
 // гасится сильнее: она излучает волны всей площадью ватерлинии.
-const HEAVE_ZETA = 0.40, PITCH_ZETA = 0.30;
+// Доли демпфирования находятся в общем waterDamping (hydro.js).
 const HIKE_TAU = 1.2;
 
 // Плечо ОТКРЕНИВАЮЩЕГО экипажа, м: насколько вбок от диаметральной уходит его
@@ -127,7 +128,6 @@ const CREW_ARM = 1.4;
 // Перо руля не переставляется мгновенно: на румпеле рука, а не сервопривод.
 // Ограничение живёт здесь, а не в интерфейсе, — это свойство лодки, и тесты
 // должны видеть ту же задержку, что и человек за рулём.
-const RUDDER_RATE = 26 * DEG;
 
 
 
@@ -459,11 +459,7 @@ export class Boat {
   step(dt) {
     const P = this.p, env = P.environment, m = P.mass;
 
-    if (this.o.rudderTarget != null) {
-      const d = this.o.rudderTarget - this.o.rudder;
-      const lim = RUDDER_RATE * dt;
-      this.o.rudder += Math.max(-lim, Math.min(lim, d));
-    }
+    this.o.rudder=rudderAngleAfter(this.o.rudder,this.o.rudderTarget,dt);
 
     // Опорный ветер живёт в опциях, чтобы интерфейс и тесты крутили одно
     // число; поле ветра берёт его отсюда, а профиль и порывы добавляет само.
@@ -585,69 +581,12 @@ export class Boat {
     // глухой множитель ниже от хода не зависит вовсе.
     const cgz0 = P.mass.cg_m[2];
     const keelRz = keel.z_centre_m - cgz0, rudRz = rud.z_centre_m - cgz0;
-    const kf = foilForce(env, keel, this.u,
-                              this.v + this.r * (keel.x_m - cgx0)
-                              - this.p_ * keelRz, 0, 0);
-    const keelSide = kf.fy * cphi;
-    // Сопротивление стыка киля с корпусом. В углу, где перо входит в днище,
-    // пограничные слои сливаются и на передней кромке сворачивается
-    // подковообразный вихрь; величина посчитана по Хёрнеру из снятых с чертежа
-    // толщины и хорды (scripts/build_physics.py). Подъёмной силы не даёт —
-    // только тормозит, и потому идёт прямо вдоль движения.
-    // Сюда же и бульб: у пера с рулём сопротивление идёт через профильный
-    // коэффициент крыла, отнесённый к площади в плане, а бульб — тело
-    // вращения, и в модели его не было вовсе. Трение по своей длине: у него
-    // своё число Рейнольдса, вчетверо меньше корпусного.
-    const jc = keel.junction_cda_m2 || 0;
-    const bl = P.foils.bulb;
-    let bulbCda = 0;
-    if (bl && Math.abs(this.u) > 0.05) {
-      const re = Math.abs(this.u) * bl.length_m / env.nu_water;
-      const cf = 0.075 / Math.pow(Math.log10(re) - 2, 2);
-      bulbCda = cf * bl.form_factor * bl.wetted_m2;
-    }
-    const keelFx = kf.fx - Math.sign(this.u || 1) *
-                   0.5 * env.rho_water * (jc + bulbCda) * this.u * this.u;
+    const {kf,rf,keelFx,rudFx}=appendageForces(P,{
+      keelU:this.u,keelV:this.v+this.r*(keel.x_m-cgx0)-this.p_*keelRz,
+      rudderU:this.u,rudderSway:this.v+this.r*(rud.x_m-cgx0),
+      rudderRoll:this.p_*rudRz,rudderAngle:this.o.rudder});
+    const keelSide=kf.fy*cphi,rudSide=rf.fy*cphi;
 
-    // Руль стоит в скосе от киля, и это не мелочь.
-    //
-    // Киль тянет за собой вихревую пелену, и в ней поток отклонён. На самой
-    // несущей линии скос вдвое меньше, чем в дальнем поле; насколько к дальнему
-    // полю успело подойти у пера — считается по геометрии, из расстояния между
-    // ними и полуразмаха киля вместе с зеркальным отражением в свободной
-    // поверхности. У SV20 выходит 1.91 из 2: перо стоит в двух размахах позади,
-    // это почти уже дальнее поле.
-    //
-    // На угле дрейфа в пять градусов киль наводит около четырёх, и от
-    // собственного угла атаки у пера остаётся меньше градуса: незаложенный руль
-    // на ходу почти не несёт.
-    //
-    // Отсюда два следствия сразу, и второе важнее. Первое: боковой силы у пера
-    // меньше, и её добирает киль. Второе: подъёмная сила пера перпендикулярна
-    // МЕСТНОМУ потоку, а он отклонён, — значит она завалена назад, и это
-    // индуктивное сопротивление сверх собственного. Оба выходят сами, стоит
-    // подать в крыло повёрнутую скорость, а не поворачивать силу руками.
-    //
-    // На заднем ходу пелена киля уходит вперёд, и скоса нет; переход растянут,
-    // чтобы в левентике не было скачка. Обратное влияние — подпор от пера на
-    // киль — не считается: перо вчетверо слабее и стоит далеко позади.
-    //
-    // Разворот пелены на крене здесь не учтён: накренённый киль уводит её под
-    // ветер, а перо стоит в ДП, и скос у него от этого меньше. Явление
-    // настоящее, но считать его — значит считать саму пелену, а это уже другая
-    // задача. Пока модель ошибается в сторону БОЛЬШЕГО дрейфа, и это первое,
-    // что покажет замер по GPS-треку.
-    const dx = keel.x_m - rud.x_m;
-    const bh = Math.abs(keel.z_centre_m) + 0.5 * keel.span_m;   // с отражением
-    const far = 1 + dx / Math.hypot(dx, bh);
-    const wake = Math.max(0, Math.min(1, this.u / 0.5));
-    const eps = far * (kf.cl || 0) / (Math.PI * keel.effective_ar * 0.9) * wake;
-    const rf = foilForce(env, rud, this.u,
-                              this.v + this.r * (rud.x_m - cgx0) - this.u * eps
-                              - this.p_ * rudRz,
-                              this.o.rudder, 0.004);
-    const rudSide = rf.fy * cphi;
-    const rudFx = rf.fx;
 
     // Гидростатика и глиссирование считаются ЗДЕСЬ, до сопротивления, потому что
     // сопротивление от них теперь зависит: всплывшая лодка меньше трёт и меньше
@@ -885,8 +824,9 @@ export class Boat {
     // Гидродинамическое демпфирование качки: доля критического, иначе крен
     // звенит. Аэродинамическое сюда не входит и больше не нужно — оно
     // получается само из полосок, машущих по воздуху при качке.
-    const wn = Math.sqrt(this.mass * env.g * Math.max(0.05, P.hydrostatics.gm_m) / ix);
-    const damp = -2 * 0.18 * wn * ix * this.p_;
+    const wetDamping=waterDamping(P,hyd,{massKg:this.mass,crewKg:mCrew,
+      rollInertia:ix,rollRate:this.p_,heaveRate:this.w,pitchRate:this.q});
+    const damp=wetDamping.rollMomentNm;
     const dp = (sailHeel + windHeel + foilHeel + hullHeel +
                 righting + hikeMoment + damp) / ix;
 
@@ -951,16 +891,13 @@ export class Boat {
       // градусах это уже сотни ньютонов, то есть десятки килограммов груза.
       this.vertN = fx * nx + fy * ny + sail.fz * nz;
       const fv = fb - mAll * env.g + this.vertN + planeLift * nz;
-      const mh = mAll * (1 + (m.added_heave != null ? m.added_heave : 1.2));
-      const ip = m.iyy_kg_m2 * (1 + (m.added_pitch != null ? m.added_pitch : 0.9));
+      const {mh,ip}=wetDamping;
       // Демпфирование — доля критического, как и у качки. Жёсткость берётся из
       // того же расчёта: площадь ватерлинии для всплытия, её продольный момент
       // инерции для дифферента. Так коэффициент не приходится подбирать заново
       // при каждой смене обводов.
-      const kh = env.rho_water * env.g * Math.max(0.5, hyd.awp);
-      const kp = env.rho_water * env.g * Math.max(0.5, hyd.ilong);
-      const dw = (fv - 2 * HEAVE_ZETA * Math.sqrt(kh * mh) * this.w) / mh;
-      const dq = (mth - 2 * PITCH_ZETA * Math.sqrt(kp * ip) * this.q) / ip;
+      const dw = (fv - wetDamping.heaveResistanceN) / mh;
+      const dq = (mth - wetDamping.pitchResistanceNm) / ip;
       this.w = clamp(this.w + dw * dt, 6);
       this.q = clamp(this.q + dq * dt, 3);
       this.zc = clamp(this.zc + this.w * dt, 2);

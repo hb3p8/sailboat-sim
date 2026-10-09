@@ -51,6 +51,7 @@ export function fluidWorkerHandler(post) {
           ...(material?{material}:{}),
           ...(assembly?{assembly}:{}),
           ...(calculation.liveWind?{liveWind:calculation.liveWind}:{}),
+          ...(calculation.massBudget?{massBudget:calculation.massBudget,geometryCGM:calculation.geometryCGM}:{}),
           ...(calculation.sheetControl?{sheetControl:calculation.sheetControl}:{})});
       } else if(type==='step') {
         if(!calculation)throw new Error('Расчёт не подготовлен');

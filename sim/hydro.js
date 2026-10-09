@@ -182,6 +182,11 @@ export function hullResistance(P, u, heelDeg, mods) {
 const PLANE_FN0 = 0.5;
 const PLANE_FN1 = 0.9;
 
+// Граница вытесняющего окна из прежнего начала модели глиссирования.
+export function displacementSpeedLimit(P) {
+  return PLANE_FN0*Math.sqrt(P.environment.g*P.hydrostatics.lwl_m);
+}
+
 // Верхний предел доли смоченной длины от транца, на которой стоит центр
 // давления. У Савицкого Cp = 0.75 − 1/(5.21·Cv²/λ² + 2.39): к 0.75 на больших
 // скоростях, к трети на малых.

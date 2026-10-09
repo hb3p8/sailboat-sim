@@ -52,7 +52,7 @@ const records=inputs.map(path=>{
     ...(assemblyWasm?{assemblyWasm:{path:assemblyWasm,sha256:hash(readFileSync(assemblyWasm))}}:{}),
     recipe:s.recipe,bodyInput:s.config.bodyInput,side,...(profileWorker?{profileWorker:true}:{}),
     ...(proof?{sheet:proof.r.parameters.sheet,sheetProof:{path:proof.path,sha256:proof.sha256,revision:proof.r.revision}}:{}),
-    ...(liveWind?{liveWind:{model:'rig-current-surface-body-projected-v1',wind:{speedMPS:6,fromDeg:s.config.tack*140},...(sv20?{bodyProfile:'sv20-rig-budget-point-v1'}:{})}}:{})}};
+    ...(liveWind?{liveWind:{model:'rig-current-surface-body-projected-v1',wind:{speedMPS:6,fromDeg:s.config.tack*140},...(sv20?{bodyProfile:'sv20-rig-budget-point-v1',worldVelocityDampingHz:0}:{})}}:{})}};
 });
 assert.equal(new Set(records.map(r=>r.path)).size,2);
 for(const r of records)assert(!existsSync(r.path),'Сохранённый вход нельзя перезаписывать');

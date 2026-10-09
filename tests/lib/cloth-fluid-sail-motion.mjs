@@ -35,7 +35,9 @@ export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='sch
   if(sheet&&(sheet.node!==r.cols-1||!r.rigidBody.attachments.includes(sheet.node)))
     throw new Error('Верёвка должна освобождать нижний задний угол паруса');
   const velocity=positions.map((v,k)=>(v-previous[k])/r.prevDt);
-  const motion=new FluidBodyEnergyMotion({positions,mass:r.mass.slice(0,n),constraints,velocityMS:velocity,dampingHz:6,
+  // Мировое затухание узлов лаборатории тормозит и равномерное движение яхты.
+  // У SV20 остаются физические силы воздуха/воды и неявное решение материала.
+  const motion=new FluidBodyEnergyMotion({positions,mass:r.mass.slice(0,n),constraints,velocityMS:velocity,dampingHz:bodyMass?0:6,
     linearBackend,wasmSparseFactor,assemblyKernel,gridRows:r.rows,gridCols:r.cols,ropes:bodySheet?[bodySheet]:[],
     body:{inertia,originM,orientation9:[1,0,0,0,1,0,0,0,1],velocity6:[0,0,0,0,0,0],
       attachments:r.rigidBody.attachments.filter(node=>!sheet||node!==sheet.node),frame:'body-cg'}});

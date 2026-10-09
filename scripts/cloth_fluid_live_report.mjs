@@ -27,6 +27,7 @@ if(f.liveWind!==undefined) {
   assert(Number.isFinite(f.liveWind.wind?.speedMPS)&&f.liveWind.wind.speedMPS>=0&&f.liveWind.wind.speedMPS<=12);
   assert(Number.isFinite(f.liveWind.wind?.fromDeg)&&Math.abs(f.liveWind.wind.fromDeg)<=180);
   assert(f.liveWind.bodyProfile===undefined||f.liveWind.bodyProfile==='sv20-rig-budget-point-v1','Неизвестная опора живого ветра');
+  if(f.liveWind.bodyProfile)assert.equal(f.liveWind.worldVelocityDampingHz,0,'Вход содержит мировое торможение SV20');
 }
 const source=JSON.parse(readFileSync(f.input.path));
 assert.deepEqual(f.recipe,source.recipe);assert.deepEqual(f.bodyInput,source.config.bodyInput);
@@ -95,7 +96,7 @@ for(let i=0;i<r.steps.length;i++) {
 }
 const result={schema:'cloth-fluid-live-report-v1',input,sha256:hash(bytes),revision:f.revision,dirty:f.dirty,
   valid:true,exactSteps:r.steps.length,shownStep:r.shownStep,lastAcceptedStepShown:r.shownStep===r.steps.length,
-  ...(f.liveWind?{liveWind:{...f.liveWind,scope:f.liveWind.bodyProfile?'Явный сухой бюджет SV20, спокойная вода/руль до 2 м/с; доля генакера оценочная, без экипажа/волн/глиссирования.':'Воздух пересчитывается по принятой форме; опора и инерция воды лабораторные, гидросилы/руль/SV20 не приняты.'}}:{}),
+  ...(f.liveWind?{liveWind:{...f.liveWind,scope:f.liveWind.bodyProfile?'Явный сухой бюджет SV20, спокойная вода/руль до исходного начала глиссирования; доля генакера оценочная, без экипажа/волн.':'Воздух пересчитывается по принятой форме; опора и инерция воды лабораторные, гидросилы/руль/SV20 не приняты.'}}:{}),
   ...(c.massBudget?{massBudget:c.massBudget}:{}),
   costsMs:{mean:costs.length?costs.reduce((a,b)=>a+b,0)/costs.length:null,max:costs.length?Math.max(...costs):null},
   maxPresentationDelayMs:delays.length?Math.max(...delays):null,

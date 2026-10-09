@@ -143,16 +143,18 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
       let liveWind;
       if(input.liveWind){if(input.liveWind.model!=='rig-current-surface-body-projected-v1')throw new Error('Неизвестная постановка живого ветра');
         if(input.liveWind.bodyProfile!==undefined&&input.liveWind.bodyProfile!=='sv20-rig-budget-point-v1')throw new Error('Неизвестный профиль SV20');
+        if(input.liveWind.bodyProfile&&input.liveWind.worldVelocityDampingHz!==0)throw new Error('Вход SV20 содержит мировое торможение ткани');
         liveWind={pack:JSON.parse(new TextDecoder().decode(await bytesAt('out/export/physics.json'))),wind:input.liveWind.wind,...(input.liveWind.bodyProfile?{bodyProfile:input.liveWind.bodyProfile}:{})};}
       prepared=await createFluidWorker(input.recipe,input.bodyInput,wasm,{sheet:input.sheet,profile:input.profileWorker??false,materialBytes,assemblyBytes,...(liveWind?{liveWind}:{})});
       if(Boolean(prepared.ready.material)!==Boolean(input.materialWasm))throw new Error('Расчёт выбрал другой материал');
       if(Boolean(prepared.ready.assembly)!==Boolean(input.assemblyWasm))throw new Error('Расчёт выбрал другую сборку');
       if(Boolean(prepared.ready.massBudget)!==Boolean(input.liveWind?.bodyProfile))throw new Error('Расчёт выбрал другую массу опоры');
+      if(input.liveWind?.bodyProfile&&prepared.ready.liveWind.worldVelocityDampingHz!==0)throw new Error('В SV20 включено мировое торможение');
       if(token!==generation){prepared.terminate();return;}
       client=prepared;fixture=input;snapshot=client.ready;snapshotCGM=client.ready.geometryCGM?.slice();initial={positions:Array.from(snapshot.positions),body:structuredClone(snapshot.body)};
       panel.querySelector('#fluid-pressure-label').hidden=Boolean(liveWind);panel.querySelector('#fluid-yaw-label').hidden=Boolean(liveWind);windControls.hidden=!liveWind;
       rudderControls.hidden=!input.liveWind?.bodyProfile;
-      panel.querySelector('p').textContent=input.liveWind?.bodyProfile?'Парус и яхта движутся вместе. Эксперимент: спокойная вода, ход до 2 м/с, без экипажа; масса из пакета SV20, доля генакера оценочная.':liveWind?'Ветер пересчитывает нагрузку по движущемуся парусу. Корпус показывает общую лабораторную опору: руль, плавучесть и сопротивление воды ещё не подключены.':'Лабораторный опыт. Нагрузка на парус сохранена заранее. Движение опоры рассчитано с назначенными массами; настоящий ветер, руль и силы воды ещё не подключены.';
+      panel.querySelector('p').textContent=input.liveWind?.bodyProfile?'Парус и яхта движутся вместе. Эксперимент: спокойная вода до начала глиссирования, без экипажа; масса из пакета SV20, доля генакера оценочная.':liveWind?'Ветер пересчитывает нагрузку по движущемуся парусу. Корпус показывает общую лабораторную опору: руль, плавучесть и сопротивление воды ещё не подключены.':'Лабораторный опыт. Нагрузка на парус сохранена заранее. Движение опоры рассчитано с назначенными массами; настоящий ветер, руль и силы воды ещё не подключены.';
       if(liveWind){el('wind-speed').value=String(input.liveWind.wind.speedMPS);el('wind-from').value=String(input.liveWind.wind.fromDeg);el('wind-speed').oninput();el('wind-from').oninput();el('air-state').textContent='Нагрузка появится после первого шага.';}
       if(input.liveWind?.bodyProfile){el('rudder').value='0';el('rudder').oninput();el('boat-state').textContent='Ход и крен появятся после первого шага.';}
       preparation={verifyMs:verifiedAt-prepareStart,workerMs:performance.now()-verifiedAt,setupMs:client.ready.setupMs,

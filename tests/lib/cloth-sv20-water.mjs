@@ -1,7 +1,7 @@
 // Первое водное соединение: спокойная вода, малый ход, без экипажа/глиссирования.
 // Формулы корпуса/крыльев/демпфирования читаются из общих модулей симулятора.
 import {Buoyancy} from '../../sim/buoyancy.js';
-import {appendageForces,waterDamping,hullResistance,hullLateral,hullHeelYaw} from '../../sim/hydro.js';
+import {appendageForces,waterDamping,hullResistance,hullLateral,hullHeelYaw,displacementSpeedLimit} from '../../sim/hydro.js';
 import {checkRotation,rotate3,cross3,finiteArray} from './cloth-fluid-inertia.mjs';
 
 export function sv20BodyAngles(R) {
@@ -21,7 +21,8 @@ export function createSV20Water(pack,geometryCGM,bodyKg) {
     const geometryOriginM=body.originM.map((v,d)=>v-rotate3(R,cg)[d]);
     const localVelocity=p=>{const spin=cross3(nu.slice(3),p.map((v,d)=>v-cg[d]));return nu.slice(0,3).map((v,d)=>v+spin[d]);};
     const packV=localVelocity(pm.cg_m);
-    if(Math.hypot(packV[0],packV[1])>2)throw new Error('Первый водный опыт проверяется только до 2 м/с');
+    const speedLimitMPS=displacementSpeedLimit(pack);
+    if(Math.hypot(packV[0],packV[1])>speedLimitMPS)throw new Error(`Водный опыт ограничен началом глиссирования (${speedLimitMPS.toFixed(2)} м/с)`);
     const hyd=buoy.at(geometryOriginM[2],phi,th),k=pack.foils.keel,r=pack.foils.rudder;
     const kv=localVelocity([k.x_m,0,k.z_centre_m]),rv=localVelocity([r.x_m,0,r.z_centre_m]);
     const appendages=appendageForces(pack,{keelU:kv[0],keelV:kv[1],rudderU:rv[0],rudderSway:rv[1],rudderAngle:rudderDeg*Math.PI/180});
@@ -50,8 +51,8 @@ export function createSV20Water(pack,geometryCGM,bodyKg) {
     const forceN=[0,0,0],momentNm=[0,0,0];
     for(const p of parts)for(let d=0;d<3;d++){forceN[d]+=p.forceN[d];momentNm[d]+=p.momentNm[d];}
     return {forceN,momentNm,audit:{model:'sv20-flat-water-slow-v1',originM:Array.from(body.originM),geometryOriginM,
-      rudderDeg,hyd,parts,totalForceN:forceN,totalMomentNm:momentNm,
+      rudderDeg,speedLimitMPS,hyd,parts,totalForceN:forceN,totalMomentNm:momentNm,
       dampingPowerW:roll*rollRate+pitch*pitchRate-damping.heaveResistanceN*worldV[2],
-      scope:'Спокойная вода, ход до 2 м/с, без экипажа/течения/волн/глиссирования. Полная скорость точки крыла; прежний скос киля и оценки демпфирования.'}};
+      scope:'Спокойная вода до исходного начала глиссирования, без экипажа/течения/волн. Полная скорость точки крыла; прежний скос киля и оценки демпфирования.'}};
   }};
 }

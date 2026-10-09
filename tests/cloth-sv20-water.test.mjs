@@ -10,6 +10,7 @@ import {fluidInertia} from './lib/cloth-fluid-inertia.mjs';
 import {FluidBodyEnergyMotion} from './lib/cloth-fluid-body-motion.mjs';
 import {rudderAngleAfter} from '../sim/rudder.js';
 import {sv20BodyAngles} from './lib/cloth-sv20-water.mjs';
+import {displacementSpeedLimit} from '../sim/hydro.js';
 const [out]=process.argv.slice(2);assert(out&&process.argv.length===3&&!existsSync(out));
 const bytes=readFileSync('out/export/physics.json'),p=JSON.parse(bytes),cg=p.mass.cg_m,water=createSV20Water(p,cg,p.mass.total_kg);
 const close=(a,b)=>assert(Math.abs(a-b)<=2048*Number.EPSILON*Math.max(1,Math.abs(a),Math.abs(b)),`${a} != ${b}`);
@@ -31,7 +32,7 @@ for(const deg of [-10,0,10])rudder.push(water.evaluate({...b,velocity6:[1,0,0,0,
 close(rudder[0].forceN[0],rudder[2].forceN[0]);close(rudder[0].forceN[1],-rudder[2].forceN[1]);close(rudder[0].momentNm[2],-rudder[2].momentNm[2]);assert(Math.abs(rudder[0].momentNm[2])>1);
 for(const k of ['forceN','momentNm'])for(let d=0;d<3;d++)close(load[k][d],load.audit.parts.reduce((sum,q)=>sum+q[k][d],0));
 assert.throws(()=>water.evaluate(b,{rudderDeg:26}),/руль/);
-assert.throws(()=>water.evaluate({...b,velocity6:[2.1,0,0,0,0,0]}),/2 м/);
+assert.throws(()=>water.evaluate({...b,velocity6:[displacementSpeedLimit(p)+.1,0,0,0,0,0]}),/глиссир/);
 assert.throws(()=>water.evaluate({...b,orientation9:boatBodyRotation(0,0,.8)}),/дифферент/);
 // Известное тело без паруса: ход сначала задан, два руля дают встречные повороты.
 const m=p.mass,A=[m.total_kg*m.added_surge,m.total_kg*m.added_sway,m.total_kg*m.added_heave,m.ixx_kg_m2*(m.added_roll-1),m.iyy_kg_m2*m.added_pitch,m.izz_kg_m2*m.added_yaw];

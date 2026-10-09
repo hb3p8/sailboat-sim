@@ -39,6 +39,6 @@ export function liveWindSailMotion(r,bodyInput,factor,{pack,wind,sheet,materialK
       throw new Error('Живой шаг не выполнил прежнюю проверку работы сил');
     timeS+=base.hS;return {...audit,air:airAudit,...(water?{water:waterAudit}:{} )};
   }
-  return {...base,liveWind:{model:air.model,wind:commands,...(isSV20?{bodyProfile}:{}),
-    scope:isSV20?'SV20: явный сухой бюджет, спокойная вода/руль до 2 м/с, без экипажа/волн/глиссирования; генакер как прежде в опыте.':'живой ветер, лабораторная опора; руль/гидросилы/SV20 ещё не подключены'},prepareLoad,solve,step(c){prepareLoad(c);return solve();}};
+  return {...base,liveWind:{model:air.model,wind:commands,...(isSV20?{bodyProfile,worldVelocityDampingHz:base.motion.dampingHz}:{}),
+    scope:isSV20?'SV20: явный сухой бюджет, спокойная вода/руль до исходного начала глиссирования, без экипажа/волн; мировое численное торможение выключено.':'живой ветер, лабораторная опора; руль/гидросилы/SV20 ещё не подключены'},prepareLoad,solve,step(c){prepareLoad(c);return solve();}};
 }

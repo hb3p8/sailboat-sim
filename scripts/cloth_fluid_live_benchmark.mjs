@@ -29,6 +29,8 @@ function copyModule(path) {
   assert.deepEqual(imports(now),imports(old),'Два варианта должны иметь тот же граф импортов');imports(now).forEach(copyModule);
 }
 copyModule('tests/lib/cloth-fluid-sail-motion.mjs');
+const live=inputs.some(p=>JSON.parse(readFileSync(p)).fixture.liveWind);
+if(live)copyModule('tests/lib/cloth-live-wind-sail-motion.mjs');
 // Загрузчик вызывается динамически в дочернем повторе, вне графа фабрики.
 copyModule('tests/lib/cloth-sparse-wasm.mjs');
 copyModule('tests/lib/cloth-sparse-kernel.c');
@@ -38,12 +40,13 @@ writeFileSync(resolve(copies,'benchmark-tool.mjs'),readFileSync(fileURLToPath(im
 for(const path of ['tests/probes/cloth-material-wasm.mjs','tests/probes/cloth-material-engine-check.mjs',
   'tests/probes/cloth-assembly-wasm.mjs','tests/probes/cloth-assembly-engine-check.mjs'])copyModule(path);
 assert((changed.length>0||candidateWasm)&&changed.every(p=>['tests/lib/cloth-fluid-schur-direction.mjs','tests/lib/cloth-fluid-body-motion.mjs',
-  'tests/lib/cloth-material.mjs','tests/lib/cloth-sparse-wasm.mjs','tests/lib/cloth-fluid-inertia.mjs'].includes(p)),
+  'tests/lib/cloth-material.mjs','tests/lib/cloth-sparse-wasm.mjs','tests/lib/cloth-fluid-inertia.mjs','tests/probes/cloth-assembly-wasm.mjs'].includes(p)),
   'Опыт ограничен материалом, направлением, малыми матричными операциями и оболочкой общего расчёта');
 const linearCandidate=candidateWasm?{path:candidateWasm,sha256:hash(readFileSync(candidateWasm))}:undefined;
 const fixtures=inputs.map(path=>{
   const b=readFileSync(path),r=JSON.parse(b),f=r.fixture;
   assert.equal(r.schema,'cloth-fluid-live-result-v1');assert.equal(f.dirty,false);assert.equal(r.steps.length,180);assert.equal(r.shownStep,180);
+  assert.equal(Boolean(f.liveWind),live);if(live)assert.equal(f.liveWind.bodyProfile,'sv20-rig-budget-point-v1');
   assert(f.sheet&&f.sheetProof,'Нужен полный проверенный цикл со свободным углом');
   for(const [p,sha] of Object.entries(f.sourceSha256))assert.equal(hash(execFileSync('git',['show',`${f.revision}:${p}`],{maxBuffer:16*1024*1024})),sha);
   for(const part of [f.input,f.wasm,f.scene,f.sheetProof,...(f.materialWasm?[f.materialWasm]:[]),
@@ -79,17 +82,23 @@ if(materialKernel)assert.deepEqual(verifyMaterialKernel(materialKernel,f.recipe)
 else assert.equal(r.preparation.material,undefined);
 if(assemblyKernel)assert.deepEqual(verifyAssemblyKernel(assemblyKernel,f.recipe),r.preparation.assembly.validation);
 else assert.equal(r.preparation.assembly,undefined);
-const c=fluidSailMotion(f.recipe,f.bodyInput,factor,{sheet:f.sheet,materialKernel,assemblyKernel}),times=[],stepCpu=[],stepThreadCpuMs=[],states=[];
+const c=f.liveWind?(await import(new URL('./cloth-live-wind-sail-motion.mjs',pathToFileURL(modulePath)))).liveWindSailMotion(f.recipe,f.bodyInput,factor,
+  {pack:JSON.parse(readFileSync('out/export/physics.json')),wind:f.liveWind.wind,bodyProfile:f.liveWind.bodyProfile,sheet:f.sheet,materialKernel,assemblyKernel}):
+  fluidSailMotion(f.recipe,f.bodyInput,factor,{sheet:f.sheet,materialKernel,assemblyKernel}),times=[],stepCpu=[],stepThreadCpuMs=[],states=[];
 const serial=v=>ArrayBuffer.isView(v)?Array.from(v):Array.isArray(v)?v.map(serial):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,serial(x)])):v;
 const json=v=>JSON.parse(JSON.stringify(serial(v)));
 assert.deepEqual(r.initial,json({positions:c.motion.pos,body:c.motion.body}));
 for(const s of r.steps) {
-  const cpuBeforeStep=process.cpuUsage(),threadBeforeStep=process.threadCpuUsage(),start=performance.now(),audit=c.step(s.controls);
+  const cpuBeforeStep=process.cpuUsage(),threadBeforeStep=process.threadCpuUsage(),start=performance.now();let audit;
+  if(f.liveWind){const load=c.prepareLoad(s.controls);c.forceN.set(s.forceN);load.forceN=s.audit.water.totalForceN.slice();load.momentNm=s.audit.water.totalMomentNm.slice();audit=c.solve();}
+  else audit=c.step(s.controls);
   times.push(performance.now()-start);const thread=process.threadCpuUsage(threadBeforeStep),usage=process.cpuUsage(cpuBeforeStep);
   stepThreadCpuMs.push((thread.user+thread.system)/1000);
   stepCpu.push({userMs:usage.user/1000,systemMs:usage.system/1000});
   const state=json({positions:c.motion.pos,body:c.motion.body,forceN:c.forceN,audit});
-  assert.deepEqual(state,{positions:s.positions,body:s.body,forceN:s.forceN,audit:s.audit});states.push(state);
+  const expected=structuredClone({positions:s.positions,body:s.body,forceN:s.forceN,audit:s.audit});
+  if(f.liveWind)for(const x of [state,expected]){delete x.audit.air;delete x.audit.water;}
+  assert.deepEqual(state,expected);states.push(state);
 }
 const cpu=process.cpuUsage(before),wallMs=performance.now()-begin,sorted=times.slice(1).sort((a,b)=>a-b);
 writeFileSync(output,JSON.stringify({runtime:process.version,hardware:{cpu:cpus()[0]?.model,platform:process.platform,arch:process.arch},
@@ -103,6 +112,7 @@ const report={schema:'cloth-fluid-live-benchmark-v1',revision:execFileSync('git'
   dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),baselineRevision:baseline,
   toolSha256:hash(readFileSync(fileURLToPath(import.meta.url))),sourceSha256,baselineSha256,changedSources:changed,
   ...(linearCandidate?{linearCandidate}:{}),
+  ...(live?{loadMode:'recorded-sv20-air-water-v1',liveScope:'Механика повторяется на записанных силах воздуха/воды. Их подготовка включена в время, полный межсредовый воздух/вода не принимаются.'}:{}),
   inputs:fixtures.map(({path,sha256,side})=>({path,sha256,side})),runs:[],checkedSteps:0,
   rule:'Три пары каждого борта, порядок вариантов чередуется. Материал и сборщик выбираются из записи и проходят её проверку до измерения шагов. Таймер шага и CPU каждого шага исключают сверку/запись; CPU рабочего потока сохранён отдельно, CPU окна включает сверку и подготовку WASM/модели. CPU процесса учитывает все потоки, в том числе возможную компиляцию; измерение шагов добавляет вызовы часов и cpuUsage/threadCpuUsage. Все времена/первые шаги сохранены, followingCpu/followingThreadCpuMs относятся к 2–180. Node, не браузер.'};
 process.once('uncaughtException',e=>{report.phase='failed';report.failure={message:e.message,stack:e.stack};

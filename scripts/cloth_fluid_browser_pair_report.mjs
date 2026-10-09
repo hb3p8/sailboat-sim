@@ -11,6 +11,8 @@ const hash=b=>createHash('sha256').update(b).digest('hex'),bytes=readFileSync(in
 assert.equal(f.schema,'cloth-fluid-browser-pair-fixture-v1');assert.equal(r.schema,'cloth-fluid-browser-pair-v1');assert.equal(f.phase,'complete');assert.equal(r.phase,'complete');assert.equal(f.dirty,false);
 assert.equal(r.input.path,'/'+fixture);assert.equal(r.input.sha256,hash(fb));assert.equal(r.fixtureRevision,f.revision);assert.equal(r.fixtureDirty,false);assert.equal(r.profile,f.profile);assert([1,2,3].includes(r.pair));
 assert.deepEqual(r.graphs,f.graphs);assert.deepEqual(r.modules,f.modules);
+assert.deepEqual(r.liveWind,f.liveWind);
+if(f.liveWind){assert.equal(f.liveWind.mode,'recorded-sv20-air-water-v1');assert.equal(hash(readFileSync(f.liveWind.physics.path)),f.liveWind.physics.sha256);}
 assert.equal(typeof f.profile,'boolean');
 assert.deepEqual(Object.keys(f.graphs.baseline.originalSha256).sort(),Object.keys(f.graphs.candidate.originalSha256).sort());
 assert.deepEqual(f.changedSources,Object.entries(f.graphs.baseline.originalSha256).filter(([p,h])=>f.graphs.candidate.originalSha256[p]!==h).map(([p])=>p));
@@ -27,10 +29,13 @@ assert.equal(hash(readFileSync(f.source.path)),f.source.sha256);assert.equal(r.p
 assert.equal(r.page.endedVisibility,'visible');assert(r.page.visibility.length&&r.page.visibility.every(x=>x.state==='visible'));
 assert(r.page.url.endsWith('/tests/probes/cloth-fluid-browser-pair-review.html?input=/'+fixture));assert.equal(r.records.length,360);
 const report={schema:'cloth-fluid-browser-pair-report-v1',phase:'checking',input:{path:input,sha256:hash(bytes)},fixture:{path:fixture,sha256:hash(fb)},pair:r.pair,profile:r.profile,changedSources:f.changedSources,exactPairs:0,rows:[]};
+if(f.liveWind)report.liveWind=f.liveWind;
 let k=0;for(const part of f.inputs){const old=JSON.parse(readFileSync(part.path)),rows=[];
   for(const s of old.steps){const x=r.records[k++];assert.equal(x.side,part.side);assert.equal(x.step,s.index);assert.deepEqual(x.order,(s.index+r.pair)%2?['baseline','candidate']:['candidate','baseline']);
     assert.deepEqual(x.states.baseline,x.states.candidate);
-    for(const v of ['baseline','candidate']){assert.deepEqual(x.states[v],{positions:s.positions,body:s.body,forceN:s.forceN,audit:s.audit});const t=x.times[v];assert(Number.isFinite(t.stepMs)&&t.stepMs>=0);assert.equal(Boolean(t.profile),f.profile);
+    for(const v of ['baseline','candidate']){const actual=structuredClone(x.states[v]),expected=structuredClone({positions:s.positions,body:s.body,forceN:s.forceN,audit:s.audit});
+      if(f.liveWind)for(const a of [actual,expected]){delete a.audit.air;delete a.audit.water;}
+      assert.deepEqual(actual,expected);const t=x.times[v];assert(Number.isFinite(t.stepMs)&&t.stepMs>=0);assert.equal(Boolean(t.profile),f.profile);
       if(f.profile){const p=t.profile;assert(Math.abs(p.loadMs+p.physicsMs-t.stepMs)<1e-6);assert.equal(p.linear.factorCalls,t.wasm.numericFactorizations);
         for(const group of Object.values(p.directions)){assert.equal(new Set(Object.values(group).map(y=>y.calls)).size,1);assert(Object.values(group).every(y=>y.ms>=-1e-6&&Number.isFinite(y.ms)));}
         const directionMs=Object.values(p.directions).flatMap(Object.values).reduce((sum,y)=>sum+y.ms,0);

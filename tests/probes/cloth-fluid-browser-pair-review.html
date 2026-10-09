@@ -3,18 +3,21 @@
 <style>body{font:17px/1.5 system-ui,sans-serif;background:#f2f6f8;color:#163443;max-width:1000px;margin:30px auto;padding:0 20px}button,select{font:inherit;padding:8px;margin:8px 14px 8px 0}pre{white-space:pre-wrap;background:white;padding:20px;border-radius:8px}small{display:block}</style>
 <h1>Стоимость полного шага паруса</h1><p>Два независимых расчёта повторяют одно движение. Здесь измеряется время вычислений; скорость изображения проверяется в симуляторе отдельно.</p>
 <label>Пара <select id="pair"><option>1</option><option>2</option><option>3</option></select></label><br>
-<button id="run">Выполнить пару</button><button id="download" disabled>Скачать результат</button><small id="input"></small>
+<button id="run">Выполнить пару</button><button id="download" disabled>Скачать результат</button><button id="show" disabled>Показать запись</button><small id="input"></small>
+<div id="record-panel" hidden><textarea id="record" aria-label="Запись пары" readonly style="width:100%;height:180px"></textarea><button id="close">Закрыть запись</button></div>
 <pre id="status" role="status">Готов к запуску.</pre><pre id="summary">Результата ещё нет.</pre>
 <script type="module">
 import {shaProbe} from './cloth-sparse-browser-probe.mjs';
-const input=new URLSearchParams(location.search).get('input'),run=document.querySelector('#run'),download=document.querySelector('#download'),status=document.querySelector('#status'),summary=document.querySelector('#summary');let result;
+const input=new URLSearchParams(location.search).get('input'),run=document.querySelector('#run'),download=document.querySelector('#download'),status=document.querySelector('#status'),summary=document.querySelector('#summary'),show=document.querySelector('#show'),panel=document.querySelector('#record-panel'),record=document.querySelector('#record');let result;
+show.addEventListener('click',()=>{record.value=JSON.stringify(result,null,2)+'\n';panel.hidden=false;});
+document.querySelector('#close').addEventListener('click',()=>{panel.hidden=true;record.value='';});
 document.querySelector('#input').textContent='Вход: '+input;
-run.addEventListener('click',()=>{run.disabled=true;download.disabled=true;result=undefined;status.textContent='Проверка файлов и подготовка…';status.dataset.phase='running';
+run.addEventListener('click',()=>{run.disabled=true;download.disabled=true;show.disabled=true;panel.hidden=true;record.value='';result=undefined;status.textContent='Проверка файлов и подготовка…';status.dataset.phase='running';
   const pair=Number(document.querySelector('#pair').value),worker=new Worker(new URL('./cloth-fluid-browser-pair-worker.mjs',import.meta.url),{type:'module'}),visibility=[{at:performance.now(),state:document.visibilityState}],track=()=>visibility.push({at:performance.now(),state:document.visibilityState});document.addEventListener('visibilitychange',track);
   const finish=()=>{document.removeEventListener('visibilitychange',track);worker.terminate();run.disabled=false;};
   worker.onerror=e=>{status.textContent='Ошибка Worker: '+e.message;finish();};
   worker.onmessage=async({data})=>{if(data.type==='progress'){status.textContent=data.message;return;}if(data.type==='error'){status.textContent=data.message;finish();return;}
-    const page=await fetch(location.href,{cache:'no-store'}).then(r=>r.arrayBuffer());result={...data.result,page:{url:location.href,sha256:await shaProbe(page),width:innerWidth,height:innerHeight,dpr:devicePixelRatio,visibility,endedVisibility:document.visibilityState},collectedAt:new Date().toISOString()};finish();download.disabled=false;
+    const page=await fetch(location.href,{cache:'no-store'}).then(r=>r.arrayBuffer());result={...data.result,page:{url:location.href,sha256:await shaProbe(page),width:innerWidth,height:innerHeight,dpr:devicePixelRatio,visibility,endedVisibility:document.visibilityState},collectedAt:new Date().toISOString()};finish();download.disabled=false;show.disabled=false;
     status.dataset.phase=result.phase;status.dataset.exactPairs=String(result.exactPairs);status.textContent=result.phase==='complete'?'Готово. Все пары совпали точно.':'Опыт остановлен: '+result.failure?.message;
     const times={baseline:0,candidate:0};for(const x of result.records)for(const v of Object.keys(times))if(x.step>1)times[v]+=x.times[v].stepMs;
     summary.textContent=`Пара ${pair}, ${result.profile?'подробные стадии':'обычные шаги'}\nТочных пар: ${result.exactPairs}\nСредний рабочий шаг, мс: прежний ${(times.baseline/358).toFixed(3)}, новый ${(times.candidate/358).toFixed(3)}\nИзменение: ${(100*(times.candidate/times.baseline-1)).toFixed(2)}%\nПолное окно с проверками: ${result.wallMs.toFixed(1)} мс\nВремя по часам, не CPU и не частота кадров.`;};

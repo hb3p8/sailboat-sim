@@ -12,7 +12,8 @@ self.addEventListener('message',async({data})=>{
     result={schema:'cloth-fluid-browser-pair-v1',phase:'preparing',input:{path:input,sha256:await shaProbe(fixtureBytes)},fixtureRevision:f.revision,fixtureDirty:f.dirty,pair,profile:f.profile,
       graphs:f.graphs,modules:f.modules,preparation:{},records:[],exactPairs:0,...(f.correctionProfile?{correctionProfile:true}:{}),...(f.materialProfile?{materialProfile:true}:{}),
       environment:{userAgent:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency,crossOriginIsolated:self.crossOriginIsolated},
-      rule:'Порядок каждой пары шагов чередуется, первый прежний→новый в 1/3, наоборот в 2. Сверка/сериализация вне таймеров. Время по часам не CPU/FPS; все первые шаги/подготовка сохранены.'};
+      rule:'Порядок каждой пары шагов чередуется; начальный порядок меняется со сменой пары. Сверка/сериализация вне таймеров. Время по часам не CPU/FPS; все первые шаги/подготовка сохранены.'};
+    let pack;if(f.liveWind){check(f.liveWind.mode==='recorded-sv20-air-water-v1','Неизвестный повтор SV20');pack=JSON.parse(new TextDecoder().decode(await fetchProbe(f.liveWind.physics)));result.liveWind=f.liveWind;}
     const files={...f.sourceSha256};for(const [v,g] of Object.entries(f.graphs))for(const [p,h] of Object.entries(g.sourceSha256))files[v+'/'+p]=h;
     for(const [p,h] of Object.entries(files)){const b=await fetch(new URL(p,graphRoot),{cache:'no-store'}).then(r=>{check(r.ok,'Не прочитан '+p);return r.arrayBuffer();});check(await shaProbe(b)===h,'Изменился исходник '+p);}
     const bytes={};for(const name of ['linear','material','assembly'])bytes[name]=await fetchProbe(f.modules[name]);
@@ -21,13 +22,17 @@ self.addEventListener('message',async({data})=>{
       api[v]={...await import(url),...await import(new URL('./cloth-sparse-wasm.mjs',url)),...await import(new URL('./cloth-worker-timing.mjs',url)),...await import(new URL('./cloth-fluid-timing.mjs',url)),
         ...await import(new URL('../probes/cloth-material-wasm.mjs',url)),...await import(new URL('../probes/cloth-material-engine-check.mjs',url)),
         ...await import(new URL('../probes/cloth-assembly-wasm.mjs',url)),...await import(new URL('../probes/cloth-assembly-engine-check.mjs',url)),
+        ...(f.liveWind?await import(new URL('./cloth-live-wind-sail-motion.mjs',url)):{}),
         ...(f.profile?await import(new URL('./cloth-fluid-schur-direction.mjs',url)):{}),
         ...(f.materialProfile?await import(new URL('./cloth-fluid-body-motion.mjs',url)):{}),};}
     for(const part of f.inputs){const old=JSON.parse(new TextDecoder().decode(await fetchProbe(part))),recipe=old.fixture,contexts={};
       for(const v of pair%2?['baseline','candidate']:['candidate','baseline']){
         const a=api[v],t=performance.now(),factor=await a.loadSparseFactor(bytes.linear),materialKernel=await a.loadMaterialKernel(bytes.material),assemblyKernel=await a.loadAssemblyKernel(bytes.assembly),compiled=performance.now();
         equalProbe(a.verifyMaterialKernel(materialKernel,recipe.recipe),old.preparation.material.validation);equalProbe(a.verifyAssemblyKernel(assemblyKernel,recipe.recipe),old.preparation.assembly.validation);
-        const verified=performance.now(),linear=f.profile?a.observeSparseFactor(factor):undefined,c=a.fluidSailMotion(recipe.recipe,recipe.bodyInput,linear?.factor??factor,{sheet:recipe.sheet,materialKernel,assemblyKernel}),stages=f.profile?a.observeFluidStages(c.motion):undefined;
+        const verified=performance.now(),linear=f.profile?a.observeSparseFactor(factor):undefined,c=f.liveWind?
+          a.liveWindSailMotion(recipe.recipe,recipe.bodyInput,linear?.factor??factor,{pack,wind:recipe.liveWind.wind,bodyProfile:recipe.liveWind.bodyProfile,sheet:recipe.sheet,materialKernel,assemblyKernel}):
+          a.fluidSailMotion(recipe.recipe,recipe.bodyInput,linear?.factor??factor,{sheet:recipe.sheet,materialKernel,assemblyKernel}),stages=f.profile?a.observeFluidStages(c.motion):undefined;
+        if(f.liveWind){equalProbe(serialProbe(c.massBudget),old.preparation.massBudget);equalProbe(c.geometryCGM,old.preparation.geometryCGM);}
         contexts[v]={c,factor,linear,stages};result.preparation[part.side+'-'+v]={compileMs:compiled-t,checkMs:verified-compiled,modelMs:performance.now()-verified,setupMs:performance.now()-t};
         equalProbe(JSON.parse(JSON.stringify(serialProbe({positions:c.motion.pos,body:c.motion.body}))),old.initial);}
       for(const s of old.steps){const times={},states={},order=(s.index+pair)%2?['baseline','candidate']:['candidate','baseline'];
@@ -35,13 +40,18 @@ self.addEventListener('message',async({data})=>{
             directionBefore=f.profile?a.directionProfile():undefined,sparseBefore=f.profile?a.sparseProfile():undefined,
             correctionBefore=f.correctionProfile?a.correctionProfile():undefined,materialBefore=f.correctionProfile?a.materialHessianProfile():undefined,
             readSoftBefore=f.materialProfile?a.readSoftProfile():undefined,valuesBefore=f.materialProfile?a.materialValuesProfile():undefined;
-          const t=performance.now();let audit,loaded;if(f.profile){c.prepareLoad(s.controls);loaded=performance.now();audit=c.solve();}else audit=c.step(s.controls);
+          const t=performance.now();let audit,loaded;
+          if(f.liveWind){const load=c.prepareLoad(s.controls);c.forceN.set(s.forceN);load.forceN=s.audit.water.totalForceN.slice();load.momentNm=s.audit.water.totalMomentNm.slice();loaded=performance.now();audit=c.solve();}
+          else if(f.profile){c.prepareLoad(s.controls);loaded=performance.now();audit=c.solve();}else audit=c.step(s.controls);
           const ended=performance.now();times[v]={stepMs:ended-t,wasm:difference(factor.statistics(),wasmBefore)};
           if(f.profile)times[v].profile={loadMs:loaded-t,physicsMs:ended-loaded,stages:a.stageDifference(stages.snapshot(),before),linear:difference(linear.snapshot(),linearBefore),
             directions:difference(a.directionProfile().phases,directionBefore.phases),sparse:difference(a.sparseProfile(),sparseBefore),
             ...(f.correctionProfile?{correction:difference(a.correctionProfile(),correctionBefore),materialHessian:difference(a.materialHessianProfile(),materialBefore)}:{}),
             ...(f.materialProfile?{readSoft:difference(a.readSoftProfile(),readSoftBefore),materialValues:difference(a.materialValuesProfile(),valuesBefore)}:{})};
-          states[v]=serialProbe({positions:c.motion.pos,body:c.motion.body,forceN:c.forceN,audit});equalProbe(JSON.parse(JSON.stringify(states[v])),{positions:s.positions,body:s.body,forceN:s.forceN,audit:s.audit},'прежний шаг '+s.index);}
+          states[v]=serialProbe({positions:c.motion.pos,body:c.motion.body,forceN:c.forceN,audit});
+          const actual=JSON.parse(JSON.stringify(states[v])),expected=structuredClone({positions:s.positions,body:s.body,forceN:s.forceN,audit:s.audit});
+          if(f.liveWind)for(const x of [actual,expected]){delete x.audit.air;delete x.audit.water;}
+          equalProbe(actual,expected,'прежний механический шаг '+s.index);}
         equalProbe(states.baseline,states.candidate,'строгая пара '+s.index);result.exactPairs++;result.records.push({side:part.side,step:s.index,order,times,states});
         if(s.index%30===0)self.postMessage({type:'progress',message:`${part.side==='plus'?'Первая':'Другая'} сторона: ${s.index}/180; ${result.exactPairs} точных пар.`});}
     }

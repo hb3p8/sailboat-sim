@@ -4,8 +4,10 @@ import {readFileSync} from 'node:fs';
 import {FluidBodyEnergyMotion} from './lib/cloth-fluid-body-motion.mjs';
 import {fluidInertia} from './lib/cloth-fluid-inertia.mjs';
 import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
-const args=process.argv.slice(2);assert(args.length===1&&args[0].startsWith('--wasm='),'Нужен --wasm=модуль');
-const wasmSparseFactor=await loadSparseFactor(readFileSync(args[0].slice(7)));
+import {loadAssemblyKernel} from './probes/cloth-assembly-wasm.mjs';
+const args=process.argv.slice(2),wasm=args.find(a=>a.startsWith('--wasm='))?.slice(7),assembly=args.find(a=>a.startsWith('--assembly-wasm='))?.slice(16);
+assert(wasm&&args.length===1+Number(Boolean(assembly))&&args.every(a=>/^--(wasm|assembly-wasm)=.+$/.test(a)),'Нужен --wasm=модуль, необязательный --assembly-wasm=сборщик');
+const wasmSparseFactor=await loadSparseFactor(readFileSync(wasm)),assemblyKernel=assembly?await loadAssemblyKernel(readFileSync(assembly)):undefined;
 const positions=[0,0,0,1,2,3],h=.1,alphas=[2,3,4];
 const inertia=fluidInertia({dryMassKg:10,dryPrincipalInertiaKgM2:[2,3,4],addedMass6:new Array(36).fill(0)});
 const load={frame:'inertial-cartesian-cg',clothForceN:new Float64Array(6),forceN:[0,0,0],momentNm:[0,0,0]};
@@ -25,7 +27,7 @@ for(const repeated of [false,true])for(const frozen of [false,true]) {
       return {C:q[3+d]-q[d],grad:nodes.map((node,k)=>[node,Array.from(values.slice(3*k,3*k+3))])};
     },...(buffered?{gradientNodes:nodes,gradientGroup:group,gradientSlot:d,valueInto(q,g){fill(d,g);return q[3+d]-q[d];}}:{})}));
     const m=new FluidBodyEnergyMotion({positions,mass:[1,1],constraints,dampingHz:0,
-      linearBackend:'schur-wasm',wasmSparseFactor,body:{inertia,originM:[0,0,0],orientation9:[1,0,0,0,1,0,0,0,1],
+      linearBackend:'schur-wasm',wasmSparseFactor,assemblyKernel,body:{inertia,originM:[0,0,0],orientation9:[1,0,0,0,1,0,0,0,1],
         velocity6:[0,0,0,0,0,0],attachments:[],frame:'body-cg'}});
     return {m,counters,nodes};
   }

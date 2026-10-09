@@ -28,10 +28,14 @@ export async function loadAssemblyKernel(bytes) {
     throw new Error('Неверный вход сборки');
    let offset=0;
    for(let k=0;k<count;k++) {
-    const g=soft[k]?.g,alpha=soft[k]?.c?.alpha;
+    const g=soft[k]?.g,alpha=soft[k]?.c?.alpha,direct=soft[k]?.directValues;
     if(!Array.isArray(g)||g.length!==sizes[k]||!Number.isFinite(alpha)||!(alpha>0))throw new Error('Некорректный градиент/податливость');
+    if(direct!==undefined&&(!(direct instanceof Float64Array)||direct.length!==sizes[k]))throw new Error('Некорректный прямой снимок градиента');
     alphas[k]=alpha;
-    for(let j=0;j<g.length;j++) {
+    if(direct)for(let j=0;j<direct.length;j++) {
+     // Прежняя раскладка через Map начинала сумму с +0, включая -0.
+     const v=0+direct[j];if(!Number.isFinite(v))throw new Error('Неконечный градиент');values[offset++]=v;
+    } else for(let j=0;j<g.length;j++) {
      const v=g[j]?.[1];if(!Number.isFinite(v))throw new Error('Неконечный градиент');values[offset++]=v;
     }
    }

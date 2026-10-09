@@ -18,6 +18,10 @@ for(const [name,mutate] of [
   ['вложенное-время',x=>{x.records[0].times.candidate.profile.directions.ordinary.linear.ms=1e9;}],
   ['счётчики-wasm',x=>{x.records[0].times.candidate.profile.sparse.factorNative.calls++;}],
   ['время-wasm',x=>{x.records[0].times.candidate.profile.sparse.factorNative.ms=1e9;}],
+  ...(r.liveWind?[
+    ['режим-нагрузки-sv20',x=>{x.liveWind.mode='free-live';}],
+    ['пакет-sv20',x=>{x.liveWind.physics.sha256='0'.repeat(64);}],
+  ]:[]),
   ...(r.correctionProfile?[
     ['режим-корректора',x=>{x.correctionProfile=false;}],
     ['счётчик-местных-матриц',x=>{x.records[0].times.candidate.profile.correction.local.calls++;}],

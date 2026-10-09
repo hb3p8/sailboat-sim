@@ -31,8 +31,18 @@ const empty=kernel.compile(0,[]);empty.assemble(new Float64Array(),[]);report.ma
 const wide=kernel.compile(4656,[{coordinates:new Array(96),entries:Int32Array.from({length:4656},(_,i)=>i)}]),wideMatrix=new Float64Array(4656);
 wide.assemble(wideMatrix,[{c:{alpha:1},g:Array.from({length:96},(_,i)=>[i,1])}]);assert(wideMatrix.every(v=>v===1));report.matrices++;report.elements+=wideMatrix.length;
 const before=compiled.statistics();for(const bad of [[{coordinates:[0,1],entries:Int32Array.from([0,0,2])}],[{coordinates:[0],entries:Int32Array.from([3])}]]){assert.throws(()=>kernel.compile(3,bad));report.rejected++;}
+// Прямой снимок повторяет прежние суммы Map с начальным +0. Пары g здесь
+// намеренно содержат другие числа: перенос обязан читать выбранный снимок.
+for(const values of [[2,-3],[-0,0],[1e-200,-1e-200],[Number.MIN_VALUE,-Number.MIN_VALUE]]) {
+ const source=Float64Array.from(values),saved=source.slice(),a=Float64Array.from([10,-0,0]),b=a.slice();
+ const direct=[{c:{alpha:2},g:[[0,71],[1,71]],directValues:source}];
+ const C=kernel.compile(3,[{coordinates:[0,1],entries:Int32Array.from([0,1,2])}]);
+ C.assemble(a,direct);C.assemble(b,[{c:{alpha:2},g:values.map((v,i)=>[i,0+v])}]);
+ a.forEach((v,i)=>assert(Object.is(v,b[i])));assert.deepEqual(source,saved);report.matrices++;report.elements+=3;
+}
 const guard=new Float64Array(3).fill(71),snapshot=guard.slice();
-for(const bad of [[],[{g:[[0,2]],c:{alpha:1}},{g:[[0,3]],c:{alpha:1}}],[{g:[[0,NaN],[1,3]],c:{alpha:1}},soft[1]],[{g:soft[0].g,c:{alpha:0}},soft[1]]]){assert.throws(()=>compiled.assemble(guard,bad));assert.deepEqual(guard,snapshot);report.rejected++;}
+for(const bad of [[],[{g:[[0,2]],c:{alpha:1}},{g:[[0,3]],c:{alpha:1}}],[{g:[[0,NaN],[1,3]],c:{alpha:1}},soft[1]],[{g:soft[0].g,c:{alpha:0}},soft[1]],
+ ...[[2],Float64Array.of(2),Float64Array.of(2,NaN)].map(directValues=>[{...soft[0],directValues},soft[1]])]){assert.throws(()=>compiled.assemble(guard,bad));assert.deepEqual(guard,snapshot);report.rejected++;}
 assert.deepEqual(compiled.statistics(),before);assert.throws(()=>compiled.assemble(new Float64Array(2),soft));report.rejected++;
 const copied=kernel.compile(3,plans);plans[0].entries[0]=2;const copyResult=Float64Array.from([10,0,0]);copied.assemble(copyResult,soft);assert.deepEqual(Array.from(copyResult),[12,-3,8.5]);
 const other=kernel.compile(3,[{coordinates:[0],entries:Int32Array.from([0])}]);other.assemble(new Float64Array(3),[{g:[[0,19]],c:{alpha:2}}]);copyResult.set([10,0,0]);copied.assemble(copyResult,soft);assert.deepEqual(Array.from(copyResult),[12,-3,8.5]);

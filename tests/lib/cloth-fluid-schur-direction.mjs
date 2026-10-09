@@ -16,6 +16,9 @@ export function fluidSchurDirection(m,z,s,old,load,h,active,{exact=false}={}) {
     const v=s.softValues?.[j]??c.value(s.q),plan=m.fluidAssembly?.soft[j];
     if(v.values&&plan?.direct&&v.nodes.length===plan.layout.nodes.length&&
         v.nodes.every((node,k)=>node===plan.layout.nodes[k])) {
+      // Обычная WASM-сборка сама переносит числа из снимка. Промежуточные
+      // пары здесь не заполняются; точный корректор и JS идут прежним путём.
+      if(!exact&&m.assemblyKernel)return {c,g:plan.g,directValues:v.values};
       // Пары координат нужны лишь внутри этого вызова направления. Снимок
       // материала принадлежит состоянию, рабочие пары — раскладке решателя.
       for(let k=0;k<plan.g.length;k++)plan.g[k][1]=0+v.values[k];

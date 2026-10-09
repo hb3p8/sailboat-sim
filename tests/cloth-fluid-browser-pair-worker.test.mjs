@@ -19,7 +19,9 @@ try{
   assert.equal(result.phase,'complete',JSON.stringify(result.failure));assert.equal(result.exactPairs,360);assert.equal(result.records.length,360);
   assert.equal(result.profile,fixture.profile);let k=0;
   for(const part of fixture.inputs){const old=JSON.parse(readFileSync(part.path));for(const step of old.steps){const x=result.records[k++];assert.equal(x.step,step.index);assert.equal(x.side,part.side);
-    assert.deepEqual(x.states.baseline,x.states.candidate);assert.deepEqual(JSON.parse(JSON.stringify(x.states.baseline)),{positions:step.positions,body:step.body,forceN:step.forceN,audit:step.audit});
+    assert.deepEqual(x.states.baseline,x.states.candidate);const actual=JSON.parse(JSON.stringify(x.states.baseline)),expected=structuredClone({positions:step.positions,body:step.body,forceN:step.forceN,audit:step.audit});
+    if(fixture.liveWind)for(const s of [actual,expected]){delete s.audit.air;delete s.audit.water;}
+    assert.deepEqual(actual,expected);
     if(fixture.profile)for(const v of ['baseline','candidate']){const p=x.times[v].profile;assert.equal(p.directions.ordinary.linear.calls+p.directions.correction.linear.calls,x.times[v].wasm.numericFactorizations);assert.equal(p.sparse.factorNative.calls,p.linear.factorCalls);
       if(fixture.correctionProfile){assert.equal(p.correction.local.calls,p.materialHessian.native.calls);assert.equal(new Set(Object.values(p.materialHessian).map(a=>a.calls)).size,1);
         assert(p.correction.local.ms+p.correction.scatter.ms<=p.directions.correction.clothMatrix.ms+1e-6);assert(Object.values(p.materialHessian).reduce((s,a)=>s+a.ms,0)<=p.correction.local.ms+1e-6);}

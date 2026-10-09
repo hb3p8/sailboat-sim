@@ -4,7 +4,12 @@ import {Boat} from '../../sim/physics.js';
 import {Cloth} from '../../sim/cloth.js';
 import {checkRotation,rotate3,transpose3,cross3,finiteArray} from './cloth-fluid-inertia.mjs';
 
-export function createClothLiveWind(pack,recipe,{geometryCGM}={}) {
+export function createClothLiveWind(pack,recipe,{geometryCGM,hS=recipe.hS,pressureClock}={}) {
+  if(!(hS>0)||!Number.isFinite(hS)||pressureClock!==undefined&&pressureClock!=='sampled-60hz-v1')
+    throw new Error('Неизвестный шаг или исследовательские часы давления');
+  const subdivisions=pressureClock?[1/60,1/120,1/240].indexOf(hS):-1;
+  if(pressureClock&&subdivisions<0)throw new Error('Часы давления поддерживают 60/120/240 Гц механики');
+  const pressureEvery=pressureClock?2**subdivisions:1;
   const n=recipe.rows*recipe.cols;
   if(!pack?.environment||!pack.rig?.gennaker||recipe.reference?.length!==3*n||geometryCGM!==undefined&&!finiteArray(geometryCGM,3))
     throw new Error('Живому ветру нужны физический пакет и проверенный крой');
@@ -15,14 +20,14 @@ export function createClothLiveWind(pack,recipe,{geometryCGM}={}) {
   // Этот прежний двумерный закон воздуха не принимает срыв G1/C1.
   const c=Object.assign(Object.create(Cloth.prototype),{si:2,rows:recipe.rows,cols:recipe.cols,n,nRows:recipe.rows,
     pos:new Float64Array(3*n),prev:new Float64Array(3*n),frc:new Float64Array(3*n),nrm:new Float64Array(3*n),
-    area:new Float64Array(n),rhoAir:pack.environment.rho_air??1.225,prevDt:recipe.hS,
+    area:new Float64Array(n),rhoAir:pack.environment.rho_air??1.225,prevDt:hS,
     // Вес в общем расчёте подаётся отдельно. Нулевая area исключает лишь
     // вес из forcesAt; летящая площадь давления считается по текущим узлам.
     step(){},cut3d:true,dx:Float64Array.from({length:n},(_,i)=>recipe.reference[3*i]),
     dy:Float64Array.from({length:n},(_,i)=>recipe.reference[3*i+1]),dz:Float64Array.from({length:n},(_,i)=>recipe.reference[3*i+2])});
   b.rig.cloth=c;b.rigSide=recipe.positions[3*(recipe.cols+1)+1]<0?-1:1;
   b.psi=0;b.phi=0;b.th=0;b.u=0;b.v=0;b.r=0;b.p_=0;
-  let pose,RT,speedMPS=6,fromDeg=140;
+  let pose,RT,speedMPS=6,fromDeg=140,evaluations=0;
   const cg=geometryCGM===undefined?undefined:Array.from(geometryCGM);
   const pointWorld=p=>rotate3(pose.orientation9,p).map((v,d)=>v+pose.originM[d]);
   const rigidVelocity=p=>{
@@ -44,10 +49,17 @@ export function createClothLiveWind(pack,recipe,{geometryCGM}={}) {
     for(let i=0;i<n;i++) {
       const p=rotate3(RT,Array.from(motion.pos.slice(3*i,3*i+3),(v,d)=>v-pose.originM[d]));
       const rigid=rigidVelocity(p),relative=rotate3(RT,Array.from(motion.vel.slice(3*i,3*i+3),(v,d)=>v-rigid[d]));
-      for(let d=0;d<3;d++){const geometry=cg?p[d]+cg[d]:p[d];c.pos[3*i+d]=geometry;c.prev[3*i+d]=geometry-recipe.hS*relative[d];}
+      for(let d=0;d<3;d++){const geometry=cg?p[d]+cg[d]:p[d];c.pos[3*i+d]=geometry;c.prev[3*i+d]=geometry-hS*relative[d];}
     }
     b.rig.latRebuild=true;b.o.genSheetLen=motion.ropeLengthsM?.[0]??b.o.genSheetLen;
-    b.rig.forces(b,b.apparentWind(),recipe.hS);c.forcesAt(b,recipe.hS,b.rigSide,pack.environment);
+    // Все прежние счётчики Rig, включая TRANSFER/latWarm/предохранитель,
+    // сохраняют частоту 60 Гц. Между отсчётами распределение давления
+    // удерживается; нормали/летящая площадь/скоростное сопротивление ткани
+    // пересчитываются по принятой форме на каждом механическом подшаге.
+    // Это явный исследовательский вариант, не сходимость полного воздуха.
+    const pressureUpdated=evaluations%pressureEvery===0;
+    if(pressureUpdated)b.rig.forces(b,b.apparentWind(),pressureClock?1/60:hS);
+    c.forcesAt(b,hS,b.rigSide,pack.environment);evaluations++;
     const forceN=new Float64Array(3*n),totalForceN=[0,0,0],momentNm=[0,0,0];
     for(let i=0;i<n;i++) {
       const f=rotate3(pose.orientation9,Array.from(c.frc.slice(3*i,3*i+3))),r=Array.from(motion.pos.slice(3*i,3*i+3),(v,d)=>v-pose.originM[d]),m=cross3(r,f);
@@ -56,6 +68,7 @@ export function createClothLiveWind(pack,recipe,{geometryCGM}={}) {
     if(!forceN.every(Number.isFinite))throw new Error('Переполнение нагрузки живого ветра');
     return {forceN,audit:{model:this.model,timeS,windSpeedMPS:speedMPS,windFromDeg:fromDeg,
       originM:Array.from(pose.originM),totalForceN,momentNm,areaM2:c.flyingAreas().reduce((s,v)=>s+v,0),
-      loadPhase:'accepted-state-before-step',pressureNormalN:Array.from(c.pressureForce)}};
+      loadPhase:'accepted-state-before-step',pressureNormalN:Array.from(c.pressureForce),
+      ...(pressureClock?{pressureClock:{model:pressureClock,frequencyHz:60,updated:pressureUpdated,index:Math.floor((evaluations-1)/pressureEvery)}}:{})}};
   }};
 }

@@ -1,16 +1,19 @@
-// Первый общий шаг с пересчитываемым ветром. Масса/вода пока лабораторные.
+// Общий шаг с пересчитываемым ветром; профиль SV20 включает массу и воду.
 import {fluidSailMotion} from './cloth-fluid-sail-motion.mjs';
 import {integrateDensity} from './cloth-shared-input.mjs';
 import {createClothLiveWind} from './cloth-live-wind.mjs';
 import {createSV20Water} from './cloth-sv20-water.mjs';
 import {rudderAngleAfter} from '../../sim/rudder.js';
 
-export function liveWindSailMotion(r,bodyInput,factor,{pack,wind,sheet,materialKernel,assemblyKernel,bodyProfile='laboratory-v1'}={}) {
-  if(!(pack?.environment?.g>0)||r.hS!==1/60)throw new Error('Нужны физический пакет живого ветра и проверенный шаг 1/60 с');
+export function liveWindSailMotion(r,bodyInput,factor,{pack,wind,sheet,materialKernel,assemblyKernel,bodyProfile='laboratory-v1',hS=r.hS,timeRefinement}={}) {
+  const research=timeRefinement==='sampled-air-60hz-v1';
+  if(timeRefinement!==undefined&&!research||!(pack?.environment?.g>0)||r.hS!==1/60||
+      (!research&&hS!==r.hS)||research&&(![1/60,1/120,1/240].includes(hS)||bodyProfile!=='sv20-rig-budget-point-v1'))
+    throw new Error('Нужны пакет и проверенный шаг 1/60 с либо явный временной контроль SV20 60/120/240 Гц');
   if(!['laboratory-v1','sv20-rig-budget-point-v1'].includes(bodyProfile))throw new Error('Неизвестный профиль тела живого ветра');
   const isSV20=bodyProfile==='sv20-rig-budget-point-v1';
-  const base=fluidSailMotion(r,bodyInput,factor,{sheet,materialKernel,assemblyKernel,...(isSV20?{sv20Pack:pack}:{})});
-  const air=createClothLiveWind(pack,r,{geometryCGM:base.geometryCGM}),integrated=integrateDensity(r.field,r.rows,r.cols);
+  const base=fluidSailMotion(r,bodyInput,factor,{sheet,materialKernel,assemblyKernel,hS,...(isSV20?{sv20Pack:pack}:{})});
+  const air=createClothLiveWind(pack,r,{geometryCGM:base.geometryCGM,hS,...(research?{pressureClock:'sampled-60hz-v1'}:{})}),integrated=integrateDensity(r.field,r.rows,r.cols);
   const water=isSV20?createSV20Water(pack,base.geometryCGM,base.massBudget.bodyKg):undefined;
   // Модуль прежнего узлового веса — отдельное назначенное исходное данное.
   // Воздух не становится грузом. В этом опыте вертикаль мира — действующая g.
@@ -44,5 +47,6 @@ export function liveWindSailMotion(r,bodyInput,factor,{pack,wind,sheet,materialK
     return {...audit,air:airAudit,...(water?{water:waterAudit,application}:{} )};
   }
   return {...base,liveWind:{model:air.model,wind:commands,...(isSV20?{bodyProfile,worldVelocityDampingHz:base.motion.dampingHz}:{}),
+    ...(research?{timeRefinement:{model:timeRefinement,hS,pressureFrequencyHz:60,scope:'Уточнение механики с удерживаемым давлением Rig 60 Гц, не полный временной предел воздуха'}}:{}),
     scope:isSV20?'SV20: явный сухой бюджет, спокойная вода/руль до исходного начала глиссирования, без экипажа/волн; мировое численное торможение выключено.':'живой ветер, лабораторная опора; руль/гидросилы/SV20 ещё не подключены'},prepareLoad,solve,step(c){prepareLoad(c);return solve();}};
 }

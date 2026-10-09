@@ -18,6 +18,12 @@ const cases=[
   ['изменённый интеграл воздуха',r=>{r.steps[0].audit.air.totalForceN[0]+=1;}],
   ['неверная фаза воздуха',r=>{r.steps[0].audit.air.loadPhase='after-step';}]
 ];
+if(original.fixture.liveWind.bodyProfile)cases.push(
+  ['возврат мирового торможения',r=>{r.fixture.liveWind.worldVelocityDampingHz=6;}],
+  ['подмена сухой массы',r=>{r.preparation.massBudget.bodyKg+=1;}],
+  ['изменённый интеграл воды',r=>{r.steps[0].audit.water.totalForceN[2]+=1;}],
+  ['подмена области применимости',r=>{r.steps[0].audit.application.dryCloth=false;}]
+);
 const results=[];
 for(let i=0;i<cases.length;i++) {
   const [name,change]=cases[i],r=structuredClone(original);change(r);

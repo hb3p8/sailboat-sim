@@ -28,11 +28,15 @@ function compare(a,b,path) {
   else assert.equal(a,b,path);
 }
 const reference=structuredClone(r);reference.environment={scope:'Синтетическая запись независимого Node-повтора; не измерение браузера.'};reference.steps=[];
+// Прямой повтор считает физику без наблюдателя. Чужие браузерные timing
+// нельзя переносить к нулевым часам Node или выдавать за профиль повтора.
+delete reference.fixture.profileWorker;
 let exactRecordedAirSteps=0,mechanicalRefusals=[];
 for(const s of r.steps) {
   const a=free.step(s.controls),state=json({positions:free.motion.pos,body:free.motion.body,forceN:free.forceN,audit:a});
   compare(state.positions,s.positions,'free.positionsM');compare(state.body,s.body,'free.body');compare(state.forceN,s.forceN,'free.forceN');compare(state.audit,s.audit,'free.audit');
-  reference.steps.push({...s,...state,stepMs:0,sentAt:0,receivedAt:0,presentedAt:0});
+  const {timing,...referenceStep}=s;
+  reference.steps.push({...referenceStep,...state,stepMs:0,sentAt:0,receivedAt:0,presentedAt:0});
   const preparedLoad=recordedAir.prepareLoad(s.controls);
   compare(Array.from(recordedAir.forceN),s.forceN,'airOnRecordedState.forceN');
   if(f.liveWind.bodyProfile){compare(preparedLoad.forceN,s.audit.water.totalForceN,'waterOnRecordedState.forceN');compare(preparedLoad.momentNm,s.audit.water.totalMomentNm,'waterOnRecordedState.momentNm');

@@ -15,9 +15,8 @@
 ход — делается глазами и мышью, а хранится в репозитории. Без сервера её
 пришлось бы выгружать в файл и класть на место руками, каждый раз.
 
-Отдаётся корень репозитория как есть; пишется ровно один файл, `data/marks.json`,
-и никакой другой. Слушается только петля: наружу это не смотрит и смотреть не
-должно.
+Отдаётся корень репозитория. Разметка пишет `data/marks.json`, измерения и
+записи — новые файлы в `out/`. По умолчанию слушается только петля.
 
 Исключение — `--lan`, и оно нужно ровно за одним: потрогать игровой интерфейс на
 настоящем телефоне. Тогда слушается вся сеть, а запись разметки выключается —
@@ -41,6 +40,12 @@ Draco — в `viewer/vendor/draco/`.
 вида `a3f9c2`. По этому имени дамп зовут и `scripts/replay.mjs`, и `sv20load` в
 консоли страницы. Без сервера страница скачивает дамп файлом, как раньше.
 
+**Принимать записи исследовательских стендов.** «Сохранить в проект» кладёт
+полный JSON в новый файл `out/acceptance/` и возвращает путь, размер и SHA.
+Большое текстовое поле не требуется. Запись доступна только локальному
+серверу; `--lan` этот маршрут закрывает. Физику записи проверяет отдельный
+отчёт, сервер сохраняет её исходные байты.
+
 Страницы по-прежнему открываются двойным кликом, но уже не в полном составе:
 `sim/index.html` без сервера покажет лодку без экипажа, `viewer/terrain.html` —
 без полей физики и разметки. Обе об этом скажут, а не сломаются.
@@ -48,6 +53,7 @@ Draco — в `viewer/vendor/draco/`.
 
 import argparse
 import http.server
+import hashlib
 import json
 import os
 import re
@@ -135,6 +141,40 @@ DUMP_URL = "/api/dump"
 DUMP_DIR = os.path.join(ROOT, "out", "dumps")
 DUMP_MAX_BODY = 64 * 1024 * 1024   # запись за двадцать секунд плюс пелена
 DUMP_LIST = 12                     # сколько последних показывать списком
+
+# Полные исследовательские записи сохраняются без показа многомегабайтного
+# текста в браузере. Сервер выбирает имя; прежние результаты не заменяются.
+BROWSER_RECORD_URL = "/api/browser-record"
+BROWSER_RECORD_DIR = os.path.join(ROOT, "out", "acceptance")
+BROWSER_RECORD_MAX_BODY = 64 * 1024 * 1024
+
+
+def browser_record_save(raw):
+    data = json.loads(raw.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("ожидалась запись стенда")
+    schema = data.get("schema")
+    if schema == "cloth-fluid-browser-pair-v1":
+        valid = isinstance(data.get("records"), list) and isinstance(data.get("input"), dict)
+    elif schema == "cloth-fluid-live-result-v1":
+        valid = isinstance(data.get("steps"), list) and isinstance(data.get("fixture"), dict)
+    else:
+        valid = False
+    if not valid:
+        raise ValueError("неизвестный формат записи стенда")
+    os.makedirs(BROWSER_RECORD_DIR, exist_ok=True)
+    for _ in range(64):
+        name = "browser-record-%s-%s.json" % (time.strftime("%Y%m%d"), secrets.token_hex(6))
+        path = os.path.join(BROWSER_RECORD_DIR, name)
+        try:
+            # Исключительное создание защищает и от совпадения имён двух запросов.
+            with open(path, "xb") as f:
+                f.write(raw)
+        except FileExistsError:
+            continue
+        return {"file": os.path.relpath(path, ROOT), "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest()}
+    raise ValueError("не удалось выбрать новое имя записи")
 
 
 def dump_save(raw):
@@ -346,6 +386,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # Профиль сессии и дампы. Пишутся и при открытой сети — почему, написано
         # у PERF_URL и DUMP_URL; разметка при этом остаётся запрещённой.
         path = self.path.split("?")[0]
+        if path == BROWSER_RECORD_URL:
+            if getattr(self.server, "read_only", False):
+                self._json(403, {"error": "сохранение записи доступно только локально"})
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                if n <= 0:
+                    raise ValueError("ожидалась непустая запись")
+                if n > BROWSER_RECORD_MAX_BODY:
+                    self._json(413, {"error": "слишком большая запись стенда"})
+                    return
+                res = browser_record_save(self.rfile.read(n))
+            except Exception as e:
+                self._json(400, {"error": str(e)})
+                return
+            self._json(200, res)
+            return
         if path == DUMP_URL:
             n = int(self.headers.get("Content-Length") or 0)
             if n > DUMP_MAX_BODY:

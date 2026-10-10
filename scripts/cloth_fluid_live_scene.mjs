@@ -5,6 +5,7 @@ import {rotate3,transpose3} from '../tests/lib/cloth-fluid-inertia.mjs';
 import {bodyPointLocalX,bodyPointLocalY,bodyPointLocalZ,bodyPoseSceneMatrix,rudderRotY} from '../sim/axes.js';
 import {liveWindCycleControls,sv20WindCycleControls} from '../tests/lib/cloth-live-wind-controls.mjs';
 import {sv20BodyAngles} from '../tests/lib/cloth-sv20-water.mjs';
+import {saveBrowserRecord} from '../tests/probes/browser-record-save.mjs';
 const digest=async b=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',b)),v=>v.toString(16).padStart(2,'0')).join('');
 async function bytesAt(path) {
   if(!/^[\w./-]+$/.test(path)||path.includes('..'))throw new Error('Некорректный путь входа');
@@ -25,6 +26,8 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   const collapse=document.createElement('button');collapse.id='fluid-collapse';collapse.textContent='Свернуть панель';panel.prepend(collapse);
   collapse.onclick=()=>{const compact=panel.classList.toggle('fluid-compact');collapse.textContent=compact?'Показать управление':'Свернуть панель';};
   const inspect=document.createElement('button');inspect.id='fluid-inspect';inspect.textContent='Показать запись';inspect.disabled=true;panel.querySelector('#fluid-save').after(inspect);
+  const saveProject=document.createElement('button');saveProject.textContent='Сохранить в проект';saveProject.disabled=true;inspect.after(saveProject);
+  const savedRecord=document.createElement('p');saveProject.after(savedRecord);
   const recordDialog=document.createElement('dialog');recordDialog.innerHTML='<p>Запись принятого опыта</p><textarea aria-label="Запись опыта" readonly style="width:min(75vw,700px);height:50vh"></textarea><p><button>Закрыть</button></p>';
   document.body.append(recordDialog);recordDialog.querySelector('button').onclick=()=>recordDialog.close();
   // Ветер доступен только отдельной постановке. Ползунок старой нагрузки
@@ -47,7 +50,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
     },true);
   }
   const el=id=>panel.querySelector('#fluid-'+id),status=el('status');
-  let client,fixture,geometry,snapshot,running=false,busy=false,generation=0,timer,wallMs=0,steps=[];
+  let client,fixture,geometry,snapshot,running=false,busy=false,savingRecord=false,generation=0,timer,wallMs=0,steps=[];
   let shownStep=0,initial,preparation,snapshotCGM,sheetDirection=0,automaticCycle=false;
   const cycleDirection=()=>steps.length<30?0:steps.length<60?1:steps.length<90?0:steps.length<120?-1:0;
   const controls=()=>{
@@ -78,6 +81,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
     el('run').disabled=(!running&&busy)||!client||steps.length>=300;el('step').disabled=busy||running||!client||steps.length>=300;
     el('save').disabled=busy||running||!snapshot;
     inspect.disabled=el('save').disabled;
+    saveProject.disabled=el('save').disabled||savingRecord;
     for(const id of ['sheet-in','sheet-hold','sheet-out'])el(id).disabled=!client?.ready.sheetControl||steps.length>=300;
     el('cycle').disabled=busy||!client?.ready.sheetControl;
   }
@@ -109,7 +113,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
     if(token===generation&&running&&client)timer=setTimeout(()=>{void step(token);},Math.max(0,fixture.recipe.hS*1000-(performance.now()-sentAt)));
   }
   async function prepare(cycle=false) {
-    const token=++generation;stop();automaticCycle=cycle;client?.terminate();client=undefined;busy=true;snapshot=undefined;steps=[];wallMs=0;shownStep=0;preparation=undefined;sheetReadout();
+    const token=++generation;stop();automaticCycle=cycle;client?.terminate();client=undefined;busy=true;snapshot=undefined;steps=[];wallMs=0;shownStep=0;preparation=undefined;savedRecord.replaceChildren();sheetReadout();
     if(cycle)for(const [id,value] of [['pressure','100'],['yaw','0']]){el(id).value=value;el(id).oninput();}
     delete panel.dataset.error;panel.dataset.step='0';buttons();status.textContent='Проверяю вход и подготавливаю расчёт…';
     let prepared;
@@ -195,6 +199,11 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
     return JSON.stringify(record,null,2)+'\n';
   }
   inspect.onclick=()=>{recordDialog.querySelector('textarea').value=recordedText();recordDialog.showModal();};
+  saveProject.onclick=async()=>{const token=generation;savingRecord=true;buttons();savedRecord.textContent='Сохранение записи…';
+    try{const receipt=await saveBrowserRecord(recordedText());if(token!==generation)return;
+      const a=document.createElement('a');a.href='/'+receipt.file;a.textContent='Запись сохранена: '+receipt.file;savedRecord.replaceChildren(a);}
+    catch(error){if(token===generation)savedRecord.textContent='Запись не сохранена: '+error.message;}
+    finally{savingRecord=false;buttons();}};
   el('save').onclick=()=>{
     const url=URL.createObjectURL(new Blob([recordedText()],{type:'application/json'}));
     const a=document.createElement('a');a.href=url;a.download=`${prefix}-${fixture.side}-${Date.now()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);

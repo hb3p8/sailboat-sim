@@ -1,11 +1,20 @@
 // Отдельная память каждого экземпляра поверхности; постоянные веса копируются
 // один раз, вход/выход группы — при вызове. Рабочие представления не выдаются.
+export class MaterialEngineMismatchError extends Error {
+  constructor(message,comparison) {
+    super(message);this.name='MaterialEngineMismatchError';
+    this.code='CLOTH_MATERIAL_ENGINE_MISMATCH';this.comparison=comparison;
+  }
+}
 export async function loadMaterialKernel(bytes) {
   const module=await WebAssembly.compile(bytes);
   const probe=new WebAssembly.Instance(module),hypot=probe.exports.material_hypot3;
   if(probe.exports.material_abi_version?.()!==3)throw new Error('Несовместимая версия вычислителя материала');
-  for(const v of [[0,-0,0],[1,2,3],[1e300,1,1e-300],[3e-200,-4e-200,5e-200]])
-    if(!Object.is(hypot(...v),Math.hypot(...v)))throw new Error('Math.hypot текущего движка не совпадает с прототипом');
+  for(const v of [[0,-0,0],[1,2,3],[1e300,1,1e-300],[3e-200,-4e-200,5e-200]]) {
+    const native=hypot(...v),js=Math.hypot(...v);
+    if(!Object.is(native,js))throw new MaterialEngineMismatchError('Math.hypot текущего движка не совпадает с прототипом',
+      {name:'Math.hypot',input:v,native,js});
+  }
   return {hypot3:hypot,createSurface() {
     const e=new WebAssembly.Instance(module).exports;let next=Number(e.__heap_base.value),groups=0,calls=0,growths=0;
     const allocate=n=>{const offset=next,end=next+8*n;

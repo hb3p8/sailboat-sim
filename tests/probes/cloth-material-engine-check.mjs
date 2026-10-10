@@ -1,11 +1,12 @@
 // Проверка округления в исполняющем движке до создания живого расчёта.
 // Сравнение с JS дополняет известные проверки закона; физические пороги не меняет.
 import {materialSurface,gridTriangles,MODEL_MATERIAL} from '../lib/cloth-material.mjs';
+import {MaterialEngineMismatchError} from './cloth-material-wasm.mjs';
 export function verifyMaterialKernel(kernel,recipe) {
   if(recipe.rows!==11||recipe.cols!==9||recipe.reference?.length!==297||recipe.positions?.length<297)
     throw new Error('Проверка движка материала требует прежнюю постановку 11×9');
   const counts={schema:'cloth-material-engine-check-v1',values:0,gradientComponents:0,hessianComponents:0,hypotCases:0};
-  const same=(a,b,name)=>{if(!Object.is(a,b))throw new Error('Материал WASM расходится с JS: '+name);};
+  const same=(a,b,name)=>{if(!Object.is(a,b))throw new MaterialEngineMismatchError('Материал WASM расходится с JS: '+name,{name,native:a,js:b});};
   const vector=(a,b,name)=>{if(a.length!==b.length)throw new Error('Неверная длина проверки материала');
     for(let k=0;k<a.length;k++)same(a[k],b[k],name+' '+k);};
   for(let i=0;i<2048;i++) {

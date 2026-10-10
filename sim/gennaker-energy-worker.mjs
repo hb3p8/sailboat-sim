@@ -1,14 +1,14 @@
 // Два подшага ткани разделены сообщением после показанного кадра.
 import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
-import {loadMaterialKernel} from '../tests/probes/cloth-material-wasm.mjs';
+import {selectGennakerMaterial} from './gennaker-material.mjs';
 let calculation,job;
 self.onmessage=async ({data})=>{
   try {
     if(data.type==='init') {
       const {prescribedGennaker}=await import('./gennaker-energy.mjs');
-      const factor=await loadSparseFactor(data.bytes),material=await loadMaterialKernel(data.materialBytes);
-      calculation=prescribedGennaker(data.fixture,data.pack,data.pose,factor,material);
-      self.postMessage({type:'ready',minLengthM:calculation.minLengthM,maxLengthM:calculation.maxLengthM});
+      const factor=await loadSparseFactor(data.bytes),selected=await selectGennakerMaterial(data.materialBytes,data.fixture.recipe);
+      calculation=prescribedGennaker(data.fixture,data.pack,data.pose,factor,selected.kernel);
+      self.postMessage({type:'ready',minLengthM:calculation.minLengthM,maxLengthM:calculation.maxLengthM,material:selected.material});
     } else if(data.type==='step') {
       if(job)throw new Error('Предыдущий шаг ткани ещё не окончен');
       job={...data,parts:[],results:[]};run();

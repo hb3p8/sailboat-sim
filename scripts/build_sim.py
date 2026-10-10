@@ -31,7 +31,7 @@ THREE_BUNDLE = "three.webgpu.js"
 GLTF_BUNDLE = "three.gltf.js"
 
 # Всё, что вклеивается в страницу, в порядке объявления.
-MODULES = ["util.js", "terrain.js", "axes.js", "wind.js",
+MODULES = ["util.js", "terrain.js", "axes.js", "wind.js", "live-entry.js",
            # Кернел — ДО vlm.js: порядок здесь это порядок вклейки в общую
            # область, и обратный дал бы временную мёртвую зону.
            "biotwasm.js", "latticewasm.js", "kernel.js", "vlm.js",

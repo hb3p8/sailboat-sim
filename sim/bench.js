@@ -63,7 +63,7 @@ const BENCH_CASES = [
 
 const BENCH_N = (() => {
   // Живой общий расчёт сам двигает яхту; прежний Boat остаётся остановлен.
-  if(new URLSearchParams(location.search).has('sail-live'))return 0;
+  if(liveSailEntry(location.search)?.play)return 0;
   const v = new URLSearchParams(location.search).get('bench');
   if (v === null) return -1;
   const n = parseInt(v, 10);

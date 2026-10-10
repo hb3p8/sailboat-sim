@@ -5,6 +5,7 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {publishLiveSailDefault} from './live_sail_default.mjs';
 const args=process.argv.slice(2),inputs=args.filter(v=>v.startsWith('--input=')).map(v=>v.slice(8));
 const prefix=args.find(v=>v.startsWith('--out-prefix='))?.slice(13),wasm=args.find(v=>v.startsWith('--wasm='))?.slice(7);
 const sheetInputs=args.filter(v=>v.startsWith('--sheet-input=')).map(v=>v.slice(14));
@@ -13,13 +14,15 @@ const materialWasm=args.find(v=>v.startsWith('--material-wasm='))?.slice(16);
 const assemblyWasm=args.find(v=>v.startsWith('--assembly-wasm='))?.slice(16);
 const liveWind=args.includes('--live-wind');
 const sv20=args.includes('--sv20');
+const setDefault=args.includes('--set-default');
 const windBase=args.find(v=>v.startsWith('--wind-base='))?.slice(12),windPeak=args.find(v=>v.startsWith('--wind-peak='))?.slice(12);
 const baseMPS=Number(windBase??6),peakMPS=Number(windPeak??7);
-assert(Number.isFinite(baseMPS)&&Number.isFinite(peakMPS)&&baseMPS>=0&&peakMPS<=12&&peakMPS>=baseMPS&&(!(windBase||windPeak)||sv20)&&(!sv20||liveWind)&&inputs.length===2&&prefix&&wasm&&[0,2].includes(sheetInputs.length)&&args.length===4+sheetInputs.length+Number(profileWorker)+Number(Boolean(materialWasm))+Number(Boolean(assemblyWasm))+Number(liveWind)+Number(sv20)+Number(windBase!==undefined)+Number(windPeak!==undefined),
-  'Нужны две --input, --out-prefix, --wasm, необязательные две --sheet-input, --profile-worker, --material-wasm, --assembly-wasm, --live-wind, --sv20 (только с ветром), --wind-base/--wind-peak (для SV20)');
+assert(Number.isFinite(baseMPS)&&Number.isFinite(peakMPS)&&baseMPS>=0&&peakMPS<=12&&peakMPS>=baseMPS&&(!(windBase||windPeak)||sv20)&&(!sv20||liveWind)&&(!setDefault||sv20&&!profileWorker&&sheetInputs.length===2&&materialWasm&&assemblyWasm)&&inputs.length===2&&prefix&&wasm&&[0,2].includes(sheetInputs.length)&&args.length===4+sheetInputs.length+Number(profileWorker)+Number(Boolean(materialWasm))+Number(Boolean(assemblyWasm))+Number(liveWind)+Number(sv20)+Number(setDefault)+Number(windBase!==undefined)+Number(windPeak!==undefined),
+  'Нужны две --input, --out-prefix, --wasm, необязательные две --sheet-input, --profile-worker, --material-wasm, --assembly-wasm, --live-wind, --sv20 (только с ветром), --wind-base/--wind-peak; --set-default подключает чистый SV20 к основному экрану');
 const hash=b=>createHash('sha256').update(b).digest('hex');
 const revision=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 const dirty=Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim());
+assert(!setDefault||!dirty,'Основному экрану нужна чистая сборка');
 const root=fileURLToPath(new URL('../',import.meta.url)),sourceSha256={};
 function addSource(url) {
   const p=relative(root,fileURLToPath(url));if(Object.hasOwn(sourceSha256,p))return;
@@ -61,3 +64,4 @@ for(const r of records)assert(!existsSync(r.path),'Сохранённый вхо
 assert(!existsSync(`${prefix}-scene.html`),'Снимок сцены нельзя перезаписывать');
 writeFileSync(`${prefix}-scene.html`,scene,{flag:'wx'});
 for(const r of records){writeFileSync(r.path,JSON.stringify(r.value,null,2)+'\n',{flag:'wx'});console.log(JSON.stringify({вход:r.path,ревизия:revision,изменено:dirty}));}
+if(setDefault){publishLiveSailDefault(records);console.log('Основной симулятор подключён: /sim/index.html');}

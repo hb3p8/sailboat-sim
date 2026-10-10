@@ -3709,10 +3709,11 @@ shapeSails(rigSideZ(1));
 // рисовать нечем, поэтому цикл запускается после init.
 renderer.init().then(async () => {
   resize();
-  if (new URLSearchParams(location.search).has('fluid-live')||new URLSearchParams(location.search).has('sail-live')) {
+  const liveEntry=liveSailEntry(location.search);
+  if (liveEntry) {
     if (!benchFrozen() || BENCH_N !== 0) throw new Error('Живой опыт требует ?bench=0');
     const { startFluidLiveScene } = await import('../scripts/cloth_fluid_live_scene.mjs');
-    clothSceneReview = await startFluidLiveScene({ renderer, genSail, boatGroup, mainSail, jibSail, scene, sea, sunTarget:sun.target, camera,
+    clothSceneReview = await startFluidLiveScene({ entry:liveEntry,renderer, genSail, boatGroup, mainSail, jibSail, scene, sea, sunTarget:sun.target, camera,
       BufferGeometry, BufferAttribute, indicators:[...telltales,leechTells],rudderPivot,crewGroup,
       windVisual:{direction:seaWindDir,speed:seaWindSpeed,gust:seaGust,shade:seaShadeGust,time:seaTime} });
   } else if (new URLSearchParams(location.search).has('cloth-review')) {

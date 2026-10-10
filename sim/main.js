@@ -1505,7 +1505,7 @@ function shapeSails(side, dt) {
       // картинка. Время берётся физическое, поэтому записанный прогон
       // выглядит при воспроизведении так же.
       const lf = Math.min(1, g.luffFrac || 0);
-      const flap = !cloth?.energyGennaker && lf > 0.02 && chord > 0.05;
+      const flap = !(sail.gennaker && cloth?.energyGennaker) && lf > 0.02 && chord > 0.05;
       let amp = 0, om = 0;
       if (flap) {
         const L = lf * chord;

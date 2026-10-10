@@ -9,6 +9,7 @@ export function publishLiveSailDefault(records,path='out/export/live-sail-defaul
   for(const record of records) {
     const bytes=readFileSync(record.path),f=JSON.parse(bytes);
     assert.equal(f.schema,'cloth-fluid-live-v1');assert.equal(f.dirty,false);
+    assert(f.profileWorker===undefined||f.profileWorker===false,'Основному экрану нужен обычный режим');
     assert.equal(f.liveWind?.bodyProfile,'sv20-rig-budget-point-v1');assert(f.sheet&&f.materialWasm&&f.assemblyWasm);
     assert(['plus','minus'].includes(f.side)&&!inputs[f.side],'Нужны разные борта');
     const shared={revision:f.revision,sceneSha:f.scene.sha256,physicsSha:f.physicsSha256,sources:f.sourceSha256};

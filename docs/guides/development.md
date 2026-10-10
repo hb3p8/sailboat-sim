@@ -25,7 +25,7 @@ make fit
 | `make extract` | Разбор чертежа, каркас и измерения |
 | `make hull` | Геометрия корпуса |
 | `make physics` | `out/export/physics.json` и `sim_mesh.json` |
-| `make sim` | Самодостаточная страница `sim/index.html` |
+| `make sim` | Сцена `sim/index.html`; основной генакер также требует подготовленный указатель/входы и модули |
 | `make terrain terrain-pack terrain-glb` | Акватория, физический пакет и графический ассет; нужен доступ к сети |
 | `make kernel` | Вычислительные WASM-модули и JS-оболочка; нужен отдельный LLVM/lld |
 

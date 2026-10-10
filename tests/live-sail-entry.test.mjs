@@ -20,7 +20,7 @@ try {
  assert.equal(first.schema,'sv20-live-entry-v1');assert.deepEqual(JSON.parse(saved),first);
  for(const input of inputs){const f=JSON.parse(readFileSync(input));assert.deepEqual(first.inputs[f.side],{path:input,sha256:hash(readFileSync(input))});}
  for(const [name,change] of [
-  ['грязный',f=>f.dirty=true],['лаборатория',f=>f.liveWind.bodyProfile='laboratory-v1'],
+  ['грязный',f=>f.dirty=true],['профиль',f=>f.profileWorker=true],['лаборатория',f=>f.liveWind.bodyProfile='laboratory-v1'],
   ['другая-сборка',f=>f.revision='other'],['другая-сцена',f=>f.scene.sha256='0'.repeat(64)],
   ['другой-пакет',f=>f.physicsSha256='0'.repeat(64)],['другие-исходники',f=>f.sourceSha256={}],
   ['без-верёвки',f=>delete f.sheet],['без-материала',f=>delete f.materialWasm],['без-сборки',f=>delete f.assemblyWasm],

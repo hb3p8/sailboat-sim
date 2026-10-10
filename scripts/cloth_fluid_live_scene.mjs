@@ -21,6 +21,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   const style=document.createElement('style');
   style.textContent='#fluid-live-panel{position:fixed;left:12px;top:12px;z-index:30;width:min(420px,calc(100vw - 48px));padding:12px;border-radius:10px;background:#10202ef0;color:#e6edf4;font:13px system-ui}#fluid-live-panel.fluid-compact{top:auto;bottom:12px}#fluid-live-panel.fluid-compact>*:not(b):not(#fluid-collapse):not(#fluid-status):not(#fluid-run):not(#fluid-application){display:none!important}#fluid-live-panel [hidden]{display:none!important}#fluid-live-panel p{margin:8px 0}#fluid-live-panel button,#fluid-live-panel select{font:inherit;margin:4px;padding:6px}#fluid-live-panel label{display:block;margin:8px 0}#fluid-live-panel input{width:150px;vertical-align:middle}#hud,#game,#panel,#help,#topcard,#compass,#perf,#gperf,#keys{visibility:hidden}';
   document.head.append(style);
+  if(play)style.textContent+='#fluid-live-panel{max-height:calc(100vh - 48px);overflow-y:auto}';
   const panel=document.createElement('section');panel.id='fluid-live-panel';
   panel.innerHTML='<b>Генакер: отпускание и возврат верёвки</b><p>Лабораторный опыт. Нагрузка на парус сохранена заранее. Движение опоры рассчитано с назначенными массами; настоящий ветер, руль и силы воды ещё не подключены.</p><label>Сторона при перезапуске <select id="fluid-side"><option value="plus">Первая</option><option value="minus">Другая</option></select></label><label>Нагрузка на парус <input id="fluid-pressure" type="range" min="0" max="150" value="100" step="5"> <output id="fluid-pressure-value">100%</output></label><label>Внешний поворачивающий момент <input id="fluid-yaw" type="range" min="-100" max="100" value="0" step="10"> <output id="fluid-yaw-value">0 Н·м</output></label><p id="fluid-sheet-state">Верёвка ещё не подготовлена.</p><button id="fluid-sheet-in" disabled>Подтягивать</button><button id="fluid-sheet-hold" disabled>Держать</button><button id="fluid-sheet-out" disabled>Отпускать</button><p id="fluid-sheet-command"></p><button id="fluid-cycle" disabled>Показать цикл</button><button id="fluid-prepare">Начать заново</button><button id="fluid-run" disabled>Запустить</button><button id="fluid-step" disabled>Один шаг</button><button id="fluid-save" disabled>Скачать запись</button><p id="fluid-status">Подготовьте опыт. Один запуск — до 5 секунд модельного времени.</p><p id="fluid-speed"></p>';
   document.body.append(panel);
@@ -53,7 +54,8 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   }
   const el=id=>panel.querySelector('#fluid-'+id),status=el('status');
   let client,fixture,geometry,snapshot,running=false,busy=false,savingRecord=false,generation=0,timer,wallMs=0,steps=[];
-  let shownStep=0,initial,preparation,snapshotCGM,sheetDirection=0,automaticCycle=false;
+  let shownStep=0,initial,preparation,snapshotCGM,sheetDirection=0,automaticCycle=false,renderFrame=0;
+  const waterStopped=()=>play&&snapshot?.audit?.application&&!snapshot.audit.application.dryCloth;
   const cycleDirection=()=>steps.length<30?0:steps.length<60?1:steps.length<90?0:steps.length<120?-1:0;
   const controls=()=>{
     if(fixture?.liveWind&&automaticCycle){const command=fixture.liveWind.bodyProfile?sv20WindCycleControls(steps.length,fixture.side,fixture.liveWind.cycleWind):liveWindCycleControls(steps.length,fixture.side);
@@ -80,7 +82,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   }
   function stop(){running=false;sheetDirection=0;clearTimeout(timer);el('run').textContent='Запустить';panel.dataset.running='false';sheetReadout();}
   function buttons() {
-    const ended=!play&&steps.length>=300;
+    const ended=waterStopped()||!play&&steps.length>=300;
     el('run').disabled=(!running&&busy)||!client||ended;el('step').disabled=busy||running||!client||ended;
     el('save').disabled=busy||running||!snapshot;
     inspect.disabled=el('save').disabled;
@@ -89,13 +91,13 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
     el('cycle').disabled=busy||!client?.ready.sheetControl;
   }
   async function step(token=generation) {
-    if(!client||busy||!play&&steps.length>=300)return;
-    busy=true;buttons();const sentAt=performance.now(),command=controls();
+    if(!client||busy||waterStopped()||!play&&steps.length>=300)return;
+    busy=true;buttons();const sentAt=performance.now(),sentFrame=renderFrame,command=controls();
     try {
       const result=await client.step(command);if(token!==generation)return;
       const receivedAt=performance.now();wallMs+=receivedAt-sentAt;
       snapshot=result;steps.push({...result,positions:Array.from(result.positions),forceN:Array.from(result.forceN),sentAt,receivedAt,
-        visibilityState:document.visibilityState});
+        visibilityState:document.visibilityState,...(play?{frames:{sent:sentFrame,received:renderFrame}}:{})});
       if(play&&steps.length>300)steps.shift();
       if(fixture.liveWind)el('air-state').textContent=`Ветер ${result.audit.air.windSpeedMPS.toFixed(1)} м/с · направление ${result.audit.air.windFromDeg.toFixed(0)}° · нагрузка на парус ${Math.hypot(...result.audit.air.totalForceN).toFixed(1)} Н`;
       if(fixture.liveWind?.bodyProfile){const {phi,psi}=sv20BodyAngles(result.body.orientation9),V=rotate3(result.body.orientation9,result.body.velocity6.slice(0,3));
@@ -118,7 +120,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
     if(!play&&token===generation&&running&&client)timer=setTimeout(()=>{void step(token);},Math.max(0,fixture.recipe.hS*1000-(performance.now()-sentAt)));
   }
   async function prepare(cycle=false) {
-    const token=++generation;stop();automaticCycle=cycle;client?.terminate();client=undefined;busy=true;snapshot=undefined;steps=[];wallMs=0;shownStep=0;preparation=undefined;savedRecord.replaceChildren();sheetReadout();
+    const token=++generation;stop();automaticCycle=cycle;client?.terminate();client=undefined;busy=true;snapshot=undefined;steps=[];wallMs=0;shownStep=0;renderFrame=0;preparation=undefined;savedRecord.replaceChildren();sheetReadout();
     if(cycle)for(const [id,value] of [['pressure','100'],['yaw','0']]){el(id).value=value;el(id).oninput();}
     delete panel.dataset.error;panel.dataset.step='0';buttons();status.textContent='Проверяю вход и подготавливаю расчёт…';
     let prepared;
@@ -219,7 +221,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
   };
   if(play)void prepare();
   return {
-    pose(){},frame(){if(play&&client){if(busy)client.resume();else if(running)void step();}},
+    pose(){},frame(){if(play){renderFrame++;if(client){if(busy)client.resume();else if(running)void step();}}},
     update() {
       if(!snapshot||!geometry)return;
       const {originM,orientation9}=snapshot.body,RT=transpose3(orientation9),positions=snapshot.positions;
@@ -245,7 +247,7 @@ export async function startFluidLiveScene({renderer,genSail,boatGroup,mainSail,j
       for(const indicator of indicators)indicator.visible=false;
       const [x,y,z]=geometryOriginM;camera.position.set(x+9,z+5,-y+16);camera.lookAt(x+3,z+4,-y);
       shownStep=snapshot.index??0;panel.dataset.shownStep=String(shownStep);
-      const saved=steps.at(-1);if(saved?.index===shownStep&&saved.presentedAt===undefined)saved.presentedAt=performance.now();
+      const saved=steps.at(-1);if(saved?.index===shownStep&&saved.presentedAt===undefined){saved.presentedAt=performance.now();if(play)saved.frames.presented=renderFrame;}
     }
   };
 }

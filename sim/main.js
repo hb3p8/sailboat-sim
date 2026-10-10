@@ -3733,7 +3733,7 @@ renderer.init().then(async () => {
   const liveEntry=liveSailEntry(location.search);
   if (liveEntry?.kind === 'simulator') {
     const { startGennakerSimulator } = await import('./gennaker-live.mjs');
-    liveGennaker = await startGennakerSimulator({boat, ui, manifestPath:liveEntry.manifestPath});
+    liveGennaker = await startGennakerSimulator({boat, ui, manifestPath:liveEntry.manifestPath,gameUI:MOBILE_UI});
     startAt();apHeading=boat.psi;
     prev.x=boat.x;prev.y=boat.y;prev.psi=boat.psi;prev.phi=boat.phi;prev.zc=boat.zc;prev.th=boat.th;
   } else if (liveEntry) {

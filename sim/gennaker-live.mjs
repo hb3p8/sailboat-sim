@@ -10,7 +10,7 @@ async function bytesAt(path,sha) {
   if(sha&&await digest(bytes)!==sha)throw new Error('Изменился файл новой ткани: '+path);
   return bytes;
 }
-export async function startGennakerSimulator({boat,ui,manifestPath}) {
+export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false}) {
   const originalPack=boat.p,manifest=JSON.parse(new TextDecoder().decode(await bytesAt(manifestPath)));
   const inputs={};
   for(const side of ['plus','minus']) {
@@ -24,7 +24,7 @@ export async function startGennakerSimulator({boat,ui,manifestPath}) {
   const bytes=await bytesAt(source.wasm.path,source.wasm.sha256),materialBytes=await bytesAt(source.materialWasm.path,source.materialWasm.sha256);
   const runtimeSha256=Object.fromEntries(await Promise.all(['sim/gennaker-live.mjs','sim/gennaker-energy.mjs','sim/gennaker-energy-worker.mjs','sim/physics.js','sim/main.js','sim/controls.js','sim/trace.js'].map(async path=>[path,await digest(await bytesAt(path))])));
   const display=document.createElement('div');display.id='gennaker-energy-status';
-  Object.assign(display.style,{position:'absolute',bottom:'8px',left:'8px',maxWidth:'460px',padding:'6px 9px',background:'#18212dcc',color:'white',font:'12px sans-serif',pointerEvents:'none',zIndex:5});
+  Object.assign(display.style,{position:'absolute',top:gameUI?'80px':'8px',left:'50%',transform:'translateX(-50%)',width:'max-content',maxWidth:'min(460px, 90%)',padding:'6px 9px',background:'#18212dcc',color:'white',font:'12px sans-serif',pointerEvents:'none',zIndex:5});
   document.getElementById('stage').append(display);
   let worker,pending,requestTimer,continueAfterFrame=false,cloth,fixture,snapshot,busy=false,failed=false,steps=0,lastRig,completedSteps=0,lastBoatTime=0,deferred,lastStarted=0,renderFrame=0,commandFrames;
   const history=[],wallStart=performance.now();

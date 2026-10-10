@@ -486,9 +486,8 @@
     стаксель — так его и носят. Клавиша <b>N</b>.</div>
   <label class="flat"><span class="cap"><span><input id="genpressure" type="checkbox" checked>
     Опытное местное давление генакера</span></span></label>
-  <div>Включено для живого просмотра. Модель пока не прошла зеркальный галс:
-    при 140°/9.0 м скачок тяги 8.7 % против предела 5 %. Снимите галочку
-    для прежнего расчёта.</div>
+  <div>Меняет распределение давления по полотну. Это опытная модель; её
+    включение само по себе не подтверждает правильность поведения паруса.</div>
 
   <h2>Модель</h2>
   <label class="flat"><span class="cap">
@@ -677,7 +676,7 @@ const BUILD = /*__BUILD__*/ null;
     twist: v => (+v).toFixed(0) + '°',
     mainsheet: v => (+v).toFixed(0) + '°',
     jibsheet: v => (+v).toFixed(0) + '°',
-    gensheet: v => (+v).toFixed(1) + ' м',
+    gensheet: v => (+v).toFixed(3) + ' м',
     jibtwist: v => (+v).toFixed(0) + '°',
     jibdraft: v => (+v).toFixed(0) + '%',
     draft: v => (+v).toFixed(0) + '%',

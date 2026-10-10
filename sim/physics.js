@@ -457,7 +457,16 @@ export class Boat {
 
 
   step(dt) {
+    const work = this.stepWithGennaker(dt);
+    let part; do { part = work.next(); } while (!part.done);
+    return part.value;
+  }
+
+  // Обычный шаг можно приостановить после единственного расчёта воздуха.
+  // Продолжение заменяет только нагрузку генакера реакциями новой ткани.
+  *stepWithGennaker(dt) {
     const P = this.p, env = P.environment, m = P.mass;
+    const {waveZ,waveSE,waveSN}=this;
 
     this.o.rudder=rudderAngleAfter(this.o.rudder,this.o.rudderTarget,dt);
 
@@ -552,6 +561,18 @@ export class Boat {
     // есть число, с которым можно сверить картинку.
     this.gustG = this.wind.gust(this.x, this.y, this.t);
     const sail = this.rig.forces(this, aw, dt);
+    if (this.rig.cloth?.energyGennaker) {
+      const load = yield { sail, dt };
+      if (!load || ![...load.forceN, ...load.momentNm].every(Number.isFinite))
+        throw new Error('Нет принятой нагрузки новой ткани');
+      const old = sail.bySail[2];
+      for (let d = 0; d < 3; d++) {
+        sail[['fx','fy','fz'][d]] += load.forceN[d] - old.forceN[d];
+        sail[['mx','my','mz'][d]] += load.momentNm[d] - old.momentNm[d];
+      }
+      old.forceN = load.forceN.slice(); old.momentNm = load.momentNm.slice();
+      sail.energyGennaker = load.audit;
+    } else delete sail.energyGennaker;
     const wind = windage(P, this.o, aw);
 
     // Крылья видят не скорость центра тяжести, а свою местную: к дрейфу
@@ -594,15 +615,15 @@ export class Boat {
     // моментом; теперь он один на оба места — второй вызов стоил бы обхода всех
     // шпангоутов, а посадка между ними не меняется.
     const cpsi0 = Math.cos(this.psi), spsi0 = Math.sin(this.psi);
-    const wavePitch = Math.atan(this.waveSE * cpsi0 + this.waveSN * spsi0);
-    const waveRoll = Math.atan(-this.waveSE * spsi0 + this.waveSN * cpsi0);
+    const wavePitch = Math.atan(waveSE * cpsi0 + waveSN * spsi0);
+    const waveRoll = Math.atan(-waveSE * spsi0 + waveSN * cpsi0);
     let hyd = null;
     if (this.buoy.ready) {
       // Собственная волна корпуса — сюда же, в срез шпангоутов: корма садится во
       // впадину, нос встаёт, и это единственный источник ходового дифферента,
       // который включает глиссирование. Ниже окна по Фруду её нет ВООБЩЕ, и
       // вытесняющий режим не может сдвинуться ни на разряд.
-      hyd = this.buoy.at(this.zc - this.waveZ,
+      hyd = this.buoy.at(this.zc - waveZ,
                          this.phi - waveRoll, this.th - wavePitch,
                          humpSquat(P, Math.abs(this.u)));
     }
@@ -867,7 +888,8 @@ export class Boat {
       // Момент на нос кверху: продольное плечо на вертикальную силу минус
       // высота на продольную.
       let mth = fb * (rx * nz - rz * nx);
-      mth += (sail.ceX - cgx) * sail.fz - (sail.ceZ - cgz) * sail.fx;
+      mth += sail.energyGennaker ? -sail.my :
+        (sail.ceX - cgx) * sail.fz - (sail.ceZ - cgz) * sail.fx;
       mth += -(wind.z - cgz) * wind.fx;
       mth += -(dragZ - cgz) * hullDrag;
       mth += -(keel.z_centre_m - cgz) * keelFx - (rud.z_centre_m - cgz) * rudFx;

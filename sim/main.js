@@ -19,6 +19,7 @@ const HZ = 30;
 const DT = 1 / HZ;
 // Отдельные проверочные режимы: обычный Boat в них не шагает.
 let clothSceneReview = null;
+let liveGennaker = null;
 
 const stage = document.getElementById('stage');
 const hud = document.getElementById('hud');
@@ -1504,7 +1505,7 @@ function shapeSails(side, dt) {
       // картинка. Время берётся физическое, поэтому записанный прогон
       // выглядит при воспроизведении так же.
       const lf = Math.min(1, g.luffFrac || 0);
-      const flap = lf > 0.02 && chord > 0.05;
+      const flap = !cloth?.energyGennaker && lf > 0.02 && chord > 0.05;
       let amp = 0, om = 0;
       if (flap) {
         const L = lf * chord;
@@ -2371,6 +2372,7 @@ function dumpState() {
     mirror: boat.rig.mirK ? Array.from(boat.rig.mirK, v => +v.toFixed(3)) : null,
     fuse: boat.rig.fuseTrips || 0,
     trace: recorder.dump(),
+    gennakerEnergy: boat.gennakerEnergy ? structuredClone(boat.gennakerEnergy) : undefined,
     // Свободная пелена — короткой сводкой, а не целиком: узлов пятьсот с
     // лишним, и в дампе они заняли бы больше всего остального. Для разбора
     // хватает того, сколько её и куда она уехала.
@@ -2792,6 +2794,8 @@ boat.o.sheet = 24 * D;
 let startPt = null;
 
 function startAt() {
+  if(liveGennaker?.busy){liveGennaker.afterStep(()=>{startAt();apHeading=boat.psi;});return;}
+  liveGennaker?.restart();
   boat.reset();
   if (startPt) {
     boat.x = startPt.x; boat.y = startPt.y;
@@ -2809,6 +2813,9 @@ function startAt() {
     boat.psi = boat.o.windDir - START_TWA;
   }
   boat.u = 4.0;
+  // Первый просмотр новой ткани: условия прежнего проверенного наполнения.
+  // После старта все курс/паруса/ветер меняются обычными органами.
+  if(liveGennaker){boat.psi=wrapPi(boat.o.windDir-140*D);boat.u=0;}
 }
 
 const ui = {};
@@ -3164,6 +3171,18 @@ function frame() {
   // важен: поза ставится после чтения и перебивает ветер с ползунка.
   if (benchFrozen()) { readControls(DT); benchPose(boat, prev); acc = 0; }
   clothSceneReview?.pose(boat, prev);
+  if (liveGennaker) {
+    // Пока ткань считает, управление камерой и обычный экран продолжают жить.
+    // Следующий физический шаг читает органы один раз; очереди догона нет.
+    if (!liveGennaker.busy && (acc >= DT || boat.o.gennakerUp) && liveGennaker.canAdvance(DT)) {
+      readControls(DT);
+      liveGennaker.advance(DT, () => {
+        prev.x=boat.x; prev.y=boat.y; prev.psi=boat.psi; prev.phi=boat.phi;
+        prev.zc=boat.zc; prev.th=boat.th;
+      }, () => recorder.push(boat));
+    }
+    if (liveGennaker.busy || acc >= DT) acc = 0;
+  }
 
   // Догон шагов ограничен ВРЕМЕНЕМ, а не только их числом.
   //
@@ -3184,7 +3203,7 @@ function frame() {
   const PHYS_BUDGET = 11;   // мс
   let steps = 0;
   const tPhys = performance.now();
-  while (acc >= DT && steps < 8) {
+  while (!liveGennaker && acc >= DT && steps < 8) {
     prev.x = boat.x; prev.y = boat.y; prev.psi = boat.psi; prev.phi = boat.phi;
     prev.zc = boat.zc; prev.th = boat.th;
     readControls(DT);
@@ -3214,6 +3233,7 @@ function frame() {
   }
   const tScene = performance.now();
   perf.phys = smooth(perf.phys, tScene - tPhys);
+  steps += liveGennaker?.drainSteps() ?? 0;
   perf.steps = smooth(perf.steps, steps);
   const a = Math.min(1, acc / DT);
   const ix = prev.x + (boat.x - prev.x) * a;
@@ -3473,6 +3493,7 @@ function frame() {
       .finally(() => { perfBusy = false; });
   }
   clothSceneReview?.frame({ timestamp: tFrame, cpuMs: performance.now() - tFrame });
+  liveGennaker?.frame();
   tick++;
   requestAnimationFrame(frame);
 }
@@ -3710,7 +3731,12 @@ shapeSails(rigSideZ(1));
 renderer.init().then(async () => {
   resize();
   const liveEntry=liveSailEntry(location.search);
-  if (liveEntry) {
+  if (liveEntry?.kind === 'simulator') {
+    const { startGennakerSimulator } = await import('./gennaker-live.mjs');
+    liveGennaker = await startGennakerSimulator({boat, ui, manifestPath:liveEntry.manifestPath});
+    startAt();apHeading=boat.psi;
+    prev.x=boat.x;prev.y=boat.y;prev.psi=boat.psi;prev.phi=boat.phi;prev.zc=boat.zc;prev.th=boat.th;
+  } else if (liveEntry) {
     if (!benchFrozen() || BENCH_N !== 0) throw new Error('Живой опыт требует ?bench=0');
     const { startFluidLiveScene } = await import('../scripts/cloth_fluid_live_scene.mjs');
     clothSceneReview = await startFluidLiveScene({ entry:liveEntry,renderer, genSail, boatGroup, mainSail, jibSail, scene, sea, sunTarget:sun.target, camera,

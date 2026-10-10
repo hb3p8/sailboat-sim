@@ -32,7 +32,7 @@ addEventListener('keydown', e => {
   // Генакер: подъём и уборка. Перестраивает риг и сбрасывает пелену — это не
   // переключатель видимости, а другой набор парусов. Стаксель уходит вместе с
   // подъёмом, как и на воде.
-  if (e.code === 'KeyN') boat.setGennaker(!boat.o.gennakerUp);
+  if (e.code === 'KeyN' && !e.repeat) ui.genup.checked=!ui.genup.checked;
   if (e.code === 'KeyG') setDebug(debugMode + 1);
   // Подсказки прячутся по умолчанию: карточка длинная и закрывала собой
   // ползунки условий, а нужна она один раз — прочитать и убрать.
@@ -109,7 +109,9 @@ function readControls(dt) {
     // кадр: следующий же проход возвращал его галочкой обратно, и на воде
     // оказывались оба паруса разом — то, чего в этой постановке быть не должно.
     if (ui.genup) {
-      if (ui.genup.checked !== !!o.gennakerUp) boat.setGennaker(ui.genup.checked);
+      if (ui.genup.checked !== !!o.gennakerUp) {
+        boat.setGennaker(ui.genup.checked);ui.jibup.checked=!!o.jibUp;
+      }
       // Галочка стакселя при поднятом генакере не спорит, а показывает: он
       // убран, и поднять его нечем, пока не убран генакер.
       ui.jibup.disabled = !!o.gennakerUp;

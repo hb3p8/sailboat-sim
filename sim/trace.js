@@ -321,6 +321,7 @@ export function dumpCore(boat) {
 // признаки поставленных парусов — иначе `setGennaker` перетрёт их своим
 // `jibUp = !up`, — и только потом полотно: до перестройки его просто нет.
 export function applyDump(boat, dump) {
+  if (dump.gennakerEnergy) throw new Error('Снимок новой ткани пока предназначен для анализа; её рабочий расчёт не восстанавливается прежним загрузчиком');
   const c = dump.controls || {};
   Object.assign(boat.o, c);
   // Старый дамп знает шкот стакселя поправкой к гроту, новый — своим углом.

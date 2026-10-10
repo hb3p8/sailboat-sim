@@ -169,6 +169,14 @@ export class FluidBodyEnergyMotion {
   }
 
   step(load,h,passes=80) {
+    const work=this.stepIterations(load,h,passes);let part;
+    do {part=work.next();} while(!part.done);
+    return part.value;
+  }
+
+  // Между попытками можно вернуть управление браузеру. Состояние публикуется
+  // только после всех прежних проверок; порядок арифметики не меняется.
+  *stepIterations(load,h,passes=80) {
     this.validateState();
     if(load?.frame!=='inertial-cartesian-cg'||!finiteArray(load.clothForceN,this.pos.length)||
         !finiteArray(load.forceN,3)||!finiteArray(load.momentNm,3)||!(Number.isFinite(h)&&h>0)||
@@ -201,6 +209,7 @@ export class FluidBodyEnergyMotion {
         }
         if(!accepted)throw new Error('Не найден убывающий общий шаг воды и ткани');
         iterations++;
+        yield iterations;
       }
       let remove=-1;
       for(const j of active)if(this.hard[j].unilateral&&state.mu[j]<-this.tolerances.dualToleranceN&&
@@ -235,6 +244,7 @@ export class FluidBodyEnergyMotion {
           if(dotN(trial.residual,trial.residual)<norm*(1-1e-4*fraction)) {z=next;state=trial;accepted=true;break;}
         }
         if(accepted){iterations++;polishIterations++;}else polishStalls++;
+        yield iterations;
       }
       if(state.maxForceN>this.tolerances.forceToleranceN)throw new Error('Корректор не выполнил прежний допуск сил');
       if(state.maxLengthM>this.tolerances.lengthToleranceM||state.dualViolationN>this.tolerances.dualToleranceN||

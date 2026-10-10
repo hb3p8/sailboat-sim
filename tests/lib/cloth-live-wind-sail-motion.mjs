@@ -36,8 +36,11 @@ export function liveWindSailMotion(r,bodyInput,factor,{pack,wind,sheet,materialK
     return load;
   }
   function solve() {
+    const work=solveIterations();let part;do {part=work.next();} while(!part.done);return part.value;
+  }
+  function* solveIterations() {
     if(!load)throw new Error('Нагрузка живого ветра не подготовлена');
-    const audit=base.motion.step(load,base.hS,r.iterations);load=undefined;
+    const audit=yield* base.motion.stepIterations(load,base.hS,r.iterations);load=undefined;
     if(Math.abs(audit.discreteBalanceResidualJ)>audit.workLimitJ||Math.abs(audit.bodyWorkCancellationResidualJ)>audit.interfaceWorkLimitJ)
       throw new Error('Живой шаг не выполнил прежнюю проверку работы сил');
     timeS+=base.hS;
@@ -48,5 +51,5 @@ export function liveWindSailMotion(r,bodyInput,factor,{pack,wind,sheet,materialK
   }
   return {...base,liveWind:{model:air.model,wind:commands,...(isSV20?{bodyProfile,worldVelocityDampingHz:base.motion.dampingHz}:{}),
     ...(research?{timeRefinement:{model:timeRefinement,hS,pressureFrequencyHz:60,scope:'Уточнение механики с удерживаемым давлением Rig 60 Гц, не полный временной предел воздуха'}}:{}),
-    scope:isSV20?'SV20: явный сухой бюджет, спокойная вода/руль до исходного начала глиссирования, без экипажа/волн; мировое численное торможение выключено.':'живой ветер, лабораторная опора; руль/гидросилы/SV20 ещё не подключены'},prepareLoad,solve,step(c){prepareLoad(c);return solve();}};
+    scope:isSV20?'SV20: явный сухой бюджет, спокойная вода/руль до исходного начала глиссирования, без экипажа/волн; мировое численное торможение выключено.':'живой ветер, лабораторная опора; руль/гидросилы/SV20 ещё не подключены'},prepareLoad,solve,solveIterations,step(c){prepareLoad(c);return solve();}};
 }

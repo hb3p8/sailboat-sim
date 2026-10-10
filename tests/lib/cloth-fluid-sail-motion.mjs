@@ -66,13 +66,16 @@ export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='sch
     if(sheetLengthM!=null)load.ropeLengthsM=[sheetLengthM];
   }
   function solve() {
+    const work=solveIterations();let part;do {part=work.next();} while(!part.done);return part.value;
+  }
+  function* solveIterations() {
     if(!load)throw new Error('Нагрузка шага не подготовлена');
-    const audit=motion.step(load,hS,r.iterations);load=undefined;
+    const audit=yield* motion.stepIterations(load,hS,r.iterations);load=undefined;
     if(Math.abs(audit.discreteBalanceResidualJ)>audit.workLimitJ||Math.abs(audit.bodyWorkCancellationResidualJ)>audit.interfaceWorkLimitJ)
       throw new Error('Шаг не выполнил проверку работы сил');
     return audit;
   }
-  return {motion,forceN,addedMass6:bodyMass?.audit.addedMass6??addedMass6,material:MODEL_MATERIAL,hS,sheetControl,prepareLoad,solve,
+  return {motion,forceN,addedMass6:bodyMass?.audit.addedMass6??addedMass6,material:MODEL_MATERIAL,hS,sheetControl,prepareLoad,solve,solveIterations,
     ...(bodyMass?{massBudget:bodyMass.audit,geometryCGM:Array.from(bodyMass.cgM)}:{}),
     step(controls){prepareLoad(controls);return solve();}};
 }

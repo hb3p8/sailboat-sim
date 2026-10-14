@@ -32,7 +32,7 @@ for(const side of ['plus','minus'])for(const wind of [4,6])for(const course of (
   const calc=prescribedGennaker(f,pack,gennakerPose(b),factor,material);
   let priorPose=gennakerPose(b),priorWorld=Float64Array.from(Array.from({length:c.n},(_,i)=>worldPoint(priorPose,Array.from(c.pos.slice(3*i,3*i+3)))).flat()),maxForce=0,maxLength=0,maxWorkRatio=0;
   const samples=[],physicalHash=createHash('sha256'),start=performance.now();
-  let step=0;
+  let step=0,resumed;
   try {for(;step<count;step++) {
     b.o.rudderTarget=(step<20?0:side==='plus'?4:-4)*Math.PI/180;
     b.o.genSheetLen=calc.minLengthM+(step>=15&&step<40?.25:0);
@@ -40,7 +40,15 @@ for(const side of ['plus','minus'])for(const wind of [4,6])for(const course of (
     c.forcesAt(b,1/60,b.rigSide,b.p.environment);
     const forceN=new Float64Array(c.frc.length);
     for(let i=0;i<c.n;i++)forceN.set(rotate3(pose.orientation9,Array.from(c.frc.slice(3*i,3*i+3))),3*i);
-    const halves=[intermediatePose(priorPose,pose),pose].map(targetPose=>calc.step({forceN,targetPose,sheetLengthM:b.o.genSheetLen}));
+    if(step===Math.floor(count/2)) {
+      resumed=prescribedGennaker(f,pack,pose,factor,material);
+      resumed.restore(JSON.parse(JSON.stringify(calc.snapshot())));
+    }
+    const halves=[intermediatePose(priorPose,pose),pose].map(targetPose=>{
+      const command={forceN,targetPose,sheetLengthM:b.o.genSheetLen},expected=calc.step(command);
+      if(resumed)assert.deepEqual(resumed.step(command),expected);
+      return expected;
+    });
     const result=halves[1],co=Math.cos(b.psi),si=Math.sin(b.psi),heading=v=>[co*v[0]+si*v[1],-si*v[0]+co*v[1],v[2]];
     const load={forceN:heading(result.forceN.map((v,d)=>(v+halves[0].forceN[d])/2)),
       momentNm:heading(result.momentNm.map((v,d)=>(v+halves[0].momentNm[d])/2)),audit:result.audit};

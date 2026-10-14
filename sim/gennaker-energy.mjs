@@ -14,6 +14,16 @@ export function gennakerPose(b) {
 export const worldPoint=(pose,p)=>rotate3(pose.orientation9,p).map((v,d)=>v+pose.originM[d]);
 export const localPoint=(pose,p)=>rotate3(transpose3(pose.orientation9),p.map((v,d)=>v-pose.originM[d]));
 
+// JSON сам превращает −0 в +0. В версионном численном снимке знак нуля
+// хранится строкой; остальные числа остаются читаемыми числами в СИ.
+function stateNumbers(value,reading=false) {
+  if(reading&&value==='-0')return -0;
+  if(!reading&&Object.is(value,-0))return '-0';
+  if(Array.isArray(value))return value.map(v=>stateNumbers(v,reading));
+  if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,stateNumbers(v,reading)]));
+  return value;
+}
+
 export function gennakerBodyPack(pack,recipe) {
   const budget=sv20SailMass(pack,recipe), m=pack.mass, a=budget.audit, J=a.dryInertia9;
   // Boat хранит диагональные моменты: перекрёстные члены общего стенда здесь
@@ -62,7 +72,63 @@ export function prescribedGennaker(fixture,pack,pose,factor,materialKernel,{obse
   const budget=sv20SailMass(pack,r),referenceSupports=fixed.map(i=>i===anchor?fixture.sheet.localM:r.positions.slice(3*i,3*i+3));
   let index=0,lengthM=fixture.sheet.lengthM,lastPose=pose;
   const minLengthM=lengthM,maxLengthM=lengthM+.25;
-  const calculation={motion,budget,minLengthM,maxLengthM,step(command,depth=0) {
+  // Версия задаёт состояние между принятыми подшагами. Кэш разложения и
+  // рабочие буферы материала не несут истории: после загрузки строятся заново.
+  const configuration=JSON.stringify({recipe:r,sheet:fixture.sheet,mass:pack.mass,
+    gravity:pack.environment.g,material:MODEL_MATERIAL});
+  const calculation={motion,budget,minLengthM,maxLengthM,snapshot() {
+    return stateNumbers({schema:'gennaker-prescribed-state-v1',configuration,index,lengthM,
+      frameOriginM:frameOriginM.slice(),lastPose:structuredClone(lastPose),
+      motion:{pos:Array.from(motion.pos),prev:Array.from(motion.prev),prevDt:motion.prevDt,
+        lambda:motion.constraints.map(c=>c.lambda),lastMu:motion.lastMu?Array.from(motion.lastMu):null,
+        supportMotionActive:motion.supportMotionActive,
+        fixedPositions:Array.from(motion.fixedPositions,([node,positionM])=>({node,positionM:positionM.slice()}))}});
+  },restore(state) {
+    // Вся проверка предшествует записи. В частности, повреждённая скорость,
+    // множитель или закрепление не оставляют половину нового состояния.
+    state=stateNumbers(state,true);
+    const bad=()=>{throw new Error('Некорректный снимок расчёта генакера');};
+    const vector=(v,n)=>Array.isArray(v)&&v.length===n&&Array.from(v).every(Number.isFinite);
+    const validPose=p=>p&&vector(p.originM,3)&&vector(p.angles,3)&&vector(p.orientation9,9)&&
+      p.orientation9.every((v,i)=>v===boatBodyRotation(...p.angles)[i]);
+    if(state?.schema!=='gennaker-prescribed-state-v1'||state.configuration!==configuration||
+        !Number.isSafeInteger(state.index)||state.index<0||!Number.isFinite(state.lengthM)||
+        state.lengthM<minLengthM||state.lengthM>maxLengthM||!vector(state.frameOriginM,3)||!validPose(state.lastPose))bad();
+    const s=state.motion;
+    if(!s||!vector(s.pos,motion.pos.length)||!vector(s.prev,motion.prev.length)||
+        !vector(s.lambda,motion.constraints.length)||
+        !(s.lastMu===null||vector(s.lastMu,motion.hard.length))||
+        !(state.index===0?s.prevDt===0:[1/60,1/120,1/240].includes(s.prevDt))||
+        typeof s.supportMotionActive!=='boolean'||s.supportMotionActive!==(state.index>0)||
+        (state.index===0?s.lastMu!==null:s.lastMu===null)||!Array.isArray(s.fixedPositions)||s.fixedPositions.length!==fixed.length)bad();
+    for(let j=0;j<fixed.length;j++) {
+      const f=s.fixedPositions[j];
+      if(f?.node!==fixed[j]||!vector(f.positionM,3)||f.positionM.some((v,d)=>v!==s.pos[3*f.node+d]))bad();
+      const expected=worldPoint({...state.lastPose,originM:state.lastPose.originM.map((v,d)=>v-state.frameOriginM[d])},referenceSupports[j]);
+      if(expected.some((v,d)=>Math.abs(v-f.positionM[d])>32*Number.EPSILON*Math.max(1,Math.abs(v),Math.abs(f.positionM[d]))))bad();
+    }
+    const {head,end,nodes,fractions}=motion.board;
+    for(const field of [s.pos,s.prev])for(let j=0;j<nodes.length;j++)for(let d=0;d<3;d++) {
+      const a=field[3*nodes[j]+d],b=field[3*head+d]+fractions[j]*(field[3*end+d]-field[3*head+d]);
+      if(Math.abs(a-b)>32*Number.EPSILON*Math.max(1,Math.abs(a),Math.abs(b)))bad();
+    }
+    // Снимок после шага обязан удовлетворять тем же жёстким ограничениям,
+    // что и принятый ответ решателя. Допуск для загрузки не расширяется.
+    if(state.index>0)for(let j=0;j<motion.hard.length;j++) {
+      const c=motion.hard[j],value=j===motion.hard.length-1?
+        distance(fixture.sheet.node,anchor,state.lengthM,0,true).value:c.value;
+      const {C}=value(s.pos);
+      if(!Number.isFinite(C)||(c.unilateral?Math.max(0,C):Math.abs(C))>motion.lengthToleranceM)bad();
+    }
+    const copy=structuredClone(state);
+    frameOriginM.splice(0,3,...copy.frameOriginM);lastPose=copy.lastPose;index=copy.index;lengthM=copy.lengthM;
+    motion.pos.set(copy.motion.pos);motion.prev.set(copy.motion.prev);motion.prevDt=copy.motion.prevDt;
+    motion.constraints.forEach((c,i)=>{c.lambda=copy.motion.lambda[i];});
+    if(copy.motion.lastMu===null)delete motion.lastMu;else motion.lastMu=Float64Array.from(copy.motion.lastMu);
+    motion.supportMotionActive=copy.motion.supportMotionActive;
+    motion.fixedPositions=new Map(copy.motion.fixedPositions.map(f=>[f.node,f.positionM]));
+    setLength(lengthM);
+  },step(command,depth=0) {
     const hS=command.hS??1/60,from=lastPose;
     const attemptStart=observeAttempt?performance.now():0;
     try {const result=advance({...command,hS});
@@ -79,6 +145,10 @@ export function prescribedGennaker(fixture,pack,pose,factor,materialKernel,{obse
           maxForceResidualN:Math.max(...leaves.map(v=>v.maxForceResidualN)),maxHardViolationM:Math.max(...leaves.map(v=>v.maxHardViolationM))}};
     }
   }};
+  function setLength(valueM) {
+    const value=distance(fixture.sheet.node,anchor,valueM,0,true).value;
+    rope.value=value;motion.constraints.at(-1).value=value;motion.hard.at(-1).value=value;
+  }
   function advance({forceN,targetPose,sheetLengthM,hS}) {
     if(forceN.length!==3*n||!forceN.every(Number.isFinite)||![1/60,1/120,1/240].includes(hS))
       throw new Error('Требуется конечная узловая нагрузка и шаг ткани 1/60, 1/120 или 1/240 с');
@@ -86,8 +156,7 @@ export function prescribedGennaker(fixture,pack,pose,factor,materialKernel,{obse
     const priorLengthM=lengthM;
     lengthM+=Math.max(-.5*hS,Math.min(.5*hS,requested-lengthM));
     // distance захватывает rest; меняется только явная команда верёвки.
-    const value=distance(fixture.sheet.node,anchor,lengthM,0,true).value;
-    rope.value=value;motion.constraints.at(-1).value=value;motion.hard.at(-1).value=value;
+    setLength(lengthM);
     const load=new Float64Array(3*(n+1));load.set(forceN);
     for(let i=0;i<n;i++)load[3*i+2]-=budget.dryNodalKg[i]*pack.environment.g;
     const solverPose=framePose(targetPose),targets=fixed.map((node,j)=>({node,positionM:worldPoint(solverPose,referenceSupports[j])}));
@@ -95,8 +164,7 @@ export function prescribedGennaker(fixture,pack,pose,factor,materialKernel,{obse
     let audit;
     try {audit=motion.step(load,hS,r.iterations,targets);} catch(error) {
       lengthM=priorLengthM;
-      const previousValue=distance(fixture.sheet.node,anchor,lengthM,0,true).value;
-      rope.value=previousValue;motion.constraints.at(-1).value=previousValue;motion.hard.at(-1).value=previousValue;
+      setLength(lengthM);
       throw error;
     }
     const workLimitJ=motion.forceToleranceN*motion.free.reduce((sum,k)=>sum+Math.abs(motion.pos[k]-motion.prev[k]),0)+

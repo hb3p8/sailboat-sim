@@ -10,14 +10,21 @@ self.onmessage=async ({data})=>{
       profile=data.profile===true;
       calculation=prescribedGennaker(data.fixture,data.pack,data.pose,factor,selected.kernel,
         profile?{observeAttempt:a=>attempts.push(a)}:{});
+      if(data.state!==undefined)calculation.restore(data.state);
       self.postMessage({type:'ready',minLengthM:calculation.minLengthM,maxLengthM:calculation.maxLengthM,material:selected.material});
+    } else if(data.type==='snapshot'||data.type==='restore') {
+      if(!calculation||job)throw new Error('Снимок ткани разрешён только между полными шагами');
+      if(data.type==='restore')calculation.restore(data.state);
+      self.postMessage({type:data.type,state:calculation.snapshot()});
     } else if(data.type==='step') {
       if(job)throw new Error('Предыдущий шаг ткани ещё не окончен');
       job={...data,parts:[],results:[],attempts:[]};run();
     } else if(data.type==='continue') {
       if(!job)throw new Error('Нет приостановленного шага ткани');run();
     } else throw new Error('Неизвестная команда ткани');
-  } catch(error){const details=profile?{attempts:[...(job?.attempts??[]),attempts??[]]}:{};job=undefined;self.postMessage({type:'error',message:error.message,...details});}
+  } catch(error){const details=profile?{attempts:[...(job?.attempts??[]),attempts??[]]}:{};
+    if(!['snapshot','restore'].includes(data.type))job=undefined;
+    self.postMessage({type:'error',message:error.message,...details});}
 };
 function run() {
   const start=performance.now(),part=job.results.length,pose=job.poses[part];attempts=[];

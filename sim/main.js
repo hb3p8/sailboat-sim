@@ -2372,6 +2372,7 @@ function dumpState() {
     mirror: boat.rig.mirK ? Array.from(boat.rig.mirK, v => +v.toFixed(3)) : null,
     fuse: boat.rig.fuseTrips || 0,
     trace: recorder.dump(),
+    gennakerMetrics: liveGennaker?.performance(),
     gennakerEnergy: boat.gennakerEnergy ? structuredClone(boat.gennakerEnergy) : undefined,
     // Свободная пелена — короткой сводкой, а не целиком: узлов пятьсот с
     // лишним, и в дампе они заняли бы больше всего остального. Для разбора
@@ -3138,6 +3139,7 @@ if (location.search.includes('shadowinfo')) {
 }
 
 function frame() {
+  liveGennaker?.observeFrame({timestamp:performance.now(),paused:benchPaused()||benchFrozen(),hidden:document.hidden});
   // Замер держит кадр за собой целиком — см. benchPaused в bench.js. Часы при
   // этом переставляются: иначе физика после замера доберёт всё простоявшее время
   // одним прыжком.
@@ -3714,6 +3716,7 @@ window.sv20dump = dumpState;
 // нет, а на настольной машине по ним удобно собирать замеры не глазами с экрана.
 //   copy(JSON.stringify(sv20perf()))
 window.sv20perf = () => ({
+  gennakerMetrics:liveGennaker?.performance(),
   ...perf,
   gpuЕсть: !!(renderer.info.render.timestamp || renderer.info.compute.timestamp),
   метки: !!renderer.trackTimestamp,

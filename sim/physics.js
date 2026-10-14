@@ -464,7 +464,7 @@ export class Boat {
 
   // Обычный шаг можно приостановить после единственного расчёта воздуха.
   // Продолжение заменяет только нагрузку генакера реакциями новой ткани.
-  *stepWithGennaker(dt) {
+  *stepWithGennaker(dt,timings) {
     const P = this.p, env = P.environment, m = P.mass;
     const {waveZ,waveSE,waveSN}=this;
 
@@ -560,7 +560,9 @@ export class Boat {
     // по каждой полоске отдельно. Одна лишняя выборка на шаг, зато на экране
     // есть число, с которым можно сверить картинку.
     this.gustG = this.wind.gust(this.x, this.y, this.t);
+    const airStart=timings?performance.now():0;
     const sail = this.rig.forces(this, aw, dt);
+    if(timings)timings.rigMs=performance.now()-airStart;
     if (this.rig.cloth?.energyGennaker) {
       const load = yield { sail, dt };
       if (!load || ![...load.forceN, ...load.momentNm].every(Number.isFinite))

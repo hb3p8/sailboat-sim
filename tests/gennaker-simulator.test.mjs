@@ -31,7 +31,7 @@ for(const side of ['plus','minus'])for(const wind of [4,6])for(const course of (
   const c=energyCloth(f.recipe,pack);b.rig.cloth=c;
   const calc=prescribedGennaker(f,pack,gennakerPose(b),factor,material);
   let priorPose=gennakerPose(b),priorWorld=Float64Array.from(Array.from({length:c.n},(_,i)=>worldPoint(priorPose,Array.from(c.pos.slice(3*i,3*i+3)))).flat()),maxForce=0,maxLength=0,maxWorkRatio=0;
-  const samples=[],start=performance.now();
+  const samples=[],physicalHash=createHash('sha256'),start=performance.now();
   let step=0;
   try {for(;step<count;step++) {
     b.o.rudderTarget=(step<20?0:side==='plus'?4:-4)*Math.PI/180;
@@ -63,6 +63,8 @@ for(const side of ['plus','minus'])for(const wind of [4,6])for(const course of (
       maxWorkRatio=Math.max(maxWorkRatio,Math.abs(h.audit.discreteBalanceResidualJ)/h.audit.workLimitJ);
       assert(h.audit.maxForceResidualN<=1e-6);assert(h.audit.maxHardViolationM<=1e-9);
     }
+    physicalHash.update(JSON.stringify({boat:[b.x,b.y,b.zc,b.psi,b.phi,b.th,b.u,b.v],
+      positions:Array.from(result.positions),velocity:Array.from(result.velocity),forceN:load.forceN,momentNm:load.momentNm,lengthM:result.lengthM}));
     if(step%10===0)samples.push({step:step+1,t:b.t,speed:b.u,heel:b.phi,forceN:load.forceN,momentNm:load.momentNm,lengthM:result.lengthM});
   }} catch(error) {
     if(out)writeFileSync(out,JSON.stringify({schema:'gennaker-simulator-check-v1',phase:'failed',results,
@@ -73,7 +75,7 @@ for(const side of ['plus','minus'])for(const wind of [4,6])for(const course of (
   b.setGennaker(false);b.p=pack;b.mass=pack.mass.total_kg;b.rig.p=pack;
   b.step(1/30);assert.equal(b.rig.cloth,null);assert.equal(b.o.jibUp,true);
   b.setGennaker(true);assert(b.rig.cloth);assert.equal(b.o.jibUp,false);
-  const result={side,wind,course,steps:count,wallMs:performance.now()-start,maxForce,maxLength,maxWorkRatio,samples};results.push(result);
+  const result={side,wind,course,steps:count,wallMs:performance.now()-start,maxForce,maxLength,maxWorkRatio,physicalSha256:physicalHash.digest('hex'),samples};results.push(result);
   console.log(`Борт ${side==='plus'?'+':'−'}, ${course==='broad'?'полный курс':'более острый курс'}, ветер ${wind}: ${count} шагов, ${result.wallMs.toFixed(0)} мс; сила ${maxForce}, длина ${maxLength}`);
 }
 if(out)writeFileSync(out,JSON.stringify({schema:'gennaker-simulator-check-v1',phase:'complete',model:'boat-prescribed-energy-v1',material:selected.material,revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),

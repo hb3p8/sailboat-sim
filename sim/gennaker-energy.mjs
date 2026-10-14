@@ -41,7 +41,7 @@ export function intermediatePose(a,b) {
   return {originM:b.originM.map((v,d)=>(v+a.originM[d])/2),angles,orientation9:boatBodyRotation(...angles)};
 }
 
-export function prescribedGennaker(fixture,pack,pose,factor,materialKernel) {
+export function prescribedGennaker(fixture,pack,pose,factor,materialKernel,{observeAttempt}={}) {
   const r=fixture.recipe,n=r.rows*r.cols,anchor=n;
   if(n!==99||!fixture.sheet)throw new Error('Живой перенос требует сетку 11×9 и верёвку');
   // Неподвижное начало инерциальных осей у места подъёма: те же уравнения,
@@ -62,12 +62,17 @@ export function prescribedGennaker(fixture,pack,pose,factor,materialKernel) {
   const budget=sv20SailMass(pack,r),referenceSupports=fixed.map(i=>i===anchor?fixture.sheet.localM:r.positions.slice(3*i,3*i+3));
   let index=0,lengthM=fixture.sheet.lengthM,lastPose=pose;
   const minLengthM=lengthM,maxLengthM=lengthM+.25;
-  const calculation={motion,budget,minLengthM,maxLengthM,step(command) {
+  const calculation={motion,budget,minLengthM,maxLengthM,step(command,depth=0) {
     const hS=command.hS??1/60,from=lastPose;
-    try {const result=advance({...command,hS});lastPose=command.targetPose;return result;} catch(error) {
+    const attemptStart=observeAttempt?performance.now():0;
+    try {const result=advance({...command,hS});
+      observeAttempt?.({hS,depth,accepted:true,iterations:result.audit.iterations,ms:performance.now()-attemptStart});
+      lastPose=command.targetPose;return result;
+    } catch(error) {
+      observeAttempt?.({hS,depth,accepted:false,reason:error.message,ms:performance.now()-attemptStart});
       if(hS<=1/240||!(/не доведено|Не найден убывающий|Не сошёлся выбор кромок|не положительна/.test(error.message)))throw error;
       const middle=intermediatePose(from,command.targetPose);
-      const a=calculation.step({...command,targetPose:middle,hS:hS/2}),b=calculation.step({...command,hS:hS/2});
+      const a=calculation.step({...command,targetPose:middle,hS:hS/2},depth+1),b=calculation.step({...command,hS:hS/2},depth+1);
       const leaves=[...(a.leaves??[a.audit]),...(b.leaves??[b.audit])];
       return {...b,forceN:b.forceN.map((v,d)=>(v+a.forceN[d])/2),momentNm:b.momentNm.map((v,d)=>(v+a.momentNm[d])/2),leaves,
         audit:{...b.audit,substeps:leaves.length,refinement:{hS,message:error.message},

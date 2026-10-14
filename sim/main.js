@@ -2336,7 +2336,13 @@ function updateStreaks(ix, iy, dt) {
 //
 // Проигрывается дамп без браузера: scripts/replay.mjs.
 const TRACE_SECONDS = 20;
-const recorder = new Recorder(TRACE_SECONDS, HZ);
+let recorder = new Recorder(TRACE_SECONDS, HZ);
+let sessionWaterHeld=false;
+
+async function captureDump() {
+  if(!liveGennaker)return dumpState();
+  return liveGennaker.capture(session=>Object.assign(dumpState(),{gennakerSession:session,inputState:captureSessionUI()}));
+}
 
 function dumpState() {
   const t = boat.telemetry || {};
@@ -2420,18 +2426,27 @@ function dumpState() {
 // Акватория при этом НЕ подменяется: если дамп снят на другой, лодка встанет в
 // те же координаты на нынешней, и об этом говорится вслух. Тень берега и
 // поворот ветра долиной зависят от места, и молча разойтись тут проще всего.
-function loadDump(d) {
+async function loadDump(d) {
   if (!d || !d.boat || !d.controls) throw new Error('это не дамп симулятора');
   // Состояние лодки, настройки, риг и полотно — общим разбором (`sim/trace.js`),
   // тем же, которым пользуется проигрыватель без браузера. Здесь остаётся
   // только то, чего вне браузера нет: вид, панель и отрисовка.
-  applyDump(boat, d);
-  if (d.scene) {
+  if(d.gennakerSession) {
+    if(!liveGennaker)throw new Error('Для этого снимка нужен обычный симулятор с новой тканью');
+    const applyInput=prepareSessionUI(d.inputState);
+    await liveGennaker.restore(d.gennakerSession,()=>{applyInput();sessionWaterHeld=true;});
+    recorder=new Recorder(TRACE_SECONDS,HZ);
+  } else if(liveGennaker) {
+    if(d.gennakerEnergy||d.controls.gennakerUp)throw new Error('Диагностический дамп не содержит полного снимка новой ткани; прежнюю ткань загружайте с ?legacy=1');
+    await liveGennaker.legacyLoad(candidate=>applyDump(candidate,d));sessionWaterHeld=false;
+  } else applyDump(boat,d);
+  if (!d.gennakerSession&&d.scene) {
     autopilot = !!d.scene.autopilot;
     apHeading = d.scene.apHeading != null ? d.scene.apHeading : boat.psi;
   }
   setSailPhysics(false);
-  syncPanelFromBoat();
+  if(!d.gennakerSession)syncPanelFromBoat();
+  prev.x=boat.x;prev.y=boat.y;prev.psi=boat.psi;prev.phi=boat.phi;prev.zc=boat.zc;prev.th=boat.th;acc=0;
   wake.clear();
   trackN = 0;
   const mine = terrain.ready ? TERRAIN_PACK.hash : null;
@@ -2484,8 +2499,8 @@ addEventListener('drop', e => {
   const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
   if (!f) return;
   const btn = document.getElementById('dump');
-  f.text().then(txt => {
-    const note = loadDump(JSON.parse(txt));
+  f.text().then(async txt => {
+    const note = await loadDump(JSON.parse(txt));
     if (btn) {
       btn.textContent = 'загружено: ' + f.name.slice(0, 28) + note;
       setTimeout(() => { btn.textContent = 'Сдампать состояние'; }, 4000);
@@ -2545,7 +2560,9 @@ async function saveDump() {
     btn.textContent = txt;
     setTimeout(() => { btn.textContent = 'Сдампать состояние'; }, hold);
   };
-  const state = dumpState();
+  let state;
+  try {state=await captureDump();}
+  catch(error){state=Object.assign(dumpState(),{snapshotError:error.message});}
   const frames = (state.trace && state.trace.frames ? state.trace.frames : []).length;
   const text = JSON.stringify(state, null, 1);
   try {
@@ -2570,11 +2587,12 @@ async function saveDump() {
 // Вернуть лодку в состояние дампа по его идентификатору. Из консоли:
 // sv20load('a3f9c2'). Без аргумента — список последних.
 window.sv20load = async (id) => {
+  if(id&&typeof id==='object')return loadDump(id);
   const r = await fetch(DUMP_URL + (id ? '/' + id : ''));
   const res = await r.json();
   if (!r.ok) throw new Error(res.error || ('сервер ответил ' + r.status));
   if (!id) return res.dumps;
-  const note = loadDump(res);
+  const note = await loadDump(res);
   console.log('загружен дамп ' + id + (note || ''));
   return id + (note || '');
 };
@@ -2797,6 +2815,7 @@ let startPt = null;
 function startAt() {
   if(liveGennaker?.busy){liveGennaker.afterStep(()=>{startAt();apHeading=boat.psi;});return;}
   liveGennaker?.restart();
+  sessionWaterHeld=false;
   boat.reset();
   if (startPt) {
     boat.x = startPt.x; boat.y = startPt.y;
@@ -3164,7 +3183,7 @@ function frame() {
   // волне с периодом в пару секунд это сантиметры.
   readSeaPlane(boat.psi,
                windMapSample(toSceneX(boat.x), toSceneZ(boat.y)) ** 2);
-  boat.setWater(seaPlane.z, seaPlane.se, seaPlane.sn);
+  if(!liveGennaker?.transitioning&&!sessionWaterHeld)boat.setWater(seaPlane.z, seaPlane.se, seaPlane.sn);
 
   // На скамье физика не шагает вовсе: лодка и вода стоят в известных числах,
   // чтобы два запуска давали один и тот же кадр. Подробности — в bench.js.
@@ -3182,7 +3201,7 @@ function frame() {
       liveGennaker.advance(DT, () => {
         prev.x=boat.x; prev.y=boat.y; prev.psi=boat.psi; prev.phi=boat.phi;
         prev.zc=boat.zc; prev.th=boat.th;
-      }, () => recorder.push(boat));
+      }, () => {recorder.push(boat);sessionWaterHeld=false;});
     }
     if (liveGennaker.busy || acc >= DT) acc = 0;
   }
@@ -3713,6 +3732,7 @@ window.sv20ocean = async (n = 12) => {
 // Тот же дамп доступен из консоли — удобно, когда файл забирать некуда:
 // copy(JSON.stringify(sv20dump()))
 window.sv20dump = dumpState;
+window.sv20snapshot = captureDump;
 // Тайминги наружу — тем же способом, что и дамп состояния: на телефоне консоли
 // нет, а на настольной машине по ним удобно собирать замеры не глазами с экрана.
 //   copy(JSON.stringify(sv20perf()))
@@ -3737,7 +3757,7 @@ renderer.init().then(async () => {
   const liveEntry=liveSailEntry(location.search);
   if (liveEntry?.kind === 'simulator') {
     const { startGennakerSimulator } = await import('./gennaker-live.mjs');
-    liveGennaker = await startGennakerSimulator({boat, ui, manifestPath:liveEntry.manifestPath,gameUI:MOBILE_UI});
+    liveGennaker = await startGennakerSimulator({boat, ui, manifestPath:liveEntry.manifestPath,gameUI:MOBILE_UI,terrainHash:terrain.ready?TERRAIN_PACK.hash:null});
     startAt();apHeading=boat.psi;
     prev.x=boat.x;prev.y=boat.y;prev.psi=boat.psi;prev.phi=boat.phi;prev.zc=boat.zc;prev.th=boat.th;
   } else if (liveEntry) {

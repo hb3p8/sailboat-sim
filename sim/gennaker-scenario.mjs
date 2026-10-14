@@ -30,8 +30,29 @@ export function gennakerScenario(search,minimumM) {
       for(const key of ['wind','winddir','gensheet'])ui[key].dispatchEvent(new Event('input'));
     },
     accepted(boat){this.elapsedS=boat.t-startS;},
-    snapshot(){return {name,side,wakeSlice:wake,initialSpeedMPS:speed,durationS:3,elapsedS:this.elapsedS,applied,
+    restore(state,modelTimeS) {
+      const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+      const expected={};
+      if(!state||state.schema!=='gennaker-scenario-v1'||state.name!==name||state.side!==side||state.wakeSlice!==wake||
+        state.initialSpeedMPS!==speed||state.durationS!==3||!same(state.commands,commands)||
+        !Number.isSafeInteger(state.applied)||state.applied<0||state.applied>commands.length||
+        !Number.isFinite(state.elapsedS)||state.elapsedS<0||state.elapsedS>3+1e-10)throw new Error('Некорректное состояние сценария');
+      for(const c of commands.slice(0,state.applied))Object.assign(expected,c);
+      const elapsed=state.startS===null?0:modelTimeS-state.startS;
+      const count=state.startS===null?0:commands.filter(c=>c.atS<=elapsed-1/30+1e-10).length;
+      if((state.startS!==null&&(!Number.isFinite(state.startS)||state.startS<0))||
+        elapsed!==state.elapsedS||state.applied!==count||!same(expected,state.command)||
+        state.done!==(state.startS!==null&&elapsed>=3-1e-10))throw new Error('Сценарий не согласован со временем лодки');
+      startS=state.startS===null?undefined:state.startS;applied=state.applied;command={...expected};this.elapsedS=elapsed;
+    },
+    snapshot(){return {schema:'gennaker-scenario-v1',startS:startS??null,name,side,wakeSlice:wake,initialSpeedMPS:speed,durationS:3,elapsedS:this.elapsedS,applied,
       conditions:{windMPS:4,mainSheetDeg:25,jibSheetDeg:25,twistDeg:8,crewKg:220,gust:0},
       commands:commands.map(c=>({...c})),command:{...command},done:this.done};}
   };
+}
+export function restoredGennakerScenario(state,modelTimeS,minimumM) {
+  if(state===null)return undefined;
+  const scenario=gennakerScenario('?'+new URLSearchParams({'physics-run':state?.name,'physics-side':state?.side,
+    'physics-wake':state?.wakeSlice,'physics-speed':state?.initialSpeedMPS}),minimumM);
+  scenario.restore(state,modelTimeS);return scenario;
 }

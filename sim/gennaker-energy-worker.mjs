@@ -1,4 +1,4 @@
-// Два подшага ткани разделены сообщением после показанного кадра.
+// Два подшага разделены явным continue; момент отправки выбирает адаптер.
 import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
 import {selectGennakerMaterial} from './gennaker-material.mjs';
 let calculation,job,attempts,profile=false;

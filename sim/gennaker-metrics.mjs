@@ -26,6 +26,10 @@ export class GennakerMetrics {
     }
     this.paused=!!paused;this.hidden=!!hidden;this.lastFrameMs=timestamp;
   }
+  due(hS) {
+    if(!Number.isFinite(hS)||hS<=0)throw new Error('Нужен положительный шаг расписания');
+    this.tick();return this.phase==='running'&&this.phaseMs.running/1000-this.activeModelS>=hS;
+  }
   accepted(hS,record) {
     if(!Number.isFinite(hS)||hS<=0)throw new Error('Нужен положительный принятый шаг');
     this.tick();this.modelS+=hS;this.steps++;

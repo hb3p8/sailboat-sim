@@ -25,8 +25,9 @@ export function gennakerScenario(search,minimumM) {
       if(!!o.gennakerUp!==command.gennakerUp)boat.setGennaker(command.gennakerUp);
       // Панель не должна отменить команду следующего шага.
       ui.genup.checked=o.gennakerUp;ui.jibup.checked=!!o.jibUp;ui.mainup.checked=true;
-      for(const [key,value] of Object.entries({mainsheet:25,jibsheet:25,twist:8,jibtwist:8,draft:100,jibdraft:100,sailscale:1,gust:0}))if(ui[key])ui[key].value=String(value);
+      for(const [key,value] of Object.entries({mainsheet:25,jibsheet:25,twist:8,jibtwist:8,draft:100,jibdraft:100,sailscale:1,gust:0}))if(ui[key]){ui[key].value=String(value);ui[key].dispatchEvent(new Event('input'));}
       ui.wind.value='4';ui.winddir.value=String((sign*140+360)%360);ui.gensheet.value=String(command.sheetM);
+      for(const key of ['wind','winddir','gensheet'])ui[key].dispatchEvent(new Event('input'));
     },
     accepted(boat){this.elapsedS=boat.t-startS;},
     snapshot(){return {name,side,wakeSlice:wake,initialSpeedMPS:speed,durationS:3,elapsedS:this.elapsedS,applied,

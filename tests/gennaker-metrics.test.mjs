@@ -23,6 +23,11 @@ assert.equal(snap.activeModelS,1);assert.equal(snap.excludedModelS,.1);assert.eq
 assert.throws(()=>clock.tick(0),/возрастать/);clock.reset();assert.equal(clock.snapshot().steps,0);
 clock.state('running');clock.frame();time+=16;clock.frame();clock.visibility(true);time+=5000;clock.visibility(false);clock.frame();
 assert.deepEqual(clock.snapshot().frameIntervalsMs,[16]);
+let at=0;const scheduler=new GennakerMetrics({now:()=>at});scheduler.state('running');
+at=33.2;assert.equal(scheduler.due(1/30),false);at=66.4;assert.equal(scheduler.due(1/30),true);scheduler.accepted(1/30);
+at=99.6;assert.equal(scheduler.due(1/30),true);scheduler.accepted(1/30);
+scheduler.visibility(true);at=5099.6;assert.equal(scheduler.due(1/30),false);scheduler.visibility(false);
+assert.equal(scheduler.due(1/30),false);at=5100.6;assert.equal(scheduler.due(1/30),true);
 assert.throws(()=>gennakerScenario('?physics-run=unknown',5),/Неизвестный/);
 assert.throws(()=>gennakerScenario('?physics-run=controls-v1&physics-wake=2',5),/Сценарий/);
 const fixture=JSON.parse(readFileSync('out/acceptance/fluid-live-main-20261010-plus.json')),
@@ -41,7 +46,7 @@ const element=id=>{if(!elements.has(id))elements.set(id,{style:{},dataset:{},val
 globalThis.document={hidden:false,addEventListener(){},getElementById:element,createElement:()=>({style:{},dataset:{}})};
 globalThis.innerWidth=1000;globalThis.innerHeight=800;
 globalThis.fetch=async url=>{try{const data=readFileSync(new URL('.'+url,new URL('../',import.meta.url)));return {ok:true,arrayBuffer:async()=>data.buffer.slice(data.byteOffset,data.byteOffset+data.byteLength)};}catch{return {ok:false};}};
-const workers=new Set();
+const workers=new Set();let failNextWorkerStep=false;
 globalThis.Worker=class {
   constructor(url) {
     const bootstrap=`import {parentPort} from 'node:worker_threads';globalThis.self={postMessage:(data,transfer)=>parentPort.postMessage(data,transfer)};parentPort.on('message',data=>self.onmessage({data}));await import(${JSON.stringify(url.href)});parentPort.postMessage({type:'boot'});`;
@@ -49,18 +54,23 @@ globalThis.Worker=class {
     this.waiting=[];this.worker.on('message',data=>{if(data.type==='boot'){this.ready=true;for(const m of this.waiting)this.worker.postMessage(m);this.waiting=[];}else this.onmessage?.({data});});
     this.worker.on('error',error=>this.onerror?.({message:error.message}));
   }
-  postMessage(data){if(this.ready)this.worker.postMessage(data);else this.waiting.push(data);}
+  postMessage(data){if(failNextWorkerStep&&data.type==='step'){failNextWorkerStep=false;data={...data,forceN:new Float64Array(data.forceN.length).fill(NaN)};}if(this.ready)this.worker.postMessage(data);else this.waiting.push(data);}
   terminate(){workers.delete(this.worker);return this.worker.terminate();}
 };
-async function run(profile,fps,side='plus',wake=1) {
-  globalThis.location={search:`?physics-run=controls-v1&physics-side=${side}&physics-wake=${wake}&physics-profile=${profile?1:0}`};
+async function run(profile,fps,side='plus',wake=1,schedule='message') {
+  globalThis.location={search:`?physics-run=controls-v1&physics-side=${side}&physics-wake=${wake}&physics-profile=${profile?1:0}&physics-schedule=${schedule}`};
   const b=new Boat(pack),ui=Object.fromEntries(['genpressure','wind','winddir','gensheet','genup','jibup','mainup'].map(k=>[k,element(k)]));
   const sim=await startGennakerSimulator({boat:b,ui,manifestPath:'out/export/live-sail-default.json',gameUI:false});
   const startupMs=sim.performance().phaseMs.startup;sim.restart();assert.equal(sim.performance().phaseMs.startup,startupMs);
-  const start=performance.now();let summary;
+  const physicalFrames=[],capture=()=>physicalFrames.push({
+    boat:Object.fromEntries(['x','y','psi','u','v','r','phi','p_','t','rigSide','zc','w','th','q','hike','rigRate'].map(k=>[k,b[k]])),
+    cloth:b.rig.cloth?{positions:Array.from(b.rig.cloth.pos),previous:Array.from(b.rig.cloth.prev),prevDt:b.rig.cloth.prevDt}:null});
+  const start=performance.now();let summary,acc=0,last=start;
   while(performance.now()-start<20000) {
-    sim.observeFrame({timestamp:performance.now(),paused:false,hidden:false});
-    if(!sim.busy&&sim.canAdvance(1/30))sim.advance(1/30,()=>{},()=>{});
+    const now=performance.now();acc+=Math.min(.25,(now-last)/1000);last=now;
+    sim.observeFrame({timestamp:now,paused:false,hidden:false});
+    if(!sim.busy&&sim.canAdvance(1/30,acc))sim.advance(1/30,()=>{},capture);
+    if(sim.busy||acc>=1/30)acc=0;
     sim.frame();summary=sim.performance();
     if(summary.phase==='failed')throw new Error(summary.failure?.message??'Отказ сценария');
     if(summary.scenario.done&&!sim.busy)break;
@@ -68,7 +78,8 @@ async function run(profile,fps,side='plus',wake=1) {
   }
   assert(summary.scenario.done,'Сценарий должен завершиться за 20 с');assert.equal(summary.steps,90);
   assert.equal(summary.queued,0);assert.equal(summary.phase,'complete');
-  const physical={boat:[b.x,b.y,b.zc,b.psi,b.phi,b.th,b.u,b.v],state:b.gennakerEnergy.state,
+  assert.equal(physicalFrames.length,90);
+  const physical={frames:physicalFrames,boat:[b.x,b.y,b.zc,b.psi,b.phi,b.th,b.u,b.v],state:b.gennakerEnergy.state,
     history:b.gennakerEnergy.history.map(({frames,partsMs,...r})=>r)};
   const profiled=summary.records.filter(r=>r.gennakerUp);
   if(profile) {
@@ -77,13 +88,27 @@ async function run(profile,fps,side='plus',wake=1) {
       assert(r.attempts.flat().every(a=>a.ms>=0));}
   } else assert.equal(summary.records.length,0);
   sim.restart();assert.equal(sim.performance().steps,0);assert.equal(sim.performance().scenario.done,false);
-  return {physical,summary:{...summary,driverFPS:fps}};
+  return {physical,summary:{...summary,driverFPS:fps,physicalSha256:createHash('sha256').update(JSON.stringify(physical)).digest('hex')}};
 }
 try {
-  const ordinary=await run(false,120),profiled=await run(true,30);
+  const ordinary=await run(false,120,'plus',1,'frame'),profiled=await run(true,30);
   assert.deepEqual(profiled.physical,ordinary.physical);
   console.log(`Обычный контроллер: 90 состояний совпали точно с измерителями и без них при заданных 30/120 Гц; темп ${profiled.summary.tempo.toFixed(3)} / ${ordinary.summary.tempo.toFixed(3)}.`);
+  const sixty=await run(true,60),fast=await run(true,120),frameThirty=await run(true,30,'plus',1,'frame');
+  for(const sample of [sixty,fast,frameThirty])assert.deepEqual(sample.physical,ordinary.physical);
   const other=await run(true,60,'minus',3);
+  console.log(`Расписания frame/message и 30/60/120 Гц: полные состояния совпали. Темп при 30: ${frameThirty.summary.tempo.toFixed(3)} → ${profiled.summary.tempo.toFixed(3)}.`);
+  globalThis.location={search:'?physics-profile=1'};
+  const failedBoat=new Boat(pack),failedUI=Object.fromEntries(['genpressure','wind','winddir','gensheet','genup','jibup','mainup'].map(k=>[k,element(k)]));
+  const failedSim=await startGennakerSimulator({boat:failedBoat,ui:failedUI,manifestPath:'out/export/live-sail-default.json'});
+  failedBoat.setGennaker(true);failedUI.genup.checked=true;failNextWorkerStep=true;failedSim.advance(1/30,()=>{},()=>{});
+  const errorStart=performance.now();while(failedSim.performance().phase!=='failed'&&performance.now()-errorStart<5000){failedSim.frame();await delay(5);}
+  assert.equal(failedSim.performance().phase,'failed');assert.equal(failedSim.performance().steps,0);
+  assert.equal(failedSim.performance().failure.attempts[0][0].accepted,false);
+  failedUI.genup.checked=false;failedBoat.setGennaker(false);await delay(35);
+  assert(failedSim.canAdvance(1/30,1/30),'После отказа UI должен прочитать уборку генакера');
+  failedSim.advance(1/30,()=>{},()=>{});assert.equal(failedSim.performance().steps,1);assert.equal(failedSim.performance().phase,'running');failedSim.restart();
+  console.log('Отказ настоящего Worker записан; уборка паруса через обычный UI возобновляет физику.');
   const out=process.argv.find(x=>x.startsWith('--out='))?.slice(6);
   if(out)writeFileSync(out,JSON.stringify({schema:'gennaker-metrics-check-v1',scope:'node-controller-real-worker-not-browser',
     revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
@@ -91,6 +116,6 @@ try {
     sources:Object.fromEntries(['sim/gennaker-live.mjs','sim/gennaker-metrics.mjs','sim/gennaker-scenario.mjs',
       'sim/gennaker-energy.mjs','sim/gennaker-energy-worker.mjs','sim/physics.js','tests/gennaker-metrics.test.mjs',
       'out/export/physics.json','out/export/live-sail-default.json'].map(p=>[p,createHash('sha256').update(readFileSync(p)).digest('hex')])),
-    runs:[ordinary.summary,profiled.summary,other.summary]},null,2)+'\n',{flag:'wx'});
+    runs:[ordinary.summary,profiled.summary,sixty.summary,fast.summary,frameThirty.summary,other.summary]},null,2)+'\n',{flag:'wx'});
   console.log('Часы: подготовка, пауза, фон и отказ разделены; неудачный родитель и оба дочерних шага записаны. Второй борт/wakeSlice=3 и перезапуск проверены.');
 } finally {await Promise.all([...workers].map(w=>w.terminate()));}

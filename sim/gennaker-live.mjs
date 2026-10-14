@@ -14,8 +14,10 @@ async function bytesAt(path,sha) {
 }
 export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false}) {
   const parameters=new URLSearchParams(location.search),profile=parameters.get('physics-profile')==='1';
+  const schedule=parameters.get('physics-schedule')??'message';
+  if(!['message','frame'].includes(schedule))throw new Error('Неизвестное расписание физики');
   const metrics=new GennakerMetrics({profile,context:{ui:gameUI?'game':'debug',MOBILE_UI:gameUI,
-    userAgent:navigator.userAgent,viewport:[innerWidth,innerHeight],wakeSlice:boat.o.wakeSlice}});
+    userAgent:navigator.userAgent,viewport:[innerWidth,innerHeight],schedule,wakeSlice:boat.o.wakeSlice}});
   document.addEventListener('visibilitychange',()=>metrics.visibility(document.hidden));
   const originalPack=boat.p,manifest=JSON.parse(new TextDecoder().decode(await bytesAt(manifestPath)));
   const inputs={};
@@ -44,8 +46,9 @@ export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false}
   ui.gensheet.value=String(source.sheet.lengthM);ui.gensheet.dispatchEvent(new Event('input'));
   document.getElementById('gennote').textContent='Генакер использует новую ткань. Подъём убирает стаксель; грот остаётся управляемым. Шкот: 5.218–5.468 м, изменение до 0.5 м/с. Клавиша N — поднять или убрать.';
   if(profile||scenario) {
-    const save=document.createElement('button');save.textContent='Скачать замер физики';
-    Object.assign(save.style,{position:'absolute',top:'115px',right:'10px',zIndex:6});
+    const save=document.createElement('button');save.type='button';save.textContent='Скачать замер физики';
+    save.onpointerdown=e=>e.stopPropagation();
+    Object.assign(save.style,{position:'absolute',top:gameUI?'130px':'60px',left:'50%',transform:'translateX(-50%)',zIndex:10});
     save.onclick=()=>{
       const dump=window.sv20dump();
       const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(dump)],{type:'application/json'}));
@@ -72,13 +75,18 @@ export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false}
     snapshot={targetPose:pose,positions:Float64Array.from(Array.from({length:n},(_,i)=>worldPoint(pose,Array.from(cloth.pos.slice(3*i,3*i+3)))).flat())};
     worker=new Worker(new URL('./gennaker-energy-worker.mjs',import.meta.url),{type:'module'});
     worker.onmessage=({data})=>{
-      if(data.type==='progress'){continueAfterFrame=true;if(commandFrames)commandFrames.progressMs=performance.now();return;}
+      if(data.type==='progress'){if(commandFrames)commandFrames.progressMs=performance.now();if(schedule==='message')continueStep();else continueAfterFrame=true;return;}
       const waiting=pending;pending=undefined;clearTimeout(requestTimer);
       if(data.type==='error')waiting?.reject(Object.assign(new Error(data.message),{attempts:data.attempts}));else waiting?.resolve(data);
     };
     worker.onerror=event=>{const waiting=pending;pending=undefined;clearTimeout(requestTimer);waiting?.reject(new Error(event.message));};
     display.textContent='Генакер: подготавливается новая ткань…';
     const ready=await request({type:'init',fixture,pack:originalPack,pose,bytes,materialBytes,profile});material=ready.material;metrics.state('running');
+  }
+  function continueStep() {
+    continueAfterFrame=false;
+    if(commandFrames){commandFrames.continued=renderFrame;commandFrames.continuedMs=performance.now();}
+    worker?.postMessage({type:'continue'});
   }
   function applySnapshot(result) {
     const old=snapshot;snapshot=result;
@@ -90,9 +98,9 @@ export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false}
   }
   return {get busy(){return busy;},performance(){const result=metrics.snapshot();return {...result,inFlight:busy,queued:0,
     scenario:scenario?.snapshot(),failure};},
-    observeFrame(options){metrics.frame(options);},restart(){dispose();scenario?.reset();if(!initialReset||metrics.steps)metrics.reset();initialReset=false;metrics.state('running');history.length=0;steps=0;lastBoatTime=0;lastStarted=0;renderFrame=0;commandFrames=undefined;delete display.dataset.error;delete boat.gennakerEnergy;},canAdvance(dt){return !scenario?.done&&performance.now()-lastStarted>=dt*1000;},afterStep(callback){deferred=callback;},drainSteps(){const count=completedSteps;completedSteps=0;return count;},frame() {
+    observeFrame(options){metrics.frame(options);},restart(){dispose();scenario?.reset();if(!initialReset||metrics.steps)metrics.reset();initialReset=false;metrics.state('running');history.length=0;steps=0;lastBoatTime=0;lastStarted=0;renderFrame=0;commandFrames=undefined;delete display.dataset.error;delete boat.gennakerEnergy;},canAdvance(dt,acc=Infinity){return !scenario?.done&&(failed?performance.now()-lastStarted>=dt*1000:schedule==='frame'?(acc>=dt||boat.o.gennakerUp)&&performance.now()-lastStarted>=dt*1000:metrics.due(dt));},afterStep(callback){deferred=callback;},drainSteps(){const count=completedSteps;completedSteps=0;return count;},frame() {
     renderFrame++;
-    if(continueAfterFrame){continueAfterFrame=false;if(commandFrames){commandFrames.continued=renderFrame;commandFrames.continuedMs=performance.now();}worker?.postMessage({type:'continue'});}
+    if(continueAfterFrame)continueStep();
   },advance(dt,before,after) {
     busy=true;lastStarted=performance.now();
     const timings=profile?{}:undefined;
@@ -102,7 +110,7 @@ export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false}
         metrics.context.wakeSlice=boat.o.wakeSlice;
         if(!boat.o.gennakerUp) {
           delete display.dataset.error;
-          if(worker){dispose();metrics.state('running');if(boat.gennakerEnergy)boat.gennakerEnergy.active=false;}before();const start=profile?performance.now():0;boat.step(dt);completedSteps++;lastBoatTime=boat.t;after();
+          if(worker||failed){dispose();metrics.state('running');if(boat.gennakerEnergy)boat.gennakerEnergy.active=false;}before();const start=profile?performance.now():0;boat.step(dt);completedSteps++;lastBoatTime=boat.t;after();
           scenario?.accepted(boat);metrics.accepted(dt,{modelTimeS:boat.t,gennakerUp:false,
             totalMs:profile?performance.now()-start:undefined});
           if(scenario?.done)metrics.state('complete');

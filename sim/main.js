@@ -3175,8 +3175,9 @@ function frame() {
   clothSceneReview?.pose(boat, prev);
   if (liveGennaker) {
     // Пока ткань считает, управление камерой и обычный экран продолжают жить.
-    // Следующий физический шаг читает органы один раз; очереди догона нет.
-    if (!liveGennaker.busy && (acc >= DT || boat.o.gennakerUp) && liveGennaker.canAdvance(DT)) {
+    // Следующий физический шаг читает органы один раз; принятие времени
+    // определяют активные часы живой модели, а не обнуляемый acc.
+    if (!liveGennaker.busy && liveGennaker.canAdvance(DT, acc)) {
       readControls(DT);
       liveGennaker.advance(DT, () => {
         prev.x=boat.x; prev.y=boat.y; prev.psi=boat.psi; prev.phi=boat.phi;

@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Как рассчитывается генакер — SV20</title>
+<style>
+:root{--paper:#f7f5ef;--ink:#16353e;--muted:#577077;--line:#d8dfd9;--teal:#217a75;--orange:#b6572f;--soft:#e8efea}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1160px;margin:auto;padding:42px 40px 30px}a{color:var(--teal);text-underline-offset:3px}h1,h2,h3,p{margin-top:0}h1{font-size:clamp(36px,4vw,54px);line-height:1.07;letter-spacing:-1.8px;margin-bottom:20px}h2{font-size:26px;line-height:1.2;letter-spacing:-.5px;margin-bottom:19px}h3{font-size:17px;line-height:1.3;margin-bottom:8px}p{margin-bottom:12px}.eyebrow{font-size:12px;letter-spacing:1.7px;text-transform:uppercase;font-weight:700;color:var(--teal);margin-bottom:18px}.meta{display:flex;justify-content:space-between;gap:15px;font-size:12px;color:var(--muted);margin-bottom:34px}.hero{display:grid;grid-template-columns:1fr 1.05fr;align-items:center;gap:24px}.lead{font-size:20px;line-height:1.45}.sub{color:var(--muted);font-size:14px}.figure{margin:0;border:1px solid var(--line);border-radius:20px;background:#edf1e9;padding:15px 15px 9px}.figure svg{width:100%;height:auto;display:block;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.figure label{font-size:13px;cursor:pointer;margin-right:15px}.figure input{accent-color:var(--teal)}#mesh-toggle:not(:checked)~svg .mesh-lines{opacity:0}#wind-toggle:not(:checked)~svg .load-arrows{opacity:0}figcaption{font-size:11px;color:var(--muted);padding:0 8px 6px}.stats{display:flex;gap:24px;margin-top:24px;padding-top:20px;border-top:1px solid var(--line)}.stats strong{display:block;font-size:27px;line-height:1.15}.stats span{font-size:12px;color:var(--muted)}section{margin-top:38px}.flow{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;counter-reset:step}.flow article{background:white;border:1px solid var(--line);border-radius:12px;padding:17px 15px;position:relative}.flow article::before{counter-increment:step;content:"0" counter(step);display:block;font-size:12px;font-weight:700;color:var(--teal);margin-bottom:14px}.flow article:not(:last-child)::after{content:'→';position:absolute;right:-13px;top:20px;background:var(--paper);color:var(--teal);z-index:1}.flow p{font-size:14px;margin:0}.loop{font-size:13px;color:var(--teal);margin:12px 0 0}.mechanics{display:grid;grid-template-columns:repeat(3,1fr);gap:15px;margin-top:16px}.mechanics article{border-top:2px solid var(--teal);padding:13px 4px}.mechanics p{font-size:14px;color:var(--muted);margin:0}.timeline{background:var(--ink);color:#f4f7f3;padding:22px 25px;border-radius:15px;display:grid;grid-template-columns:1fr 1.6fr;gap:24px;margin-top:24px}.timeline h3{font-size:18px}.timeline p{color:#c4d8d6;font-size:13px;margin:0}.track{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.track b{padding:10px;border:1px solid #638485;border-radius:8px;font-size:13px}.track small{font-size:11px;color:#d6e8df}.track .result{background:#34635d}.track-note{flex-basis:100%;font-size:11px;color:#bdd0cd}.optim{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.optim article{padding:18px;background:var(--soft);border-radius:12px}.optim p{font-size:14px;margin:0;color:#405c61}.tag{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--teal);display:block;margin-bottom:9px;font-weight:700}.limits{display:grid;grid-template-columns:1.2fr 1fr;gap:26px;border-top:1px solid var(--line);padding-top:22px}.limits p{font-size:14px}.callout{padding-left:15px;border-left:3px solid var(--orange)}details{border-top:1px solid var(--line);padding:15px 0;margin-top:18px;font-size:13px}summary{cursor:pointer;font-weight:600}details p{margin-top:12px}code{font-size:12px;overflow-wrap:anywhere}.sources{display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;padding-top:12px}.sources a{display:block}.footer{margin-top:20px;font-size:11px;color:var(--muted);display:flex;justify-content:space-between;gap:15px}a:focus-visible,summary:focus-visible,input:focus-visible{outline:3px solid #c27a3e;outline-offset:4px}
+@media(max-width:760px){main{padding:25px 20px}.meta{margin-bottom:22px}.hero{grid-template-columns:1fr}.flow{grid-template-columns:1fr}.flow article{padding:15px 18px 15px 55px}.flow article::before{position:absolute;left:17px;top:17px}.flow article:not(:last-child)::after{content:'↓';top:auto;bottom:-17px;right:50%}.mechanics,.optim{grid-template-columns:1fr}.timeline,.limits{grid-template-columns:1fr;gap:18px}.sources{grid-template-columns:1fr}section{margin-top:30px}h1{letter-spacing:-1px}.footer{display:block}.footer span{display:block;margin-top:4px}}
+@media print{body{background:white;font-size:12px}main{max-width:none;padding:0}.meta{margin-bottom:16px}h1{font-size:34px}.lead{font-size:16px}section{margin-top:20px}.flow p,.optim p,.mechanics p,.limits p{font-size:11px}.figure{break-inside:avoid}.timeline{background:#eff4f1;color:#16353e}.timeline p,.track-note,.track small{color:#405c61}.track .result{background:#dbe9df}.optim article,.flow article{break-inside:avoid}details{display:none}a{color:inherit}.footer{font-size:9px}}
+</style>
+</head>
+<body><main>
+<header>
+<div class="meta"><span>SV20 / Физика паруса</span><span>По коду 925ea9f · 14 октября 2026</span></div>
+<div class="hero"><div>
+<div class="eyebrow">Обычный вход /sim/index.html</div>
+<h1>Как рассчитывается<br>генакер</h1>
+<p class="lead">Ветер нагружает полотно. Расчёт подбирает его новую форму. Усилия в креплениях разгоняют и наклоняют яхту.</p>
+<p class="sub">Модель учитывает массу ткани, её сопротивление деформации и длину шкота — верёвки, которой вы управляете парусом.</p>
+<div class="stats"><div><strong>99</strong><span>точек · сетка 11 × 9</span></div><div><strong>160</strong><span>треугольников</span></div><div><strong>2</strong><span>подшага на шаг лодки</span></div></div>
+</div>
+<figure class="figure"><input id="mesh-toggle" type="checkbox" checked><label for="mesh-toggle">Сетка</label><input id="wind-toggle" type="checkbox" checked><label for="wind-toggle">Стрелки ветра</label>
+<svg viewBox="0 0 600 435" role="img" aria-labelledby="mesh-title mesh-desc"><title id="mesh-title">Сетка генакера: 11 рядов на 9 точек</title><desc id="mesh-desc">Проекция исходного полотна, крепления и шкот. Стрелки ветра условные.</desc><defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#bd643a"/></marker></defs>
+<polygon points="164.80,351.94 176.24,364.00 172.96,320.45" fill="rgb(51,132,136)" fill-opacity=".72"/>
+<polygon points="181.74,331.91 172.96,320.45 176.24,364.00" fill="rgb(51,129,133)" fill-opacity=".72"/>
+<polygon points="176.24,364.00 196.52,370.94 181.74,331.91" fill="rgb(51,125,129)" fill-opacity=".72"/>
+<polygon points="202.51,338.32 181.74,331.91 196.52,370.94" fill="rgb(51,122,126)" fill-opacity=".72"/>
+<polygon points="196.52,370.94 225.32,371.74 202.51,338.32" fill="rgb(51,117,121)" fill-opacity=".72"/>
+<polygon points="232.70,339.17 202.51,338.32 225.32,371.74" fill="rgb(51,114,118)" fill-opacity=".72"/>
+<polygon points="225.32,371.74 259.16,367.76 232.70,339.17" fill="rgb(51,110,114)" fill-opacity=".72"/>
+<polygon points="267.58,335.38 232.70,339.17 259.16,367.76" fill="rgb(51,107,111)" fill-opacity=".72"/>
+<polygon points="259.16,367.76 294.65,359.40 267.58,335.38" fill="rgb(51,104,108)" fill-opacity=".72"/>
+<polygon points="304.58,327.70 267.58,335.38 294.65,359.40" fill="rgb(51,101,105)" fill-opacity=".72"/>
+<polygon points="294.65,359.40 329.21,347.21 304.58,327.70" fill="rgb(51,99,103)" fill-opacity=".72"/>
+<polygon points="340.59,316.78 304.58,327.70 329.21,347.21" fill="rgb(51,97,101)" fill-opacity=".72"/>
+<polygon points="329.21,347.21 361.48,332.49 340.59,316.78" fill="rgb(51,96,100)" fill-opacity=".72"/>
+<polygon points="373.65,303.84 340.59,316.78 361.48,332.49" fill="rgb(51,95,99)" fill-opacity=".72"/>
+<polygon points="361.48,332.49 391.29,316.51 373.65,303.84" fill="rgb(51,94,98)" fill-opacity=".72"/>
+<polygon points="402.89,288.96 373.65,303.84 391.29,316.51" fill="rgb(51,94,98)" fill-opacity=".72"/>
+<polygon points="172.96,320.45 181.74,331.91 182.35,289.55" fill="rgb(51,131,135)" fill-opacity=".72"/>
+<polygon points="190.05,300.05 182.35,289.55 181.74,331.91" fill="rgb(51,128,132)" fill-opacity=".72"/>
+<polygon points="181.74,331.91 202.51,338.32 190.05,300.05" fill="rgb(51,124,128)" fill-opacity=".72"/>
+<polygon points="212.39,306.01 190.05,300.05 202.51,338.32" fill="rgb(51,121,125)" fill-opacity=".72"/>
+<polygon points="202.51,338.32 232.70,339.17 212.39,306.01" fill="rgb(51,116,120)" fill-opacity=".72"/>
+<polygon points="243.19,306.63 212.39,306.01 232.70,339.17" fill="rgb(51,113,117)" fill-opacity=".72"/>
+<polygon points="232.70,339.17 267.58,335.38 243.19,306.63" fill="rgb(51,108,112)" fill-opacity=".72"/>
+<polygon points="278.08,303.00 243.19,306.63 267.58,335.38" fill="rgb(51,106,110)" fill-opacity=".72"/>
+<polygon points="267.58,335.38 304.58,327.70 278.08,303.00" fill="rgb(51,102,106)" fill-opacity=".72"/>
+<polygon points="315.05,296.03 278.08,303.00 304.58,327.70" fill="rgb(51,100,104)" fill-opacity=".72"/>
+<polygon points="304.58,327.70 340.59,316.78 315.05,296.03" fill="rgb(51,98,102)" fill-opacity=".72"/>
+<polygon points="350.56,286.47 315.05,296.03 340.59,316.78" fill="rgb(51,97,101)" fill-opacity=".72"/>
+<polygon points="340.59,316.78 373.65,303.84 350.56,286.47" fill="rgb(51,96,100)" fill-opacity=".72"/>
+<polygon points="382.09,274.62 350.56,286.47 373.65,303.84" fill="rgb(51,96,100)" fill-opacity=".72"/>
+<polygon points="373.65,303.84 402.89,288.96 382.09,274.62" fill="rgb(51,95,99)" fill-opacity=".72"/>
+<polygon points="410.63,261.23 382.09,274.62 402.89,288.96" fill="rgb(51,95,99)" fill-opacity=".72"/>
+<polygon points="182.35,289.55 190.05,300.05 190.47,258.60" fill="rgb(51,129,133)" fill-opacity=".72"/>
+<polygon points="199.92,267.93 190.47,258.60 190.05,300.05" fill="rgb(51,127,131)" fill-opacity=".72"/>
+<polygon points="190.05,300.05 212.39,306.01 199.92,267.93" fill="rgb(51,122,126)" fill-opacity=".72"/>
+<polygon points="223.69,273.01 199.92,267.93 212.39,306.01" fill="rgb(51,119,123)" fill-opacity=".72"/>
+<polygon points="212.39,306.01 243.19,306.63 223.69,273.01" fill="rgb(51,115,119)" fill-opacity=".72"/>
+<polygon points="254.78,273.39 223.69,273.01 243.19,306.63" fill="rgb(51,112,116)" fill-opacity=".72"/>
+<polygon points="243.19,306.63 278.08,303.00 254.78,273.39" fill="rgb(51,108,112)" fill-opacity=".72"/>
+<polygon points="289.10,270.24 254.78,273.39 278.08,303.00" fill="rgb(51,106,110)" fill-opacity=".72"/>
+<polygon points="278.08,303.00 315.05,296.03 289.10,270.24" fill="rgb(51,102,106)" fill-opacity=".72"/>
+<polygon points="324.60,264.34 289.10,270.24 315.05,296.03" fill="rgb(51,101,105)" fill-opacity=".72"/>
+<polygon points="315.05,296.03 350.56,286.47 324.60,264.34" fill="rgb(51,98,102)" fill-opacity=".72"/>
+<polygon points="357.91,255.80 324.60,264.34 350.56,286.47" fill="rgb(51,98,102)" fill-opacity=".72"/>
+<polygon points="350.56,286.47 382.09,274.62 357.91,255.80" fill="rgb(51,97,101)" fill-opacity=".72"/>
+<polygon points="387.58,245.41 357.91,255.80 382.09,274.62" fill="rgb(51,97,101)" fill-opacity=".72"/>
+<polygon points="382.09,274.62 410.63,261.23 387.58,245.41" fill="rgb(51,96,100)" fill-opacity=".72"/>
+<polygon points="414.07,233.43 387.58,245.41 410.63,261.23" fill="rgb(51,97,101)" fill-opacity=".72"/>
+<polygon points="190.47,258.60 199.92,267.93 198.58,227.61" fill="rgb(51,128,132)" fill-opacity=".72"/>
+<polygon points="212.44,235.38 198.58,227.61 199.92,267.93" fill="rgb(51,125,129)" fill-opacity=".72"/>
+<polygon points="199.92,267.93 223.69,273.01 212.44,235.38" fill="rgb(51,121,125)" fill-opacity=".72"/>
+<polygon points="236.65,239.73 212.44,235.38 223.69,273.01" fill="rgb(51,118,122)" fill-opacity=".72"/>
+<polygon points="223.69,273.01 254.78,273.39 236.65,239.73" fill="rgb(51,114,118)" fill-opacity=".72"/>
+<polygon points="266.77,240.08 236.65,239.73 254.78,273.39" fill="rgb(51,112,116)" fill-opacity=".72"/>
+<polygon points="254.78,273.39 289.10,270.24 266.77,240.08" fill="rgb(51,108,112)" fill-opacity=".72"/>
+<polygon points="299.43,237.49 266.77,240.08 289.10,270.24" fill="rgb(51,106,110)" fill-opacity=".72"/>
+<polygon points="289.10,270.24 324.60,264.34 299.43,237.49" fill="rgb(51,103,107)" fill-opacity=".72"/>
+<polygon points="332.33,232.38 299.43,237.49 324.60,264.34" fill="rgb(51,102,106)" fill-opacity=".72"/>
+<polygon points="324.60,264.34 357.91,255.80 332.33,232.38" fill="rgb(51,100,104)" fill-opacity=".72"/>
+<polygon points="362.89,225.09 332.33,232.38 357.91,255.80" fill="rgb(51,100,104)" fill-opacity=".72"/>
+<polygon points="357.91,255.80 387.58,245.41 362.89,225.09" fill="rgb(51,98,102)" fill-opacity=".72"/>
+<polygon points="389.70,216.09 362.89,225.09 387.58,245.41" fill="rgb(51,99,103)" fill-opacity=".72"/>
+<polygon points="387.58,245.41 414.07,233.43 389.70,216.09" fill="rgb(51,99,103)" fill-opacity=".72"/>
+<polygon points="413.40,205.80 389.70,216.09 414.07,233.43" fill="rgb(51,100,104)" fill-opacity=".72"/>
+<polygon points="198.58,227.61 212.44,235.38 207.56,196.63" fill="rgb(51,126,130)" fill-opacity=".72"/>
+<polygon points="225.75,202.84 207.56,196.63 212.44,235.38" fill="rgb(51,124,128)" fill-opacity=".72"/>
+<polygon points="212.44,235.38 236.65,239.73 225.75,202.84" fill="rgb(51,120,124)" fill-opacity=".72"/>
+<polygon points="249.44,206.60 225.75,202.84 236.65,239.73" fill="rgb(51,118,122)" fill-opacity=".72"/>
+<polygon points="236.65,239.73 266.77,240.08 249.44,206.60" fill="rgb(51,114,118)" fill-opacity=".72"/>
+<polygon points="277.64,207.03 249.44,206.60 266.77,240.08" fill="rgb(51,112,116)" fill-opacity=".72"/>
+<polygon points="266.77,240.08 299.43,237.49 277.64,207.03" fill="rgb(51,108,112)" fill-opacity=".72"/>
+<polygon points="307.70,204.87 277.64,207.03 299.43,237.49" fill="rgb(51,107,111)" fill-opacity=".72"/>
+<polygon points="299.43,237.49 332.33,232.38 307.70,204.87" fill="rgb(51,104,108)" fill-opacity=".72"/>
+<polygon points="337.39,200.62 307.70,204.87 332.33,232.38" fill="rgb(51,104,108)" fill-opacity=".72"/>
+<polygon points="332.33,232.38 362.89,225.09 337.39,200.62" fill="rgb(51,102,106)" fill-opacity=".72"/>
+<polygon points="364.42,194.46 337.39,200.62 362.89,225.09" fill="rgb(51,102,106)" fill-opacity=".72"/>
+<polygon points="362.89,225.09 389.70,216.09 364.42,194.46" fill="rgb(51,101,105)" fill-opacity=".72"/>
+<polygon points="387.94,186.93 364.42,194.46 389.70,216.09" fill="rgb(51,102,106)" fill-opacity=".72"/>
+<polygon points="389.70,216.09 413.40,205.80 387.94,186.93" fill="rgb(51,102,106)" fill-opacity=".72"/>
+<polygon points="408.52,178.53 387.94,186.93 413.40,205.80" fill="rgb(51,103,107)" fill-opacity=".72"/>
+<polygon points="207.56,196.63 225.75,202.84 217.90,165.74" fill="rgb(51,125,129)" fill-opacity=".72"/>
+<polygon points="237.59,170.35 217.90,165.74 225.75,202.84" fill="rgb(51,124,128)" fill-opacity=".72"/>
+<polygon points="225.75,202.84 249.44,206.60 237.59,170.35" fill="rgb(51,120,124)" fill-opacity=".72"/>
+<polygon points="260.27,173.22 237.59,170.35 249.44,206.60" fill="rgb(51,118,122)" fill-opacity=".72"/>
+<polygon points="249.44,206.60 277.64,207.03 260.27,173.22" fill="rgb(51,115,119)" fill-opacity=".72"/>
+<polygon points="285.79,173.61 260.27,173.22 277.64,207.03" fill="rgb(51,114,118)" fill-opacity=".72"/>
+<polygon points="277.64,207.03 307.70,204.87 285.79,173.61" fill="rgb(51,110,114)" fill-opacity=".72"/>
+<polygon points="312.02,171.96 285.79,173.61 307.70,204.87" fill="rgb(51,110,114)" fill-opacity=".72"/>
+<polygon points="307.70,204.87 337.39,200.62 312.02,171.96" fill="rgb(51,107,111)" fill-opacity=".72"/>
+<polygon points="337.55,168.60 312.02,171.96 337.39,200.62" fill="rgb(51,107,111)" fill-opacity=".72"/>
+<polygon points="337.39,200.62 364.42,194.46 337.55,168.60" fill="rgb(51,105,109)" fill-opacity=".72"/>
+<polygon points="361.14,163.65 337.55,168.60 364.42,194.46" fill="rgb(51,106,110)" fill-opacity=".72"/>
+<polygon points="364.42,194.46 387.94,186.93 361.14,163.65" fill="rgb(51,105,109)" fill-opacity=".72"/>
+<polygon points="381.89,157.68 361.14,163.65 387.94,186.93" fill="rgb(51,106,110)" fill-opacity=".72"/>
+<polygon points="387.94,186.93 408.52,178.53 381.89,157.68" fill="rgb(51,105,109)" fill-opacity=".72"/>
+<polygon points="399.25,151.05 381.89,157.68 408.52,178.53" fill="rgb(51,107,111)" fill-opacity=".72"/>
+<polygon points="217.90,165.74 237.59,170.35 230.35,134.99" fill="rgb(51,125,129)" fill-opacity=".72"/>
+<polygon points="248.90,138.01 230.35,134.99 237.59,170.35" fill="rgb(51,124,128)" fill-opacity=".72"/>
+<polygon points="237.59,170.35 260.27,173.22 248.90,138.01" fill="rgb(51,121,125)" fill-opacity=".72"/>
+<polygon points="269.13,139.86 248.90,138.01 260.27,173.22" fill="rgb(51,120,124)" fill-opacity=".72"/>
+<polygon points="260.27,173.22 285.79,173.61 269.13,139.86" fill="rgb(51,117,121)" fill-opacity=".72"/>
+<polygon points="290.88,140.18 269.13,139.86 285.79,173.61" fill="rgb(51,117,121)" fill-opacity=".72"/>
+<polygon points="285.79,173.61 312.02,171.96 290.88,140.18" fill="rgb(51,113,117)" fill-opacity=".72"/>
+<polygon points="312.76,139.03 290.88,140.18 312.02,171.96" fill="rgb(51,114,118)" fill-opacity=".72"/>
+<polygon points="312.02,171.96 337.55,168.60 312.76,139.03" fill="rgb(51,111,115)" fill-opacity=".72"/>
+<polygon points="334.06,136.54 312.76,139.03 337.55,168.60" fill="rgb(51,112,116)" fill-opacity=".72"/>
+<polygon points="337.55,168.60 361.14,163.65 334.06,136.54" fill="rgb(51,109,113)" fill-opacity=".72"/>
+<polygon points="353.83,132.83 334.06,136.54 361.14,163.65" fill="rgb(51,111,115)" fill-opacity=".72"/>
+<polygon points="361.14,163.65 381.89,157.68 353.83,132.83" fill="rgb(51,109,113)" fill-opacity=".72"/>
+<polygon points="371.05,128.39 353.83,132.83 381.89,157.68" fill="rgb(51,111,115)" fill-opacity=".72"/>
+<polygon points="381.89,157.68 399.25,151.05 371.05,128.39" fill="rgb(51,110,114)" fill-opacity=".72"/>
+<polygon points="384.96,123.64 371.05,128.39 399.25,151.05" fill="rgb(51,112,116)" fill-opacity=".72"/>
+<polygon points="230.35,134.99 248.90,138.01 246.11,104.20" fill="rgb(51,126,130)" fill-opacity=".72"/>
+<polygon points="261.19,105.60 246.11,104.20 248.90,138.01" fill="rgb(51,126,130)" fill-opacity=".72"/>
+<polygon points="248.90,138.01 269.13,139.86 261.19,105.60" fill="rgb(51,123,127)" fill-opacity=".72"/>
+<polygon points="277.32,106.37 261.19,105.60 269.13,139.86" fill="rgb(51,123,127)" fill-opacity=".72"/>
+<polygon points="269.13,139.86 290.88,140.18 277.32,106.37" fill="rgb(51,120,124)" fill-opacity=".72"/>
+<polygon points="294.15,106.40 277.32,106.37 290.88,140.18" fill="rgb(51,120,124)" fill-opacity=".72"/>
+<polygon points="290.88,140.18 312.76,139.03 294.15,106.40" fill="rgb(51,117,121)" fill-opacity=".72"/>
+<polygon points="311.00,105.69 294.15,106.40 312.76,139.03" fill="rgb(51,118,122)" fill-opacity=".72"/>
+<polygon points="312.76,139.03 334.06,136.54 311.00,105.69" fill="rgb(51,116,120)" fill-opacity=".72"/>
+<polygon points="327.64,104.10 311.00,105.69 334.06,136.54" fill="rgb(51,117,121)" fill-opacity=".72"/>
+<polygon points="334.06,136.54 353.83,132.83 327.64,104.10" fill="rgb(51,114,118)" fill-opacity=".72"/>
+<polygon points="343.29,101.69 327.64,104.10 353.83,132.83" fill="rgb(51,116,120)" fill-opacity=".72"/>
+<polygon points="353.83,132.83 371.05,128.39 343.29,101.69" fill="rgb(51,114,118)" fill-opacity=".72"/>
+<polygon points="355.93,98.98 343.29,101.69 371.05,128.39" fill="rgb(51,116,120)" fill-opacity=".72"/>
+<polygon points="371.05,128.39 384.96,123.64 355.93,98.98" fill="rgb(51,115,119)" fill-opacity=".72"/>
+<polygon points="364.80,96.14 355.93,98.98 384.96,123.64" fill="rgb(51,117,121)" fill-opacity=".72"/>
+<polygon points="246.11,104.20 261.19,105.60 266.11,72.63" fill="rgb(51,128,132)" fill-opacity=".72"/>
+<polygon points="275.54,73.21 266.11,72.63 261.19,105.60" fill="rgb(51,128,132)" fill-opacity=".72"/>
+<polygon points="261.19,105.60 277.32,106.37 275.54,73.21" fill="rgb(51,126,130)" fill-opacity=".72"/>
+<polygon points="285.33,73.48 275.54,73.21 277.32,106.37" fill="rgb(51,127,131)" fill-opacity=".72"/>
+<polygon points="277.32,106.37 294.15,106.40 285.33,73.48" fill="rgb(51,124,128)" fill-opacity=".72"/>
+<polygon points="295.39,73.29 285.33,73.48 294.15,106.40" fill="rgb(51,125,129)" fill-opacity=".72"/>
+<polygon points="294.15,106.40 311.00,105.69 295.39,73.29" fill="rgb(51,123,127)" fill-opacity=".72"/>
+<polygon points="305.43,72.72 295.39,73.29 311.00,105.69" fill="rgb(51,124,128)" fill-opacity=".72"/>
+<polygon points="311.00,105.69 327.64,104.10 305.43,72.72" fill="rgb(51,121,125)" fill-opacity=".72"/>
+<polygon points="315.37,71.77 305.43,72.72 327.64,104.10" fill="rgb(51,123,127)" fill-opacity=".72"/>
+<polygon points="327.64,104.10 343.29,101.69 315.37,71.77" fill="rgb(51,120,124)" fill-opacity=".72"/>
+<polygon points="324.91,70.49 315.37,71.77 343.29,101.69" fill="rgb(51,123,127)" fill-opacity=".72"/>
+<polygon points="343.29,101.69 355.93,98.98 324.91,70.49" fill="rgb(51,120,124)" fill-opacity=".72"/>
+<polygon points="332.90,69.09 324.91,70.49 355.93,98.98" fill="rgb(51,123,127)" fill-opacity=".72"/>
+<polygon points="355.93,98.98 364.80,96.14 332.90,69.09" fill="rgb(51,121,125)" fill-opacity=".72"/>
+<polygon points="338.21,67.64 332.90,69.09 364.80,96.14" fill="rgb(51,124,128)" fill-opacity=".72"/>
+<polygon points="266.11,72.63 275.54,73.21 290.89,40.99" fill="rgb(51,131,135)" fill-opacity=".72"/>
+<polygon points="292.08,40.99 290.89,40.99 275.54,73.21" fill="rgb(51,133,137)" fill-opacity=".72"/>
+<polygon points="275.54,73.21 285.33,73.48 292.08,40.99" fill="rgb(51,131,135)" fill-opacity=".72"/>
+<polygon points="293.27,41.00 292.08,40.99 285.33,73.48" fill="rgb(51,132,136)" fill-opacity=".72"/>
+<polygon points="285.33,73.48 295.39,73.29 293.27,41.00" fill="rgb(51,130,134)" fill-opacity=".72"/>
+<polygon points="294.47,41.00 293.27,41.00 295.39,73.29" fill="rgb(51,132,136)" fill-opacity=".72"/>
+<polygon points="295.39,73.29 305.43,72.72 294.47,41.00" fill="rgb(51,129,133)" fill-opacity=".72"/>
+<polygon points="295.66,41.00 294.47,41.00 305.43,72.72" fill="rgb(51,132,136)" fill-opacity=".72"/>
+<polygon points="305.43,72.72 315.37,71.77 295.66,41.00" fill="rgb(51,129,133)" fill-opacity=".72"/>
+<polygon points="296.85,41.01 295.66,41.00 315.37,71.77" fill="rgb(51,131,135)" fill-opacity=".72"/>
+<polygon points="315.37,71.77 324.91,70.49 296.85,41.01" fill="rgb(51,128,132)" fill-opacity=".72"/>
+<polygon points="298.04,41.01 296.85,41.01 324.91,70.49" fill="rgb(51,131,135)" fill-opacity=".72"/>
+<polygon points="324.91,70.49 332.90,69.09 298.04,41.01" fill="rgb(51,128,132)" fill-opacity=".72"/>
+<polygon points="299.23,41.01 298.04,41.01 332.90,69.09" fill="rgb(51,131,135)" fill-opacity=".72"/>
+<polygon points="332.90,69.09 338.21,67.64 299.23,41.01" fill="rgb(51,128,132)" fill-opacity=".72"/>
+<polygon points="300.42,41.02 299.23,41.01 338.21,67.64" fill="rgb(51,132,136)" fill-opacity=".72"/>
+<g class="mesh-lines" stroke="#f4faf6" stroke-width=".75" fill="none">
+<path d="M164.80,351.94L176.24,364.00"/>
+<path d="M164.80,351.94L172.96,320.45"/>
+<path d="M176.24,364.00L196.52,370.94"/>
+<path d="M176.24,364.00L172.96,320.45"/>
+<path d="M176.24,364.00L181.74,331.91"/>
+<path d="M196.52,370.94L225.32,371.74"/>
+<path d="M196.52,370.94L181.74,331.91"/>
+<path d="M196.52,370.94L202.51,338.32"/>
+<path d="M225.32,371.74L259.16,367.76"/>
+<path d="M225.32,371.74L202.51,338.32"/>
+<path d="M225.32,371.74L232.70,339.17"/>
+<path d="M259.16,367.76L294.65,359.40"/>
+<path d="M259.16,367.76L232.70,339.17"/>
+<path d="M259.16,367.76L267.58,335.38"/>
+<path d="M294.65,359.40L329.21,347.21"/>
+<path d="M294.65,359.40L267.58,335.38"/>
+<path d="M294.65,359.40L304.58,327.70"/>
+<path d="M329.21,347.21L361.48,332.49"/>
+<path d="M329.21,347.21L304.58,327.70"/>
+<path d="M329.21,347.21L340.59,316.78"/>
+<path d="M361.48,332.49L391.29,316.51"/>
+<path d="M361.48,332.49L340.59,316.78"/>
+<path d="M361.48,332.49L373.65,303.84"/>
+<path d="M391.29,316.51L373.65,303.84"/>
+<path d="M391.29,316.51L402.89,288.96"/>
+<path d="M172.96,320.45L181.74,331.91"/>
+<path d="M172.96,320.45L182.35,289.55"/>
+<path d="M181.74,331.91L202.51,338.32"/>
+<path d="M181.74,331.91L182.35,289.55"/>
+<path d="M181.74,331.91L190.05,300.05"/>
+<path d="M202.51,338.32L232.70,339.17"/>
+<path d="M202.51,338.32L190.05,300.05"/>
+<path d="M202.51,338.32L212.39,306.01"/>
+<path d="M232.70,339.17L267.58,335.38"/>
+<path d="M232.70,339.17L212.39,306.01"/>
+<path d="M232.70,339.17L243.19,306.63"/>
+<path d="M267.58,335.38L304.58,327.70"/>
+<path d="M267.58,335.38L243.19,306.63"/>
+<path d="M267.58,335.38L278.08,303.00"/>
+<path d="M304.58,327.70L340.59,316.78"/>
+<path d="M304.58,327.70L278.08,303.00"/>
+<path d="M304.58,327.70L315.05,296.03"/>
+<path d="M340.59,316.78L373.65,303.84"/>
+<path d="M340.59,316.78L315.05,296.03"/>
+<path d="M340.59,316.78L350.56,286.47"/>
+<path d="M373.65,303.84L402.89,288.96"/>
+<path d="M373.65,303.84L350.56,286.47"/>
+<path d="M373.65,303.84L382.09,274.62"/>
+<path d="M402.89,288.96L382.09,274.62"/>
+<path d="M402.89,288.96L410.63,261.23"/>
+<path d="M182.35,289.55L190.05,300.05"/>
+<path d="M182.35,289.55L190.47,258.60"/>
+<path d="M190.05,300.05L212.39,306.01"/>
+<path d="M190.05,300.05L190.47,258.60"/>
+<path d="M190.05,300.05L199.92,267.93"/>
+<path d="M212.39,306.01L243.19,306.63"/>
+<path d="M212.39,306.01L199.92,267.93"/>
+<path d="M212.39,306.01L223.69,273.01"/>
+<path d="M243.19,306.63L278.08,303.00"/>
+<path d="M243.19,306.63L223.69,273.01"/>
+<path d="M243.19,306.63L254.78,273.39"/>
+<path d="M278.08,303.00L315.05,296.03"/>
+<path d="M278.08,303.00L254.78,273.39"/>
+<path d="M278.08,303.00L289.10,270.24"/>
+<path d="M315.05,296.03L350.56,286.47"/>
+<path d="M315.05,296.03L289.10,270.24"/>
+<path d="M315.05,296.03L324.60,264.34"/>
+<path d="M350.56,286.47L382.09,274.62"/>
+<path d="M350.56,286.47L324.60,264.34"/>
+<path d="M350.56,286.47L357.91,255.80"/>
+<path d="M382.09,274.62L410.63,261.23"/>
+<path d="M382.09,274.62L357.91,255.80"/>
+<path d="M382.09,274.62L387.58,245.41"/>
+<path d="M410.63,261.23L387.58,245.41"/>
+<path d="M410.63,261.23L414.07,233.43"/>
+<path d="M190.47,258.60L199.92,267.93"/>
+<path d="M190.47,258.60L198.58,227.61"/>
+<path d="M199.92,267.93L223.69,273.01"/>
+<path d="M199.92,267.93L198.58,227.61"/>
+<path d="M199.92,267.93L212.44,235.38"/>
+<path d="M223.69,273.01L254.78,273.39"/>
+<path d="M223.69,273.01L212.44,235.38"/>
+<path d="M223.69,273.01L236.65,239.73"/>
+<path d="M254.78,273.39L289.10,270.24"/>
+<path d="M254.78,273.39L236.65,239.73"/>
+<path d="M254.78,273.39L266.77,240.08"/>
+<path d="M289.10,270.24L324.60,264.34"/>
+<path d="M289.10,270.24L266.77,240.08"/>
+<path d="M289.10,270.24L299.43,237.49"/>
+<path d="M324.60,264.34L357.91,255.80"/>
+<path d="M324.60,264.34L299.43,237.49"/>
+<path d="M324.60,264.34L332.33,232.38"/>
+<path d="M357.91,255.80L387.58,245.41"/>
+<path d="M357.91,255.80L332.33,232.38"/>
+<path d="M357.91,255.80L362.89,225.09"/>
+<path d="M387.58,245.41L414.07,233.43"/>
+<path d="M387.58,245.41L362.89,225.09"/>
+<path d="M387.58,245.41L389.70,216.09"/>
+<path d="M414.07,233.43L389.70,216.09"/>
+<path d="M414.07,233.43L413.40,205.80"/>
+<path d="M198.58,227.61L212.44,235.38"/>
+<path d="M198.58,227.61L207.56,196.63"/>
+<path d="M212.44,235.38L236.65,239.73"/>
+<path d="M212.44,235.38L207.56,196.63"/>
+<path d="M212.44,235.38L225.75,202.84"/>
+<path d="M236.65,239.73L266.77,240.08"/>
+<path d="M236.65,239.73L225.75,202.84"/>
+<path d="M236.65,239.73L249.44,206.60"/>
+<path d="M266.77,240.08L299.43,237.49"/>
+<path d="M266.77,240.08L249.44,206.60"/>
+<path d="M266.77,240.08L277.64,207.03"/>
+<path d="M299.43,237.49L332.33,232.38"/>
+<path d="M299.43,237.49L277.64,207.03"/>
+<path d="M299.43,237.49L307.70,204.87"/>
+<path d="M332.33,232.38L362.89,225.09"/>
+<path d="M332.33,232.38L307.70,204.87"/>
+<path d="M332.33,232.38L337.39,200.62"/>
+<path d="M362.89,225.09L389.70,216.09"/>
+<path d="M362.89,225.09L337.39,200.62"/>
+<path d="M362.89,225.09L364.42,194.46"/>
+<path d="M389.70,216.09L413.40,205.80"/>
+<path d="M389.70,216.09L364.42,194.46"/>
+<path d="M389.70,216.09L387.94,186.93"/>
+<path d="M413.40,205.80L387.94,186.93"/>
+<path d="M413.40,205.80L408.52,178.53"/>
+<path d="M207.56,196.63L225.75,202.84"/>
+<path d="M207.56,196.63L217.90,165.74"/>
+<path d="M225.75,202.84L249.44,206.60"/>
+<path d="M225.75,202.84L217.90,165.74"/>
+<path d="M225.75,202.84L237.59,170.35"/>
+<path d="M249.44,206.60L277.64,207.03"/>
+<path d="M249.44,206.60L237.59,170.35"/>
+<path d="M249.44,206.60L260.27,173.22"/>
+<path d="M277.64,207.03L307.70,204.87"/>
+<path d="M277.64,207.03L260.27,173.22"/>
+<path d="M277.64,207.03L285.79,173.61"/>
+<path d="M307.70,204.87L337.39,200.62"/>
+<path d="M307.70,204.87L285.79,173.61"/>
+<path d="M307.70,204.87L312.02,171.96"/>
+<path d="M337.39,200.62L364.42,194.46"/>
+<path d="M337.39,200.62L312.02,171.96"/>
+<path d="M337.39,200.62L337.55,168.60"/>
+<path d="M364.42,194.46L387.94,186.93"/>
+<path d="M364.42,194.46L337.55,168.60"/>
+<path d="M364.42,194.46L361.14,163.65"/>
+<path d="M387.94,186.93L408.52,178.53"/>
+<path d="M387.94,186.93L361.14,163.65"/>
+<path d="M387.94,186.93L381.89,157.68"/>
+<path d="M408.52,178.53L381.89,157.68"/>
+<path d="M408.52,178.53L399.25,151.05"/>
+<path d="M217.90,165.74L237.59,170.35"/>
+<path d="M217.90,165.74L230.35,134.99"/>
+<path d="M237.59,170.35L260.27,173.22"/>
+<path d="M237.59,170.35L230.35,134.99"/>
+<path d="M237.59,170.35L248.90,138.01"/>
+<path d="M260.27,173.22L285.79,173.61"/>
+<path d="M260.27,173.22L248.90,138.01"/>
+<path d="M260.27,173.22L269.13,139.86"/>
+<path d="M285.79,173.61L312.02,171.96"/>
+<path d="M285.79,173.61L269.13,139.86"/>
+<path d="M285.79,173.61L290.88,140.18"/>
+<path d="M312.02,171.96L337.55,168.60"/>
+<path d="M312.02,171.96L290.88,140.18"/>
+<path d="M312.02,171.96L312.76,139.03"/>
+<path d="M337.55,168.60L361.14,163.65"/>
+<path d="M337.55,168.60L312.76,139.03"/>
+<path d="M337.55,168.60L334.06,136.54"/>
+<path d="M361.14,163.65L381.89,157.68"/>
+<path d="M361.14,163.65L334.06,136.54"/>
+<path d="M361.14,163.65L353.83,132.83"/>
+<path d="M381.89,157.68L399.25,151.05"/>
+<path d="M381.89,157.68L353.83,132.83"/>
+<path d="M381.89,157.68L371.05,128.39"/>
+<path d="M399.25,151.05L371.05,128.39"/>
+<path d="M399.25,151.05L384.96,123.64"/>
+<path d="M230.35,134.99L248.90,138.01"/>
+<path d="M230.35,134.99L246.11,104.20"/>
+<path d="M248.90,138.01L269.13,139.86"/>
+<path d="M248.90,138.01L246.11,104.20"/>
+<path d="M248.90,138.01L261.19,105.60"/>
+<path d="M269.13,139.86L290.88,140.18"/>
+<path d="M269.13,139.86L261.19,105.60"/>
+<path d="M269.13,139.86L277.32,106.37"/>
+<path d="M290.88,140.18L312.76,139.03"/>
+<path d="M290.88,140.18L277.32,106.37"/>
+<path d="M290.88,140.18L294.15,106.40"/>
+<path d="M312.76,139.03L334.06,136.54"/>
+<path d="M312.76,139.03L294.15,106.40"/>
+<path d="M312.76,139.03L311.00,105.69"/>
+<path d="M334.06,136.54L353.83,132.83"/>
+<path d="M334.06,136.54L311.00,105.69"/>
+<path d="M334.06,136.54L327.64,104.10"/>
+<path d="M353.83,132.83L371.05,128.39"/>
+<path d="M353.83,132.83L327.64,104.10"/>
+<path d="M353.83,132.83L343.29,101.69"/>
+<path d="M371.05,128.39L384.96,123.64"/>
+<path d="M371.05,128.39L343.29,101.69"/>
+<path d="M371.05,128.39L355.93,98.98"/>
+<path d="M384.96,123.64L355.93,98.98"/>
+<path d="M384.96,123.64L364.80,96.14"/>
+<path d="M246.11,104.20L261.19,105.60"/>
+<path d="M246.11,104.20L266.11,72.63"/>
+<path d="M261.19,105.60L277.32,106.37"/>
+<path d="M261.19,105.60L266.11,72.63"/>
+<path d="M261.19,105.60L275.54,73.21"/>
+<path d="M277.32,106.37L294.15,106.40"/>
+<path d="M277.32,106.37L275.54,73.21"/>
+<path d="M277.32,106.37L285.33,73.48"/>
+<path d="M294.15,106.40L311.00,105.69"/>
+<path d="M294.15,106.40L285.33,73.48"/>
+<path d="M294.15,106.40L295.39,73.29"/>
+<path d="M311.00,105.69L327.64,104.10"/>
+<path d="M311.00,105.69L295.39,73.29"/>
+<path d="M311.00,105.69L305.43,72.72"/>
+<path d="M327.64,104.10L343.29,101.69"/>
+<path d="M327.64,104.10L305.43,72.72"/>
+<path d="M327.64,104.10L315.37,71.77"/>
+<path d="M343.29,101.69L355.93,98.98"/>
+<path d="M343.29,101.69L315.37,71.77"/>
+<path d="M343.29,101.69L324.91,70.49"/>
+<path d="M355.93,98.98L364.80,96.14"/>
+<path d="M355.93,98.98L324.91,70.49"/>
+<path d="M355.93,98.98L332.90,69.09"/>
+<path d="M364.80,96.14L332.90,69.09"/>
+<path d="M364.80,96.14L338.21,67.64"/>
+<path d="M266.11,72.63L275.54,73.21"/>
+<path d="M266.11,72.63L290.89,40.99"/>
+<path d="M275.54,73.21L285.33,73.48"/>
+<path d="M275.54,73.21L290.89,40.99"/>
+<path d="M275.54,73.21L292.08,40.99"/>
+<path d="M285.33,73.48L295.39,73.29"/>
+<path d="M285.33,73.48L292.08,40.99"/>
+<path d="M285.33,73.48L293.27,41.00"/>
+<path d="M295.39,73.29L305.43,72.72"/>
+<path d="M295.39,73.29L293.27,41.00"/>
+<path d="M295.39,73.29L294.47,41.00"/>
+<path d="M305.43,72.72L315.37,71.77"/>
+<path d="M305.43,72.72L294.47,41.00"/>
+<path d="M305.43,72.72L295.66,41.00"/>
+<path d="M315.37,71.77L324.91,70.49"/>
+<path d="M315.37,71.77L295.66,41.00"/>
+<path d="M315.37,71.77L296.85,41.01"/>
+<path d="M324.91,70.49L332.90,69.09"/>
+<path d="M324.91,70.49L296.85,41.01"/>
+<path d="M324.91,70.49L298.04,41.01"/>
+<path d="M332.90,69.09L338.21,67.64"/>
+<path d="M332.90,69.09L298.04,41.01"/>
+<path d="M332.90,69.09L299.23,41.01"/>
+<path d="M338.21,67.64L299.23,41.01"/>
+<path d="M338.21,67.64L300.42,41.02"/>
+<path d="M290.89,40.99L292.08,40.99"/>
+<path d="M292.08,40.99L293.27,41.00"/>
+<path d="M293.27,41.00L294.47,41.00"/>
+<path d="M294.47,41.00L295.66,41.00"/>
+<path d="M295.66,41.00L296.85,41.01"/>
+<path d="M296.85,41.01L298.04,41.01"/>
+<path d="M298.04,41.01L299.23,41.01"/>
+<path d="M299.23,41.01L300.42,41.02"/>
+</g><g class="mesh-lines" fill="#174c53">
+<circle cx="164.80" cy="351.94" r="1.6"/>
+<circle cx="176.24" cy="364.00" r="1.6"/>
+<circle cx="196.52" cy="370.94" r="1.6"/>
+<circle cx="225.32" cy="371.74" r="1.6"/>
+<circle cx="259.16" cy="367.76" r="1.6"/>
+<circle cx="294.65" cy="359.40" r="1.6"/>
+<circle cx="329.21" cy="347.21" r="1.6"/>
+<circle cx="361.48" cy="332.49" r="1.6"/>
+<circle cx="391.29" cy="316.51" r="1.6"/>
+<circle cx="172.96" cy="320.45" r="1.6"/>
+<circle cx="181.74" cy="331.91" r="1.6"/>
+<circle cx="202.51" cy="338.32" r="1.6"/>
+<circle cx="232.70" cy="339.17" r="1.6"/>
+<circle cx="267.58" cy="335.38" r="1.6"/>
+<circle cx="304.58" cy="327.70" r="1.6"/>
+<circle cx="340.59" cy="316.78" r="1.6"/>
+<circle cx="373.65" cy="303.84" r="1.6"/>
+<circle cx="402.89" cy="288.96" r="1.6"/>
+<circle cx="182.35" cy="289.55" r="1.6"/>
+<circle cx="190.05" cy="300.05" r="1.6"/>
+<circle cx="212.39" cy="306.01" r="1.6"/>
+<circle cx="243.19" cy="306.63" r="1.6"/>
+<circle cx="278.08" cy="303.00" r="1.6"/>
+<circle cx="315.05" cy="296.03" r="1.6"/>
+<circle cx="350.56" cy="286.47" r="1.6"/>
+<circle cx="382.09" cy="274.62" r="1.6"/>
+<circle cx="410.63" cy="261.23" r="1.6"/>
+<circle cx="190.47" cy="258.60" r="1.6"/>
+<circle cx="199.92" cy="267.93" r="1.6"/>
+<circle cx="223.69" cy="273.01" r="1.6"/>
+<circle cx="254.78" cy="273.39" r="1.6"/>
+<circle cx="289.10" cy="270.24" r="1.6"/>
+<circle cx="324.60" cy="264.34" r="1.6"/>
+<circle cx="357.91" cy="255.80" r="1.6"/>
+<circle cx="387.58" cy="245.41" r="1.6"/>
+<circle cx="414.07" cy="233.43" r="1.6"/>
+<circle cx="198.58" cy="227.61" r="1.6"/>
+<circle cx="212.44" cy="235.38" r="1.6"/>
+<circle cx="236.65" cy="239.73" r="1.6"/>
+<circle cx="266.77" cy="240.08" r="1.6"/>
+<circle cx="299.43" cy="237.49" r="1.6"/>
+<circle cx="332.33" cy="232.38" r="1.6"/>
+<circle cx="362.89" cy="225.09" r="1.6"/>
+<circle cx="389.70" cy="216.09" r="1.6"/>
+<circle cx="413.40" cy="205.80" r="1.6"/>
+<circle cx="207.56" cy="196.63" r="1.6"/>
+<circle cx="225.75" cy="202.84" r="1.6"/>
+<circle cx="249.44" cy="206.60" r="1.6"/>
+<circle cx="277.64" cy="207.03" r="1.6"/>
+<circle cx="307.70" cy="204.87" r="1.6"/>
+<circle cx="337.39" cy="200.62" r="1.6"/>
+<circle cx="364.42" cy="194.46" r="1.6"/>
+<circle cx="387.94" cy="186.93" r="1.6"/>
+<circle cx="408.52" cy="178.53" r="1.6"/>
+<circle cx="217.90" cy="165.74" r="1.6"/>
+<circle cx="237.59" cy="170.35" r="1.6"/>
+<circle cx="260.27" cy="173.22" r="1.6"/>
+<circle cx="285.79" cy="173.61" r="1.6"/>
+<circle cx="312.02" cy="171.96" r="1.6"/>
+<circle cx="337.55" cy="168.60" r="1.6"/>
+<circle cx="361.14" cy="163.65" r="1.6"/>
+<circle cx="381.89" cy="157.68" r="1.6"/>
+<circle cx="399.25" cy="151.05" r="1.6"/>
+<circle cx="230.35" cy="134.99" r="1.6"/>
+<circle cx="248.90" cy="138.01" r="1.6"/>
+<circle cx="269.13" cy="139.86" r="1.6"/>
+<circle cx="290.88" cy="140.18" r="1.6"/>
+<circle cx="312.76" cy="139.03" r="1.6"/>
+<circle cx="334.06" cy="136.54" r="1.6"/>
+<circle cx="353.83" cy="132.83" r="1.6"/>
+<circle cx="371.05" cy="128.39" r="1.6"/>
+<circle cx="384.96" cy="123.64" r="1.6"/>
+<circle cx="246.11" cy="104.20" r="1.6"/>
+<circle cx="261.19" cy="105.60" r="1.6"/>
+<circle cx="277.32" cy="106.37" r="1.6"/>
+<circle cx="294.15" cy="106.40" r="1.6"/>
+<circle cx="311.00" cy="105.69" r="1.6"/>
+<circle cx="327.64" cy="104.10" r="1.6"/>
+<circle cx="343.29" cy="101.69" r="1.6"/>
+<circle cx="355.93" cy="98.98" r="1.6"/>
+<circle cx="364.80" cy="96.14" r="1.6"/>
+<circle cx="266.11" cy="72.63" r="1.6"/>
+<circle cx="275.54" cy="73.21" r="1.6"/>
+<circle cx="285.33" cy="73.48" r="1.6"/>
+<circle cx="295.39" cy="73.29" r="1.6"/>
+<circle cx="305.43" cy="72.72" r="1.6"/>
+<circle cx="315.37" cy="71.77" r="1.6"/>
+<circle cx="324.91" cy="70.49" r="1.6"/>
+<circle cx="332.90" cy="69.09" r="1.6"/>
+<circle cx="338.21" cy="67.64" r="1.6"/>
+<circle cx="290.89" cy="40.99" r="1.6"/>
+<circle cx="292.08" cy="40.99" r="1.6"/>
+<circle cx="293.27" cy="41.00" r="1.6"/>
+<circle cx="294.47" cy="41.00" r="1.6"/>
+<circle cx="295.66" cy="41.00" r="1.6"/>
+<circle cx="296.85" cy="41.01" r="1.6"/>
+<circle cx="298.04" cy="41.01" r="1.6"/>
+<circle cx="299.23" cy="41.01" r="1.6"/>
+<circle cx="300.42" cy="41.02" r="1.6"/>
+</g><g class="load-arrows" fill="none" stroke="#bd643a" stroke-width="2" marker-end="url(#arrow)"><path d="M62 150C85 139 110 141 135 150"/><path d="M52 195C85 184 110 187 145 195"/><path d="M64 240C90 229 117 232 147 240"/></g><text class="load-arrows" x="49" y="119" fill="#a9522e">Ветер</text>
+<path d="M391.29,316.51L435.20,358.87" stroke="#bd643a" stroke-width="2.5"/>
+<circle cx="290.89" cy="40.99" r="5" fill="#183d46" stroke="#faf8f1" stroke-width="2"/><text x="300.89" y="27.99" fill="#183d46">Верхнее крепление</text>
+<circle cx="164.80" cy="351.94" r="5" fill="#183d46" stroke="#faf8f1" stroke-width="2"/><text x="39.80" y="377.94" fill="#183d46">Крепление у носа</text>
+<circle cx="391.29" cy="316.51" r="5" fill="#ad4b23" stroke="#faf8f1" stroke-width="2"/><text x="403.29" y="299.51" fill="#ad4b23">Подвижный угол</text>
+<circle cx="435.20" cy="358.87" r="5" fill="#ad4b23" stroke="#faf8f1" stroke-width="2"/><text x="447.20" y="364.87" fill="#ad4b23">К лодке</text>
+</svg>
+<figcaption>Проекция настоящей исходной формы из текущего входного файла. Стрелки условные; это иллюстрация устройства, не новый расчёт.</figcaption>
+</figure></div>
+</header>
+<section aria-labelledby="cycle">
+<div class="eyebrow">01 / Один цикл</div><h2 id="cycle">От вашего действия — к движению яхты</h2>
+<div class="flow">
+<article><h3>Ветер и управление</h3><p>Курс, скорость лодки, ветер и положение парусов задают воздушную нагрузку. Ваше движение шкота меняет допустимую длину верёвки.</p></article>
+<article><h3>Нагрузка ткани</h3><p>Сила воздуха распределяется по точкам текущего полотна. Добавляется его вес. Нагрузка воздуха удерживается на двух подшагах.</p></article>
+<article><h3>Новая форма</h3><p>Все точки уточняются совместно: учитываются их прежнее движение, упругость ткани, крепления и натяжение шкота.</p></article>
+<article><h3>Проверка решения</h3><p>Расчёт проверяет согласование сил, длин и работы. Если шаг не удаётся, пробует меньшие промежутки времени.</p></article>
+<article><h3>Ответ лодки</h3><p>Усилия креплений и их поворачивающее действие передаются корпусу. Грот, вода и руль участвуют в обычном расчёте лодки.</p></article>
+</div>
+<p class="loop">↳ На следующем цикле воздух пересчитывается уже для изменившихся формы и движения.</p>
+<div class="mechanics">
+<article><h3>Ткань сопротивляется деформации</h3><p>Растяжение, перекос и изгиб увеличивают её упругую энергию. Из этой энергии получаются силы.</p></article>
+<article><h3>Верёвка умеет провисать</h3><p>Шкот ограничивает расстояние до крепления и может тянуть угол. Толкать его, как жёсткая распорка, он не может.</p></article>
+<article><h3>Форма ищется на конец шага</h3><p>Компьютер многократно поправляет предположение о следующем положении. Такой способ называется неявным расчётом.</p></article>
+</div>
+<div class="timeline"><div><h3>Два подшага, несколько кадров</h3><p>Один шаг лодки охватывает 1/30 секунды модельного времени. Между частями ткани интерфейс получает возможность показать кадр.</p></div><div class="track"><b>Ткань · 1/60 с</b><small>→ кадр →</small><b>Ткань · 1/60 с</b><small>→</small><b class="result">Лодка + форма</b><div class="track-note">Это время внутри модели. Затраты компьютера зависят от сложности шага; гарантии 30 шагов в реальную секунду пока нет.</div></div></div>
+</section>
+<section aria-labelledby="speed"><div class="eyebrow">02 / Что уже ускоряет работу</div><h2 id="speed">Меньше лишней работы, быстрее тяжёлая арифметика</h2>
+<div class="optim">
+<article><span class="tag">Объём задачи</span><h3>Компактная сетка</h3><p>Движение считается для 99 точек. Это ограничивает стоимость, но и подробность мелких складок.</p></article>
+<article><span class="tag">Способ решения</span><h3>Только нужные связи</h3><p>Большинство точек не связаны напрямую. «Разреженный» решатель использует эту структуру; поправки формы и усилия связей находит вместе.</p></article>
+<article><span class="tag">Повторное использование</span><h3>Подготовка сохраняется</h3><p>Схема связей, места коэффициентов и память WASM используются повторно. Прежние натяжения помогают начать следующий поиск.</p></article>
+<article><span class="tag">Скорость вычислений</span><h3>WASM + SIMD на процессоре</h3><p>Линейное решение и совместимый расчёт материала выполняются скомпилированным кодом. SIMD обрабатывает несколько чисел одной командой.</p></article>
+<article><span class="tag">Отзывчивость</span><h3>Отдельный поток и пауза</h3><p>Worker считает ткань отдельно от интерфейса, а две части шага разделены кадром. Это разгружает экран, но само по себе не сокращает расчёт.</p></article>
+<article><span class="tag">Стоимость общей модели</span><h3>Воздух → ткань → лодка</h3><p>Воздух считается один раз на шаг лодки. Корпус и ткань обновляются последовательно, поэтому не требуется решать их большую общую задачу.</p></article>
+</div></section>
+<section class="limits" aria-label="Результаты и границы"><div><h2>Что это даёт сейчас</h2><p>Вы управляете яхтой обычным интерфейсом, а новая ткань генакера передаёт ей рассчитанные усилия. Изменение формы получается из механики полотна.</p><p class="sub">В сохранённом браузерном окне от 10 октября две части ткани занимали в среднем <strong>14,8 мс</strong>, 95% — не дольше <strong>17,3 мс</strong>. Это 300 шагов конкретной сессии, только ткань; не полный кадр и не замер Safari.</p></div><div class="callout"><h3>Границы текущей версии</h3><p>Воздух берётся из существующей приближённой модели парусов. Подробное течение вокруг ткани не рассчитывается. Полная проверка складывания и восстановления ещё открыта.</p><p>Ход шкота пока <strong>25 см</strong>. На сложных режимах расчёт может остановиться. Вода на погружённую ткань ещё не действует. Последовательную связь ткани с лодкой нужно дополнительно проверить.</p></div></section>
+<details><summary>Safari, GPU и точное название алгоритма</summary>
+<p><strong>Safari.</strong> При отличии округления автоматически выбирается исходный JavaScript-расчёт материала. WASM/SIMD-решатель остаётся включён. На экране появляется «режим совместимости»; уравнения и пороги прежние.</p>
+<p><strong>GPU.</strong> Новая механика генакера исполняется на центральном процессоре. Видеокарта рисует сцену. Отдельный WASM-сборщик матрицы из общего исследовательского стенда здесь не подключён.</p>
+<p><strong>Алгоритм.</strong> Неявный шаг движения с энергией растяжения, перекоса и кривизны; ограничения креплений, кромок, жёсткой верхней планки и одностороннего шкота. Направление поправки — Гаусс–Ньютон, совместная разреженная система KKT с LDL-разложением в WASM; выбор натянутых связей и уменьшение поправки при неудаче. Точный корректор общего исследовательского стенда в этой ветке не вызывается.</p>
+<p>На подшаг — до 80 итераций. Основной шаг ткани 1/60 с при неудаче делится до 1/240 с. Требования: остаток силы ≤ 10⁻⁶ Н, нарушение жёсткой длины ≤ 10⁻⁹ м; также проверяются односторонние связи, работа и передача импульса. Это точность решения назначенной модели, а не точность воспроизведения настоящей яхты.</p>
+</details>
+<details><summary>Код и основания отчёта</summary><div class="sources"><div>
+<a href="../../sim/gennaker-live.mjs">Связь воздуха, ткани и обычной лодки</a>
+<a href="../../sim/gennaker-energy.mjs">Материал, ограничения и реакции креплений</a>
+<a href="../../sim/gennaker-energy-worker.mjs">Два подшага в отдельном потоке</a>
+<a href="../../tests/lib/cloth-implicit-motion.mjs">Неявный поиск новой формы</a></div><div>
+<a href="../../tests/lib/cloth-kkt-direction.mjs">Совместное решение и сохранение структуры</a>
+<a href="../../tests/lib/cloth-sparse-wasm.mjs">WASM, повторное использование памяти</a>
+<a href="../../sim/gennaker-material.mjs">Выбор материала для движка браузера</a>
+<a href="../research/boat-coupling.md#новая-ткань-в-обычном-симуляторе">Протоколы проверок и измерения скорости</a>
+</div></div>
+<p>Геометрия рисунка: <a href="../../out/acceptance/fluid-live-ordinary-ui-20261010-plus.json">текущий вход первого борта</a>. Источник выбирает <code>out/export/live-sail-default.json</code>. Физический код сверён с ревизией <code>925ea9f</code>; новых измерений производительности для этого отчёта не выполнялось.</p>
+<p class="sub">Результаты прежнего общего расчёта тела и ткани нельзя автоматически переносить на нынешнее последовательное соединение.</p>
+</details>
+<footer class="footer"><span>SV20 · Краткий разбор встроенной реализации · 14.10.2026</span><span>Самодостаточный HTML · работает без сети</span></footer>
+</main></body></html>

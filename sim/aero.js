@@ -13,6 +13,7 @@
 
 import { wrapPi, DEG } from './util.js';
 import { Lattice, FreeWake } from './vlm.js';
+import {snapshotRigAir,restoreRigAir} from './rig-air-state.js';
 import { membraneCamber, slackOf, luffFraction, luffFactor, sectionLift,
          capLift, liftCeiling, camberSign } from './membrane.js';
 import { setSailPolar, hasSailPolar, polarCoeffs, polarCeiling,
@@ -2978,6 +2979,9 @@ export class Rig {
   // Правило простое: появилось у рига поле, которое переживает шаг, — ему сюда.
   // Свидетель на это есть (`tests/replay.test.mjs`, обход дампа по кругу), и
   // забыть его теперь дороже, чем вписать.
+  airSnapshot() { return snapshotRigAir(this,this.wakeLen||WAKE_LEN,sailPhysicsIsOld()); }
+  airRestore(state) { restoreRigAir(this,state,this.wakeLen||WAKE_LEN,sailPhysicsIsOld()); }
+
   stateDump() {
     const arr = a => (a ? Array.from(a) : null);
     return {

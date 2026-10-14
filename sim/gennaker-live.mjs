@@ -30,7 +30,7 @@ export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false}
   const currentPack=JSON.parse(new TextDecoder().decode(await bytesAt('out/export/physics.json',source.physicsSha256)));
   if(JSON.stringify(currentPack)!==JSON.stringify(originalPack))throw new Error('Встроенный физический пакет устарел: пересоберите симулятор');
   const bytes=await bytesAt(source.wasm.path,source.wasm.sha256),materialBytes=await bytesAt(source.materialWasm.path,source.materialWasm.sha256);
-  const runtimeSha256=Object.fromEntries(await Promise.all(['sim/gennaker-live.mjs','sim/gennaker-energy.mjs','sim/gennaker-energy-worker.mjs','sim/gennaker-material.mjs','sim/gennaker-metrics.mjs','sim/gennaker-scenario.mjs','tests/probes/cloth-material-wasm.mjs','tests/probes/cloth-material-engine-check.mjs','sim/physics.js','sim/main.js','sim/controls.js','sim/trace.js'].map(async path=>[path,await digest(await bytesAt(path))])));
+  const runtimeSha256=Object.fromEntries(await Promise.all(['sim/gennaker-live.mjs','sim/gennaker-energy.mjs','sim/gennaker-energy-worker.mjs','sim/gennaker-material.mjs','sim/gennaker-metrics.mjs','sim/gennaker-scenario.mjs','tests/probes/cloth-material-wasm.mjs','tests/probes/cloth-material-engine-check.mjs','sim/physics.js','sim/aero.js','sim/vlm.js','sim/rig-air-state.js','sim/main.js','sim/controls.js','sim/trace.js'].map(async path=>[path,await digest(await bytesAt(path))])));
   const display=document.createElement('div');display.id='gennaker-energy-status';
   Object.assign(display.style,{position:'absolute',top:gameUI?'80px':'8px',left:'50%',transform:'translateX(-50%)',width:'max-content',maxWidth:'min(460px, 90%)',padding:'6px 9px',background:'#18212dcc',color:'white',font:'12px sans-serif',pointerEvents:'none',zIndex:5});
   document.getElementById('stage').append(display);
@@ -120,6 +120,9 @@ export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false}
         if(lastRig!==boat.rig || boat.t<lastBoatTime){const start=profile?performance.now():0;await hoist();if(timings)timings.preparationMs=performance.now()-start;}
         const physicsStart=profile?performance.now():0;
         before();
+        // Boat захватывает эти три значения до паузы на Worker. Последний
+        // ответ воды после ожидания может быть другим и вход шага не заменяет.
+        const waterInput={zM:boat.waveZ,slopeEast:boat.waveSE,slopeNorth:boat.waveSN};
         const pose=gennakerPose(boat),work=boat.stepWithGennaker(dt,timings),part=work.next();
         const beforeLoads=profile?performance.now():0;if(timings)timings.boatPrepareMs=beforeLoads-physicsStart;
         if(part.done)throw new Error('Обычная лодка не запросила новую ткань');
@@ -148,7 +151,7 @@ export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false}
           timings,attempts:result.attempts,frames:{...commandFrames,received:renderFrame}}:undefined);
         if(scenario?.done)metrics.state('complete');
         history.push({side:fixture.side,step:steps,timeS:boat.t,pose:gennakerPose(boat),controls:{...boat.o},forceN:load.forceN,momentNm:load.momentNm,
-          frames:{...commandFrames,received:renderFrame},partsMs:result.partsMs,audits:result.audits,lengthM:result.lengthM,nodalAirForceN:Array.from(forceN)});
+          frames:{...commandFrames,received:renderFrame},partsMs:result.partsMs,audits:result.audits,lengthM:result.lengthM,nodalAirForceN:Array.from(forceN),waterInput});
         if(history.length>300)history.shift();
         // Для дампа сохраняется действительная принятая физика, а не DOM.
         boat.gennakerEnergy={runtimeSha256,material,active:true,model:'boat-prescribed-energy-v1',grid:[11,9],steps,history,

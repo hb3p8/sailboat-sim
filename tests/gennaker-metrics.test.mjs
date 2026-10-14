@@ -46,12 +46,12 @@ const element=id=>{if(!elements.has(id))elements.set(id,{style:{},dataset:{},val
 globalThis.document={hidden:false,addEventListener(){},getElementById:element,createElement:()=>({style:{},dataset:{}})};
 globalThis.innerWidth=1000;globalThis.innerHeight=800;
 globalThis.fetch=async url=>{try{const data=readFileSync(new URL('.'+url,new URL('../',import.meta.url)));return {ok:true,arrayBuffer:async()=>data.buffer.slice(data.byteOffset,data.byteOffset+data.byteLength)};}catch{return {ok:false};}};
-const workers=new Set();let failNextWorkerStep=false;
+const workers=new Set();let failNextWorkerStep=false,progressObserver;
 globalThis.Worker=class {
   constructor(url) {
     const bootstrap=`import {parentPort} from 'node:worker_threads';globalThis.self={postMessage:(data,transfer)=>parentPort.postMessage(data,transfer)};parentPort.on('message',data=>self.onmessage({data}));await import(${JSON.stringify(url.href)});parentPort.postMessage({type:'boot'});`;
     this.worker=new NodeWorker(new URL('data:text/javascript,'+encodeURIComponent(bootstrap)),{type:'module'});workers.add(this.worker);
-    this.waiting=[];this.worker.on('message',data=>{if(data.type==='boot'){this.ready=true;for(const m of this.waiting)this.worker.postMessage(m);this.waiting=[];}else this.onmessage?.({data});});
+    this.waiting=[];this.worker.on('message',data=>{if(data.type==='boot'){this.ready=true;for(const m of this.waiting)this.worker.postMessage(m);this.waiting=[];}else {if(data.type==='progress')progressObserver?.();this.onmessage?.({data});}});
     this.worker.on('error',error=>this.onerror?.({message:error.message}));
   }
   postMessage(data){if(failNextWorkerStep&&data.type==='step'){failNextWorkerStep=false;data={...data,forceN:new Float64Array(data.forceN.length).fill(NaN)};}if(this.ready)this.worker.postMessage(data);else this.waiting.push(data);}
@@ -109,13 +109,26 @@ try {
   assert(failedSim.canAdvance(1/30,1/30),'После отказа UI должен прочитать уборку генакера');
   failedSim.advance(1/30,()=>{},()=>{});assert.equal(failedSim.performance().steps,1);assert.equal(failedSim.performance().phase,'running');failedSim.restart();
   console.log('Отказ настоящего Worker записан; уборка паруса через обычный UI возобновляет физику.');
+  const waterBoat=new Boat(pack,null,{windSpeed:4,windDir:140*Math.PI/180,twist:8*Math.PI/180,crewMass:220}),
+    waterUI=Object.fromEntries(['genpressure','wind','winddir','gensheet','genup','jibup','mainup'].map(k=>[k,element(k)])),
+    waterSim=await startGennakerSimulator({boat:waterBoat,ui:waterUI,manifestPath:'out/export/live-sail-default.json'});
+  waterBoat.x=1355;waterBoat.y=800;waterBoat.setGennaker(true);
+  progressObserver=()=>waterBoat.setWater(.04,-.02,.03);
+  const inputWater={zM:.0002,slopeEast:.0001,slopeNorth:-.0001};
+  waterSim.advance(1/30,()=>waterBoat.setWater(inputWater.zM,inputWater.slopeEast,inputWater.slopeNorth),()=>{});
+  const waterStart=performance.now();while(waterSim.busy&&performance.now()-waterStart<5000){waterSim.frame();await delay(5);}
+  assert.equal(waterSim.busy,false);assert.equal(waterSim.performance().phase,'running');
+  assert.deepEqual(waterBoat.gennakerEnergy.history[0].waterInput,inputWater);
+  assert.equal(waterBoat.waveZ,.04);progressObserver=undefined;waterSim.restart();
+  console.log('Вход воды сохранён до ожидания Worker; последующий ответ воды его не подменил.');
   const out=process.argv.find(x=>x.startsWith('--out='))?.slice(6);
   if(out)writeFileSync(out,JSON.stringify({schema:'gennaker-metrics-check-v1',scope:'node-controller-real-worker-not-browser',
     revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
     dirty:!!execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim(),
     sources:Object.fromEntries(['sim/gennaker-live.mjs','sim/gennaker-metrics.mjs','sim/gennaker-scenario.mjs',
-      'sim/gennaker-energy.mjs','sim/gennaker-energy-worker.mjs','sim/physics.js','tests/gennaker-metrics.test.mjs',
+      'sim/gennaker-energy.mjs','sim/gennaker-energy-worker.mjs','sim/physics.js','sim/aero.js','sim/vlm.js','sim/rig-air-state.js','tests/gennaker-metrics.test.mjs',
       'out/export/physics.json','out/export/live-sail-default.json'].map(p=>[p,createHash('sha256').update(readFileSync(p)).digest('hex')])),
+    waterInputObserved:{saved:inputWater,later:[.04,-.02,.03]},
     runs:[ordinary.summary,profiled.summary,sixty.summary,fast.summary,frameThirty.summary,other.summary]},null,2)+'\n',{flag:'wx'});
   console.log('Часы: подготовка, пауза, фон и отказ разделены; неудачный родитель и оба дочерних шага записаны. Второй борт/wakeSlice=3 и перезапуск проверены.');
 } finally {await Promise.all([...workers].map(w=>w.terminate()));}

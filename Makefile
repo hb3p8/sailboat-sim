@@ -45,7 +45,8 @@ $(TERRAIN_GLB): scripts/build_terrain_glb.py $(TERRAIN_PACK)
 
 terrain-glb: $(TERRAIN_GLB)
 
-sim/index.html: scripts/build_sim.py $(PACK) $(MESH) $(wildcard sim/*.js) \
+sim/index.html: scripts/build_sim.py scripts/sim_runtime.py $(wildcard data/simulator/v1/*) \
+                $(wildcard sim/*.js sim/*.mjs sim/cloth/*.mjs) \
                 sim/template.html $(wildcard $(TERRAIN_PACK))
 	$(PY) scripts/build_sim.py
 
@@ -99,7 +100,7 @@ sky: assets/sky.jpg
 
 # Локальный сервер. Нужен просмотрщику акватории: поля физики он читает по
 # частям, а разметку пишет обратно на диск, и ни того, ни другого `file://` не
-# позволяет. Симулятор как открывался двойным кликом, так и открывается.
+# позволяет. Обычный симулятор также читает модули ткани и данные через HTTP.
 serve: viewer/terrain.html $(TERRAIN_PACK)
 	$(PY) scripts/serve.py
 
@@ -182,13 +183,11 @@ out/acceptance/cloth-sparse.wasm: tests/lib/cloth-sparse-kernel.c
 	  -Wl,--initial-memory=131072 -o $@ $<
 
 .PHONY: kernel
-kernel: sim/biotwasm.js kernel/biot.dylib kernel/lattice.wasm
-
-# Блоб — ЧАСТЬ цели, а не отдельный шаг. Собранный .wasm без пересобранного
-# блоба это симулятор со старым кернелом, и узнаётся это падением на не
-# экспортированной функции, а не сообщением сборщика.
-sim/biotwasm.js: kernel/biot.wasm kernel/lattice.wasm
+kernel: kernel/biot.wasm kernel/biot.dylib kernel/lattice.wasm
 	$(PY) scripts/wasm_blob.py
+
+# Блоб обновляется явной целью kernel вместе с WASM. Обычная сборка использует
+# сохранённый артефакт: время checkout не должно запускать LLVM на чистой машине.
 
 kernel/biot.wasm: kernel/biot.c kernel/vec.h
 	PATH=$(LLVM):$(LLD):$$PATH $(LLVM)/clang --target=wasm32 $(CFLAGS_FP) -msimd128 \

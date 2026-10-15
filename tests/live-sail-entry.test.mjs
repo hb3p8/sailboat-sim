@@ -9,7 +9,7 @@ import {publishLiveSailDefault} from '../scripts/live_sail_default.mjs';
 const args=process.argv.slice(2),inputs=args.filter(x=>x.startsWith('--input=')).map(x=>x.slice(8)),out=args.find(x=>x.startsWith('--out='))?.slice(6);
 assert(args.length===3&&inputs.length===2&&out&&!existsSync(out));
 let routes=0,rejected=0;const hash=b=>createHash('sha256').update(b).digest('hex');
-for(const search of ['', '?ui=game','?ui=debug','?noaa']){assert.deepEqual(liveSailEntry(search),{kind:'simulator',play:false,manifestPath:'out/export/live-sail-default.json'});routes++;}
+for(const search of ['', '?ui=game','?ui=debug','?noaa']){assert.deepEqual(liveSailEntry(search),{kind:'simulator',play:false,manifestPath:'data/simulator/v1/manifest.json'});routes++;}
 assert.deepEqual(liveSailEntry('?sail-live=copy'),{kind:'explicit',play:true,prefix:'copy'});routes++;
 assert.deepEqual(liveSailEntry('?bench=0&fluid-live=copy'),{kind:'review',play:false,prefix:'copy'});routes++;
 for(const search of ['?bench=0','?bench=2','?cloth-review&series=copy','?legacy=1','?legacy=1&ui=game']){assert.equal(liveSailEntry(search),undefined);routes++;}

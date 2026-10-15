@@ -43,16 +43,21 @@ export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false,
     userAgent:navigator.userAgent,viewport:[innerWidth,innerHeight],schedule,wakeSlice:boat.o.wakeSlice}});
   document.addEventListener('visibilitychange',()=>metrics.visibility(document.hidden));
   const originalPack=boat.p,manifest=JSON.parse(new TextDecoder().decode(await bytesAt(manifestPath)));
+  if(!['sv20-simulator-bundle-v1','sv20-live-entry-v1'].includes(manifest.schema))throw new Error('Неизвестный манифест симулятора');
+  if(manifest.schema==='sv20-simulator-bundle-v1'&&manifest.version!==1)throw new Error('Неизвестная версия входов симулятора');
   const inputs={};
   for(const side of ['plus','minus']) {
     const source=manifest.inputs[side];inputs[side]=JSON.parse(new TextDecoder().decode(await bytesAt(source.path,source.sha256)));
     if(inputs[side].schema!=='cloth-fluid-live-v1'||inputs[side].dirty||inputs[side].side!==side)
       throw new Error('Нет чистого исходного кроя обеих сторон');
+    if(manifest.physics&&(inputs[side].physicsSha256!==manifest.physics.sha256||
+      ['wasm','materialWasm'].some(k=>inputs[side][k].sha256!==manifest[k].sha256)))throw new Error('Входы версии симулятора не согласованы');
   }
   const source=inputs.plus;
-  const currentPack=JSON.parse(new TextDecoder().decode(await bytesAt('out/export/physics.json',source.physicsSha256)));
+  const currentPack=JSON.parse(new TextDecoder().decode(await bytesAt(manifest.physics?.path??'out/export/physics.json',source.physicsSha256)));
   if(JSON.stringify(currentPack)!==JSON.stringify(originalPack))throw new Error('Встроенный физический пакет устарел: пересоберите симулятор');
-  const bytes=await bytesAt(source.wasm.path,source.wasm.sha256),materialBytes=await bytesAt(source.materialWasm.path,source.materialWasm.sha256);
+  const linear=manifest.wasm??source.wasm,native=manifest.materialWasm??source.materialWasm;
+  const bytes=await bytesAt(linear.path,linear.sha256),materialBytes=await bytesAt(native.path,native.sha256);
   const runtimeSha256=await runtimeHashes();
   const display=document.createElement('div');display.id='gennaker-energy-status';
   Object.assign(display.style,{position:'absolute',top:gameUI?'80px':'8px',left:'50%',transform:'translateX(-50%)',width:'max-content',maxWidth:'min(460px, 90%)',padding:'6px 9px',background:'#18212dcc',color:'white',font:'12px sans-serif',pointerEvents:'none',zIndex:5});

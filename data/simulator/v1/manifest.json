@@ -1,0 +1,38 @@
+{
+  "schema": "sv20-simulator-bundle-v1",
+  "version": 1,
+  "physics": {
+    "path": "data/simulator/v1/physics.json",
+    "sha256": "dcaedc8b176e88251fd5ea3d8b869bc4deb366199f230c3e7739f9f6034b8f5a"
+  },
+  "mesh": {
+    "path": "data/simulator/v1/sim_mesh.json",
+    "sha256": "dfd73d48a6018fd57f995e52b1a198320b06936db1cab2cc5ac62914c4053db8"
+  },
+  "inputs": {
+    "plus": {
+      "path": "data/simulator/v1/gennaker-plus.json",
+      "sha256": "2d1111fa9111f2c198045dd2c8048781092d07d6bf49ce33ffac1584afc6c176"
+    },
+    "minus": {
+      "path": "data/simulator/v1/gennaker-minus.json",
+      "sha256": "8161ab921a764f70ee1de69730173d41ce5dcc76770069a4ef022b31a9e407e9"
+    }
+  },
+  "wasm": {
+    "path": "data/simulator/v1/cloth-sparse.wasm",
+    "sha256": "3d57031caa82746f093318cc02dca921a57eba01c3ecf23227c9382c7eea690d"
+  },
+  "materialWasm": {
+    "path": "data/simulator/v1/cloth-material.wasm",
+    "sha256": "4912400289138ee266ec55eed27689cf0acb7215ee0dac1a486d5b56e5a7e6ac"
+  },
+  "provenance": {
+    "revision": "a8e965640152c596458642abbc0c651132b49ae1",
+    "manifest": {
+      "path": "out/export/live-sail-default.json",
+      "sha256": "a04980a5e6efe2c1007178f24dff595316d279166b2cc9974c3edf38447dc19f"
+    },
+    "note": "Побайтовая упаковка принятого входа обычной ветки. Крой, пакет, сетка и WASM не пересчитаны. Архивные пути внутри входов — происхождение; рабочие адреса задаёт этот манифест."
+  }
+}

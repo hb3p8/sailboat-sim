@@ -1,4 +1,4 @@
-// Изменяемый указатель основного экрана. Сами постановки остаются неизменными.
+// Исследовательский указатель прежнего входа. Версия обычной сцены хранится в data/.
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,renameSync,mkdirSync} from 'node:fs';
 import {dirname} from 'node:path';
@@ -9,7 +9,7 @@ export function publishLiveSailDefault(records,path='out/export/live-sail-defaul
   for(const record of records) {
     const bytes=readFileSync(record.path),f=JSON.parse(bytes);
     assert.equal(f.schema,'cloth-fluid-live-v1');assert.equal(f.dirty,false);
-    assert(f.profileWorker===undefined||f.profileWorker===false,'Основному экрану нужен обычный режим');
+    assert(f.profileWorker===undefined||f.profileWorker===false,'Указателю нужен режим без подробного профиля');
     assert.equal(f.liveWind?.bodyProfile,'sv20-rig-budget-point-v1');assert(f.sheet&&f.materialWasm&&f.assemblyWasm);
     assert(['plus','minus'].includes(f.side)&&!inputs[f.side],'Нужны разные борта');
     const shared={revision:f.revision,sceneSha:f.scene.sha256,physicsSha:f.physicsSha256,sources:f.sourceSha256};

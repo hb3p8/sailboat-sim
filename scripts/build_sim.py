@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Собрать симулятор в один самодостаточный HTML.
+"""Собрать HTML-сцену симулятора из проверенной версии данных.
 
     python3 scripts/build_sim.py
 
@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+from sim_runtime import load_sim_runtime, SIM_MANIFEST
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
@@ -119,14 +120,7 @@ def strip_modules(src):
 def main():
     sim = os.path.join(ROOT, "sim")
     exp = os.path.join(ROOT, "out", "export")
-    pack_path = os.path.join(exp, "physics.json")
-    mesh_path = os.path.join(exp, "sim_mesh.json")
-    for p in (pack_path, mesh_path):
-        if not os.path.exists(p):
-            raise SystemExit("нет %s — сначала `make physics`" % os.path.relpath(p, ROOT))
-
-    pack = json.load(open(pack_path))
-    mesh = json.load(open(mesh_path))
+    pack, mesh, runtime = load_sim_runtime(ROOT)
     tpl = open(os.path.join(sim, "template.html")).read()
     three = three_bundle(strip_modules)
 
@@ -146,6 +140,8 @@ def main():
              "dirty": bool(_git("status", "--porcelain", "--untracked-files=no")),
              "built": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
 
+    build["runtime"] = {"manifest": SIM_MANIFEST, "version": runtime["version"],
+                        "physicsSha256": runtime["physics"]["sha256"]}
     tpl = tpl.replace("/*__BUILD__*/ null",
                       json.dumps(build, ensure_ascii=False, separators=(",", ":")))
     html = tpl.replace("/*__PACK__*/ null",

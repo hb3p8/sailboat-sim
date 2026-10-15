@@ -64,4 +64,4 @@ for(const r of records)assert(!existsSync(r.path),'Сохранённый вхо
 assert(!existsSync(`${prefix}-scene.html`),'Снимок сцены нельзя перезаписывать');
 writeFileSync(`${prefix}-scene.html`,scene,{flag:'wx'});
 for(const r of records){writeFileSync(r.path,JSON.stringify(r.value,null,2)+'\n',{flag:'wx'});console.log(JSON.stringify({вход:r.path,ревизия:revision,изменено:dirty}));}
-if(setDefault){publishLiveSailDefault(records);console.log('Основной симулятор подключён: /sim/index.html');}
+if(setDefault){publishLiveSailDefault(records);console.log('Исследовательский указатель обновлён: out/export/live-sail-default.json. Версия обычного симулятора не менялась.');}

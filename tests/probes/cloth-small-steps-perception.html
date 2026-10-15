@@ -1,0 +1,294 @@
+<div id="sv20-sail-difference">
+  <style>
+    #sv20-sail-difference { position: relative; color: var(--foreground); }
+    #sv20-sail-difference [hidden] { display: none !important; }
+    #sv20-sail-difference .mesh { width: 100%; height: 350px; display: block; touch-action: pan-y; }
+    #sv20-sail-difference .legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 8px 0; }
+    #sv20-sail-difference .legend button { appearance: none; background: transparent; border: 0; padding: 4px 0; color: var(--foreground); font: inherit; }
+    #sv20-sail-difference .swatch { display: inline-block; width: 24px; vertical-align: middle; margin-right: 6px; border-top: 2px solid var(--viz-series-2); }
+    #sv20-sail-difference .swatch.reference { border-top-color: var(--viz-series-1); border-top-style: dashed; }
+    #sv20-sail-difference .plots { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+    #sv20-sail-difference .plot svg { display: block; width: 100%; overflow: visible; }
+    #sv20-sail-difference .plot text { fill: var(--foreground); font-size: 12px; }
+    #sv20-sail-difference .plot .domain, #sv20-sail-difference .plot .tick line { stroke: var(--border); }
+    #sv20-sail-difference .plot h3 { margin-bottom: 4px; }
+    #sv20-sail-difference .detail { min-height: 2.5em; margin: 8px 0; }
+    #sv20-sail-difference .hoverbox { position: absolute; z-index: 2; pointer-events: none; background: var(--popover); color: var(--popover-foreground); padding: 8px; }
+    #sv20-sail-difference .hoverbox[hidden] { display: none; }
+    #sv20-sail-difference .timeline { flex: 1; min-width: 140px; }
+    @media (max-width: 580px) {
+      #sv20-sail-difference .plots { grid-template-columns: minmax(0,1fr); gap: 0; }
+      #sv20-sail-difference .mesh { height: 300px; }
+    }
+    @media (pointer: coarse) { #sv20-sail-difference .legend button { min-height: 44px; } }
+  </style>
+  <h2>Насколько расходится парус</h2>
+  <div class="viz-controls">
+    <label class="form-label">Действие
+      <select class="form-select" data-control="scenario"></select>
+    </label>
+    <label class="form-label">Быстрый расчёт
+      <select class="form-select" data-control="candidate"></select>
+    </label>
+  </div>
+  <div class="viz-controls">
+    <label class="form-label">Расхождение формы
+      <select class="form-select" data-control="amplitude">
+        <option value="1">×1 — настоящий размер</option>
+        <option value="10">×10 — увеличено</option>
+        <option value="100">×100 — увеличено</option>
+      </select>
+    </label>
+    <label class="form-label">Расположение
+      <select class="form-select" data-control="layout">
+        <option value="overlay">Наложить</option><option value="pair">Рядом</option>
+      </select>
+    </label>
+    <label class="form-label">Ракурс
+      <select class="form-select" data-control="camera">
+        <option value="0">Сбоку</option><option value="1">Вдоль лодки</option><option value="2">Под углом</option>
+      </select>
+    </label>
+  </div>
+  <div class="legend" aria-label="Отображаемые расчёты">
+    <button type="button" class="cursor-interaction" data-series="reference" aria-pressed="true"><span class="swatch reference"></span>Опорный расчёт, 8 шагов</button>
+    <button type="button" class="cursor-interaction" data-series="candidate" aria-pressed="true"><span class="swatch"></span><span data-label="candidate"></span></button>
+  </div>
+  <canvas class="mesh" role="img" aria-label="Формы паруса на одной сетке из 99 узлов; опорный расчёт пунктиром, быстрый расчёт сплошными линиями">Записанные формы паруса, общая сетка 11×9.</canvas>
+  <div class="viz-row">
+    <button type="button" class="btn btn-primary" data-action="play">Воспроизвести</button>
+    <label class="form-label timeline">Время <span class="tabular-nums" data-label="time"></span>
+      <input class="form-range" data-control="time" type="range" min="0" max="1" step="1">
+    </label>
+    <button type="button" class="btn" data-action="shape">Пик формы</button>
+    <button type="button" class="btn" data-action="force">Пик силы</button>
+    <button type="button" class="btn" data-action="rope">Пик отличия натяжения</button>
+  </div>
+  <label class="form-check" data-container="early" hidden><input class="form-check-input" type="checkbox" data-control="early"><span class="form-check-label">Увеличить первые 0,25 с</span></label>
+  <div class="detail tabular-nums" data-label="detail" aria-live="polite"></div>
+  <div class="plots">
+    <div class="plot" data-plot="force"><h3>Отличие общей силы</h3></div>
+    <div class="plot" data-plot="rope"><h3>Натяжение верёвки</h3></div>
+  </div>
+  <div class="text-small text-muted">Форма — 30 кадров/с. Натяжение — каждый шаг расчёта. Силы на графиках без увеличения. Крепления движутся по записи; движение самой лодки здесь не рассчитывается.</div>
+  <div class="hoverbox text-small" role="tooltip" hidden></div>
+  <script type="application/json" id="sv20-sail-difference-data">__COMPARISON_DATA__</script>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script>
+(() => {
+  const root=document.getElementById('sv20-sail-difference');
+  const data=JSON.parse(document.getElementById('sv20-sail-difference-data').textContent);
+  const control=name=>root.querySelector(`[data-control="${name}"]`);
+  const label=name=>root.querySelector(`[data-label="${name}"]`);
+  const visible={reference:true,candidate:true};
+  const state={scenario:0,candidate:'fine',amplitude:1,layout:'overlay',camera:2,frame:0,early:false,focusS:null};
+  const norm=a=>Math.hypot(...a),f=(v,n=2)=>v.toLocaleString('ru-RU',{minimumFractionDigits:n,maximumFractionDigits:n});
+  let playing=false,lastTime=0,startFrame=0,raf=0;
+  const canvas=root.querySelector('canvas'),ctx=canvas.getContext('2d');
+  const tooltip=root.querySelector('[role="tooltip"]');
+  const decoded=new Map();
+  function unpack(s,n,temporal) {
+    const bytes=Uint8Array.from(atob(s),c=>c.charCodeAt(0)),out=new Float64Array(n*297);
+    let offset=0;
+    for(let k=0;k<out.length;k++) {
+      let u=0,shift=0,b;
+      do {b=bytes[offset++];u|=(b&127)<<shift;shift+=7;}while(b&128);
+      out[k]=((u>>>1)^-(u&1))+(temporal&&k>=297?out[k-297]:0);
+    }
+    for(let k=0;k<out.length;k++)out[k]*=data.unit;
+    return out;
+  }
+  function current() {
+    const c=data.cases[state.scenario],v=c.candidates.find(v=>v.key===state.candidate);
+    if(!decoded.has(c))decoded.set(c,unpack(c.reference,c.n,true));
+    if(!decoded.has(v))decoded.set(v,unpack(v.delta,c.n,false));
+    return {c,v,reference:decoded.get(c),delta:decoded.get(v)};
+  }
+  function save() {
+    const {c,v}=current();
+    const snapshot={modelContent:{scenario:c.scenario,side:c.side,candidate:v.label,
+      timeS:state.focusS??(state.frame+1)*data.dtS,magnification:state.amplitude},
+      privateContent:{schema:'sv20-sail-difference-v1',...state,visible:{...visible}}};
+    window.openai?.setWidgetState?.(snapshot)?.catch(()=>{});
+  }
+  function restore(saved) {
+    const s=saved?.privateContent;if(s?.schema!=='sv20-sail-difference-v1')return false;
+    if(Number.isInteger(s.scenario)&&data.cases[s.scenario])state.scenario=s.scenario;
+    if(data.cases[0].candidates.some(v=>v.key===s.candidate))state.candidate=s.candidate;
+    if([1,10,100].includes(s.amplitude))state.amplitude=s.amplitude;
+    if(['overlay','pair'].includes(s.layout))state.layout=s.layout;
+    if([0,1,2].includes(s.camera))state.camera=s.camera;
+    state.early=!!s.early;state.frame=Number.isInteger(s.frame)?Math.max(0,s.frame):0;
+    state.focusS=Number.isFinite(s.focusS)&&s.focusS>0?s.focusS:null;
+    for(const k of ['reference','candidate'])if(typeof s.visible?.[k]==='boolean')visible[k]=s.visible[k];
+    return true;
+  }
+  data.cases.forEach((c,i)=>control('scenario').add(new Option(c.label,i)));
+  data.cases[0].candidates.forEach(v=>control('candidate').add(new Option(v.label,v.key)));
+  if(!restore(window.openai?.widgetState))state.frame=current().v.maxima.shapeFrame;
+  const triangles=[];
+  for(let r=0;r<10;r++)for(let c=0;c<8;c++){const a=r*9+c;triangles.push([a,a+1,a+9],[a+1,a+10,a+9]);}
+  const boundary=[...Array.from({length:9},(_,i)=>i),...Array.from({length:10},(_,i)=>(i+1)*9+8),
+    ...Array.from({length:8},(_,i)=>97-i),...Array.from({length:9},(_,i)=>(9-i)*9),0];
+  function theme(token) {
+    const el=document.createElement('span');el.style.color=`var(${token})`;root.append(el);
+    const color=getComputedStyle(el).color;el.remove();return color;
+  }
+  function drawMesh() {
+    const {c,v,reference,delta}=current(),w=canvas.clientWidth,h=canvas.clientHeight,dpr=devicePixelRatio||1;
+    canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);ctx.scale(dpr,dpr);
+    const fg=theme('--foreground'),neutral=theme('--viz-series-1'),accent=theme('--viz-series-2');
+    const yaw=[0,Math.PI/2,Math.PI/4][state.camera],cx=Math.cos(yaw),sx=Math.sin(yaw);
+    const at=state.frame*297,ref=Array.from({length:99},(_,i)=>Array.from(reference.slice(at+i*3,at+i*3+3)));
+    const cand=ref.map((p,i)=>p.map((v,d)=>v+state.amplitude*delta[at+i*3+d]));
+    const project=p=>[p[0]*cx+p[1]*sx,p[2],p[1]*cx-p[0]*sx];
+    const all=[];for(let k=0;k<reference.length;k+=3)all.push(project(reference.slice(k,k+3)));
+    const extent=[d3.extent(all,p=>p[0]),d3.extent(all,p=>p[1])];
+    const panels=state.layout==='pair'?2:1,pw=w/panels;
+    const spanX=Math.max(.5,extent[0][1]-extent[0][0]),spanZ=extent[1][1]-extent[1][0];
+    const scale=Math.min((pw-40)/Math.max(4,spanX*1.15),(h-62)/(spanZ*1.08));
+    const middleX=(extent[0][1]+extent[0][0])/2,middleZ=(extent[1][1]+extent[1][0])/2;
+    const screen=(p,panel=0)=>{const q=project(p);return [(panel+.5)*pw+(q[0]-middleX)*scale,h/2+10-(q[1]-middleZ)*scale,q[2]];};
+    function mesh(points,color,panel,dashed) {
+      const ps=points.map(p=>screen(p,panel));
+      const faces=triangles.map(ids=>({ids,z:ids.reduce((s,i)=>s+ps[i][2],0)/3})).sort((a,b)=>a.z-b.z);
+      ctx.fillStyle=color;ctx.strokeStyle=color;ctx.lineWidth=.5;
+      for(const {ids} of faces) {
+        ctx.beginPath();ids.forEach((i,j)=>j?ctx.lineTo(ps[i][0],ps[i][1]):ctx.moveTo(ps[i][0],ps[i][1]));ctx.closePath();
+        ctx.globalAlpha=.055;ctx.fill();ctx.globalAlpha=.45;ctx.stroke();
+      }
+      ctx.globalAlpha=1;ctx.lineWidth=1.5;ctx.setLineDash(dashed?[4,3]:[]);
+      ctx.beginPath();boundary.forEach((i,j)=>j?ctx.lineTo(ps[i][0],ps[i][1]):ctx.moveTo(ps[i][0],ps[i][1]));ctx.stroke();
+      const raw=panel===0&&dashed?c.tensionN:v.tensionN,hS=panel===0&&dashed?1/240:v.hS;
+      const tensionTime=state.focusS??(state.frame+1)*data.dtS;
+      const tension=raw[Math.max(0,Math.min(raw.length-1,Math.floor(tensionTime/hS+1e-8)-1))];
+      const anchor=screen(c.anchorM[state.frame],panel),clew=ps[8];
+      ctx.setLineDash(tension>1e-8?[]:[3,5]);ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(anchor[0],anchor[1]);ctx.lineTo(clew[0],clew[1]);ctx.stroke();ctx.setLineDash([]);
+    }
+    if(visible.reference)mesh(ref,neutral,0,true);
+    if(visible.candidate)mesh(cand,accent,panels===2?1:0,false);
+    ctx.globalAlpha=1;ctx.fillStyle=fg;ctx.strokeStyle=fg;ctx.font=getComputedStyle(root).font;
+    ctx.textAlign='left';ctx.fillText(state.amplitude===1?'Настоящий размер':`Расхождение формы увеличено ×${state.amplitude}`,10,18);
+    if(panels===2){ctx.fillText('Эталон',10,40);ctx.fillText('Быстрый расчёт',pw+10,40);}
+    ctx.beginPath();ctx.moveTo(14,h-20);ctx.lineTo(14+scale,h-20);ctx.stroke();ctx.fillText('1 м',18+scale,h-16);
+    const frameShape=v.shapeMm[state.frame],px=frameShape/1000*scale;
+    const force=norm(c.forceN[state.frame]);
+    const t=state.focusS??(state.frame+1)*data.dtS;
+    const sample=(values,h)=>values[Math.max(0,Math.min(values.length-1,Math.floor(t/h+1e-8)-1))];
+    const tensionRef=sample(c.tensionN,1/240),tensionCandidate=sample(v.tensionN,v.hS);
+    const rope=state.focusS!==null?` Натяжение: ${f(tensionRef,3)} → ${f(tensionCandidate,3)} Н; форма в ${f((state.frame+1)*data.dtS,3)} с.`:'';
+    label('detail').textContent=`Форма: ${f(frameShape)} мм (≤${f(px,3)} px при ×1). Сила: отличие ${f(v.forceErrorN[state.frame])} Н при ${f(force,1)} Н у эталона.${rope}`;
+    label('time').textContent=`${f(t,4)} с`;
+  }
+  const plots={};
+  function seriesFor(kind) {
+    const {c,v}=current();
+    if(kind==='force')return [c.forceN.map((_,i)=>({x:(i+1)*data.dtS,y:0})),v.forceErrorN.map((y,i)=>({x:(i+1)*data.dtS,y}))];
+    return [c.tensionN.map((y,i)=>({x:(i+1)/240,y})),v.tensionN.map((y,i)=>({x:(i+1)*v.hS,y}))];
+  }
+  function drawPlot(kind) {
+    const box=root.querySelector(`[data-plot="${kind}"]`),width=box.clientWidth,height=200;
+    const margin={left:64,right:12,top:8,bottom:48},series=seriesFor(kind),{c}=current();
+    const tEnd=state.early&&c.scenario==='takeup' ? .25 : c.n*data.dtS;
+    const included=series.flat().filter(p=>p.x<=tEnd),extent=d3.extent(included,p=>p.y),span=Math.max(.1,extent[1]-extent[0]);
+    const x=d3.scaleLinear().domain([0,tEnd]).range([margin.left+3,width-margin.right-3]);
+    const y=d3.scaleLinear().domain([Math.min(0,extent[0]-.06*span),extent[1]+.08*span]).nice().range([height-margin.bottom-3,margin.top+3]);
+    d3.select(box).selectAll('svg').remove();
+    const svg=d3.select(box).append('svg').attr('viewBox',`0 0 ${width} ${height}`).attr('role','img')
+      .attr('aria-label',kind==='force'?'Отличие вектора силы от строгого эталона, ньютоны':'Натяжение верёвки в двух расчётах, ньютоны');
+    svg.append('rect').attr('data-chart-frame','').attr('x',margin.left).attr('y',margin.top)
+      .attr('width',width-margin.left-margin.right).attr('height',height-margin.top-margin.bottom)
+      .attr('fill','none').attr('stroke','var(--border)');
+    const clipId=`sail-clip-${kind}`;
+    svg.append('defs').append('clipPath').attr('id',clipId).append('rect').attr('x',margin.left).attr('y',margin.top)
+      .attr('width',width-margin.left-margin.right).attr('height',height-margin.top-margin.bottom);
+    svg.append('g').attr('transform',`translate(0,${height-margin.bottom})`).call(d3.axisBottom(x).ticks(width<360?2:4).tickFormat(d3.format('~g')));
+    svg.append('g').attr('transform',`translate(${margin.left},0)`).call(d3.axisLeft(y).ticks(4));
+    svg.append('text').attr('class','axis-title').attr('data-axis','x').attr('x',(width+margin.left-margin.right)/2).attr('y',height-5)
+      .attr('text-anchor','middle').text('Время, с');
+    svg.append('text').attr('class','axis-title').attr('data-axis','y').attr('transform','rotate(-90)')
+      .attr('x',-(height-margin.bottom+margin.top)/2).attr('y',14).attr('text-anchor','middle').text(kind==='force'?'Отличие, Н':'Натяжение, Н');
+    const g=svg.append('g').attr('clip-path',`url(#${clipId})`);
+    const keys=['reference','candidate'];
+    series.forEach((points,i)=>{
+      if(!visible[keys[i]])return;
+      g.append('path').datum(points).attr('fill','none').attr('stroke',`var(--viz-series-${i+1})`).attr('stroke-width',1.5)
+        .attr('stroke-dasharray',i?null:'4 3').attr('d',d3.line().x(p=>x(p.x)).y(p=>y(p.y)).curve(kind==='rope'?d3.curveStepAfter:d3.curveLinear));
+    });
+    const selected=g.append('line').attr('stroke','var(--muted-foreground)').attr('stroke-width',1).attr('y1',margin.top).attr('y2',height-margin.bottom).attr('opacity',.6);
+    const guide=g.append('line').attr('data-chart-hover-guide','').attr('stroke','var(--foreground)').attr('y1',margin.top).attr('y2',height-margin.bottom).style('display','none');
+    const markers=keys.map((key,i)=>g.append('circle').attr('data-chart-hover-marker',key).attr('r',3)
+      .attr('fill',`var(--viz-series-${i+1})`).style('display','none'));
+    function sample(points,t) {
+      const j=d3.bisector(p=>p.x).center(points,t),p=points[j];
+      if(kind==='rope')return points[Math.max(0,j-(p.x>t?1:0))].y;
+      const k=Math.max(0,Math.min(points.length-2,j-(p.x>t?1:0))),a=points[k],b=points[k+1];
+      return a.y+(b.y-a.y)*Math.max(0,Math.min(1,(t-a.x)/(b.x-a.x)));
+    }
+    function hover(event) {
+      const [mx]=d3.pointer(event,svg.node()),t=x.invert(Math.max(x(0),Math.min(x(tEnd),mx)));
+      guide.style('display',null).attr('x1',x(t)).attr('x2',x(t));
+      const values=series.map(p=>sample(p,t));
+      markers.forEach((m,i)=>m.style('display',visible[keys[i]]?null:'none').attr('cx',x(t)).attr('cy',y(values[i])));
+      tooltip.hidden=false;tooltip.replaceChildren();
+      const time=document.createElement('div');time.textContent=`${f(t,4)} с`;tooltip.append(time);
+      values.forEach((v,i)=>{if(visible[keys[i]]){const row=document.createElement('div');row.textContent=`${i?'Быстрый расчёт':'Эталон'}: ${f(v,3)} Н`;tooltip.append(row);}});
+      const rect=root.getBoundingClientRect(),plotRect=svg.node().getBoundingClientRect();
+      const left=Math.max(0,Math.min(root.clientWidth-tooltip.offsetWidth,mx+plotRect.left-rect.left+12));
+      tooltip.style.left=left+'px';tooltip.style.top=(plotRect.top-rect.top+10)+'px';
+    }
+    svg.append('rect').attr('data-chart-hit','').attr('data-chart-hover-overlay','cross-series')
+      .attr('x',margin.left).attr('y',margin.top).attr('width',width-margin.left-margin.right).attr('height',height-margin.top-margin.bottom)
+      .attr('fill','transparent').on('pointermove',hover).on('pointerdown',hover)
+      .on('pointerleave',()=>{tooltip.hidden=true;guide.style('display','none');markers.forEach(m=>m.style('display','none'));});
+    plots[kind]={selected,x,tEnd};
+    // Все подписи измерены после отрисовки: крайние деления направлены внутрь.
+    svg.selectAll('.tick text').each(function(){const b=this.getBBox(),m=this.getCTM();
+      if(!m)return;const left=m.e+b.x,right=left+b.width;
+      if(left<4)d3.select(this).attr('text-anchor','start');if(right>width-4)d3.select(this).attr('text-anchor','end');});
+  }
+  function updateCursor(){for(const p of Object.values(plots)){const t=state.focusS??(state.frame+1)*data.dtS;
+    p.selected.style('display',t>p.tEnd?'none':null).attr('x1',p.x(t)).attr('x2',p.x(t));}}
+  function stop(){playing=false;cancelAnimationFrame(raf);root.querySelector('[data-action="play"]').textContent='Воспроизвести';label('detail').setAttribute('aria-live','polite');}
+  function sync(redrawPlots=true) {
+    const {c,v}=current();state.frame=Math.min(c.n-1,state.frame);
+    if(state.early&&(state.focusS??(state.frame+1)*data.dtS)>.25){state.early=false;redrawPlots=true;}
+    for(const name of ['scenario','candidate','amplitude','layout','camera'])control(name).value=state[name];
+    control('early').checked=state.early;root.querySelector('[data-container="early"]').hidden=c.scenario!=='takeup';
+    control('time').max=c.n-1;control('time').value=state.frame;label('candidate').textContent=v.label;
+    root.querySelectorAll('[data-series]').forEach(b=>b.setAttribute('aria-pressed',String(visible[b.dataset.series])));
+    control('scenario').dataset.tooltip=c.label;control('candidate').dataset.tooltip=v.label;
+    drawMesh();if(redrawPlots){drawPlot('force');drawPlot('rope');}updateCursor();
+  }
+  for(const name of ['scenario','candidate','amplitude','layout','camera','early'])control(name).addEventListener('change',()=>{
+    stop();state.focusS=null;state[name]=name==='early'?control(name).checked:['scenario','amplitude','camera'].includes(name)?Number(control(name).value):control(name).value;
+    if(name==='scenario'){state.early=current().c.scenario==='takeup';state.frame=state.early?2:current().v.maxima.shapeFrame;}
+    if(name==='early'&&state.early)state.frame=2;
+    sync();save();
+  });
+  control('time').addEventListener('input',()=>{stop();state.focusS=null;state.frame=Number(control('time').value);sync(false);});
+  control('time').addEventListener('change',save);
+  for(const kind of ['shape','force','rope'])root.querySelector(`[data-action="${kind}"]`).addEventListener('click',()=>{
+    stop();const {v}=current();state.focusS=kind==='rope'?v.maxima.tensionAtS:null;
+    state.frame=kind==='rope'?Math.max(0,Math.ceil(v.maxima.tensionAtS/data.dtS)-1):v.maxima[kind+'Frame'];sync(false);save();
+  });
+  root.querySelector('[data-action="play"]').addEventListener('click',()=>{
+    if(playing){stop();save();return;}
+    state.focusS=null;const {c}=current();if(state.frame>=c.n-1)state.frame=0;
+    if(matchMedia('(prefers-reduced-motion: reduce)').matches){state.frame=Math.min(c.n-1,state.frame+1);sync(false);save();return;}
+    playing=true;label('detail').setAttribute('aria-live','off');startFrame=state.frame;lastTime=performance.now();root.querySelector('[data-action="play"]').textContent='Пауза';
+    function tick(now){if(!playing)return;state.frame=Math.min(c.n-1,startFrame+Math.floor((now-lastTime)/(data.dtS*1000)));sync(false);
+      if(state.frame===c.n-1){stop();save();}else raf=requestAnimationFrame(tick);}
+    raf=requestAnimationFrame(tick);
+  });
+  root.querySelectorAll('[data-series]').forEach(button=>button.addEventListener('click',()=>{
+    const key=button.dataset.series;visible[key]=!visible[key];button.setAttribute('aria-pressed',String(visible[key]));sync();save();
+  }));
+  window.addEventListener('openai:set_globals',e=>{if(e.detail?.globals?.widgetState){stop();restore(e.detail.globals.widgetState);sync();}});
+  const resize=new ResizeObserver(()=>sync());resize.observe(root);
+  new MutationObserver(()=>drawMesh()).observe(document.documentElement,{attributes:true,attributeFilter:['class','style','data-theme']});
+  sync();
+})();
+</script>

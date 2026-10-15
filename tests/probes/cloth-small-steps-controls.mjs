@@ -18,11 +18,13 @@ import {cross3} from '../../sim/cloth/cloth-fluid-inertia.mjs';
 
 const args=Object.fromEntries(process.argv.slice(2).map(v=>v.slice(2).split('='))),out=args.out;
 const jointHard=Object.hasOwn(args,'joint-hard');
+const visual=Object.hasOwn(args,'visual');
 assert(out&&!existsSync(out)&&!existsSync(out+'.probe.mjs'),'Нужен новый --out=путь.json и свободное имя снимка исходника');
 const substeps=Number(args.substeps??8);assert([2,4,8].includes(substeps),'Допускаются 2, 4 или 8 подшагов');
 const spec={schema:'small-steps-s2-spec-v4',dtS:1/30,substeps,hS:1/(30*substeps),substepStudy:[2,4,8],
   candidate:jointHard?'block-hard-xpbd-v1':'small-steps-impulse-v1',jointLimits:jointHard?JOINT_HARD_LIMITS:undefined,
-  cases:args.case?[args.case]:['hold','sheet','takeup','supports'],windMPS:4,awaDeg:140,
+  cases:args.case?[args.case]:args.cases?args.cases.split(','):['hold','sheet','takeup','supports'],
+  sides:args.sides?args.sides.split(','):['plus','minus'],capturePositions:visual,windMPS:4,awaDeg:140,
   sheet:{startS:.5,easeEndS:1,returnStartS:1.5,returnEndS:2,deltaM:.25,rateMPS:.5,seconds:4},
   takeup:{startS:0,easeEndS:.04,returnStartS:.08,returnEndS:.12,deltaM:.02,rateMPS:.5,seconds:2},
   supports:{startS:.5,endS:2.5,heaveM:.05,rollRad:Math.PI/180,seconds:3},holdSeconds:2,
@@ -30,6 +32,7 @@ const spec={schema:'small-steps-s2-spec-v4',dtS:1/30,substeps,hS:1/(30*substeps)
   peakReplay:'повтор кадра максимального отличия реакции; строгий шаг из обеих исходных историй',
   strictThresholds:IMPLICIT_TOLERANCES,acceptance:'диагностика; не приёмка метода, скорости или мобильного бюджета'};
 assert(spec.cases.every(c=>['hold','sheet','takeup','supports'].includes(c)),'Неизвестный сценарий S2');
+assert(spec.sides.length&&spec.sides.every(s=>['plus','minus'].includes(s)),'Неизвестная сторона ветра');
 const read=p=>JSON.parse(readFileSync(p)),manifest=read('data/simulator/v1/manifest.json'),pack=read(manifest.physics.path);
 const factor=await loadSparseFactor(readFileSync(manifest.wasm.path));
 const fixtures=['plus','minus'].map(s=>read(manifest.inputs[s].path));
@@ -151,7 +154,7 @@ const report={schema:'small-steps-s2-probe-v4',spec,material:selected.material,n
 let fullLoad;
 try {
   console.log('Выбранный кандидат: '+spec.candidate);
-  for(const f of fixtures)for(const scenario of spec.cases) {
+  for(const f of fixtures.filter(f=>spec.sides.includes(f.side)))for(const scenario of spec.cases) {
     const result={side:f.side,scenario,frames:[]};report.results.push(result);
     try {
     const b=new Boat(pack,null,{gennakerUp:true,mainUp:true,jibUp:false,localPressure:false}),r=f.recipe;
@@ -201,6 +204,8 @@ try {
       for(let d=0;d<3;d++){result.impulseErrorNs[d]+=spec.dtS*(candidate.forceN[d]-reference.forceN[d]);
         result.angularImpulseErrorNms[d]+=spec.dtS*(candidate.momentNm[d]-reference.momentNm[d]);}
       const frame={frame:j+1,timeS:(j+1)*spec.dtS,lengthM:length,positionErrorM:shape,reactionErrorN:error,reference,candidate,strictParts:strict,smallParts:small};
+      if(visual)frame.visual={referenceM:Array.from(calc.motion.pos.slice(0,297)),candidateM:Array.from(m.pos.slice(0,297)),
+        targets:inputs.at(-1).targets.map(t=>({node:t.node,positionM:t.positionM.slice()}))};
       result.frames.push(frame);
       if(!peak||error>peak.reactionErrorN)peak={frame:j+1,reactionErrorN:error,before,inputs,
         after:{small:Array.from(m.pos),strict:Array.from(calc.motion.pos)}};

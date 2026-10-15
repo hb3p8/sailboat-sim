@@ -85,7 +85,8 @@ async function run(profile,fps,side='plus',wake=1,schedule='message') {
   if(profile) {
     assert.equal(profiled.length,80);
     for(const r of profiled){assert(r.timings.rigMs>=0);assert(r.timings.workerComputeMs>0);assert.equal(r.attempts.length,2);
-      assert(r.attempts.flat().every(a=>a.ms>=0));}
+      assert(r.attempts.flat().every(a=>a.ms>=0));assert.equal(r.solverProfiles.length,2);
+      for(const p of r.solverProfiles){assert.equal(p.schema,'cloth-solver-profile-v1');assert(p.stages.factor.calls>0);}}
   } else assert.equal(summary.records.length,0);
   sim.restart();assert.equal(sim.performance().steps,0);assert.equal(sim.performance().scenario.done,false);
   return {physical,summary:{...summary,driverFPS:fps,physicalSha256:createHash('sha256').update(JSON.stringify(physical)).digest('hex')}};
@@ -105,6 +106,7 @@ try {
   const errorStart=performance.now();while(failedSim.performance().phase!=='failed'&&performance.now()-errorStart<5000){failedSim.frame();await delay(5);}
   assert.equal(failedSim.performance().phase,'failed');assert.equal(failedSim.performance().steps,0);
   assert.equal(failedSim.performance().failure.attempts[0][0].accepted,false);
+  assert.equal(failedSim.performance().failure.solverProfiles[0].stages.cloth.failed,1);
   failedUI.genup.checked=false;failedBoat.setGennaker(false);await delay(35);
   assert(failedSim.canAdvance(1/30,1/30),'После отказа UI должен прочитать уборку генакера');
   failedSim.advance(1/30,()=>{},()=>{});assert.equal(failedSim.performance().steps,1);assert.equal(failedSim.performance().phase,'running');

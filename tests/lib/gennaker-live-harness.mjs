@@ -2,7 +2,7 @@
 import {readFileSync} from 'node:fs';
 import {Worker} from 'node:worker_threads';
 import {setTimeout as delay} from 'node:timers/promises';
-export function liveHarness({js=false}={}) {
+export function liveHarness({js=false,measureCpu=false,onReply=()=>{}}={}) {
   const elements=new Map(),workers=new Set();let breakNextInit=false;
   const element=id=>{if(!elements.has(id))elements.set(id,{style:{},dataset:{},value:'',checked:false,textContent:'',dispatchEvent(){},append(){}});return elements.get(id);};
   globalThis.document={hidden:false,addEventListener(){},getElementById:element,createElement:()=>({style:{},dataset:{}})};
@@ -10,12 +10,14 @@ export function liveHarness({js=false}={}) {
   globalThis.fetch=async url=>{try{const data=readFileSync(new URL('.'+url,new URL('../../',import.meta.url)));return {ok:true,arrayBuffer:async()=>data.buffer.slice(data.byteOffset,data.byteOffset+data.byteLength)};}catch{return {ok:false};}};
   globalThis.Worker=class {
     constructor(url) {
-      const bootstrap=`import {parentPort} from 'node:worker_threads';globalThis.self={postMessage:(data,transfer)=>parentPort.postMessage(data,transfer)};
-        parentPort.on('message',data=>self.onmessage({data}));
+      const bootstrap=`import {parentPort} from 'node:worker_threads';
+        ${measureCpu?`let cpuStart;const cpu=()=>{const t=process.threadCpuUsage();return t.user+t.system;};`:''}
+        globalThis.self={postMessage:(data,transfer)=>parentPort.postMessage(${measureCpu?`['progress','step'].includes(data.type)?{...data,benchmarkCpuUs:cpu()-cpuStart}:data`:'data'},transfer)};
+        parentPort.on('message',data=>{${measureCpu?'cpuStart=cpu();':''}self.onmessage({data});});
         ${js?`const actual=Math.hypot;Math.hypot=(...v)=>actual(...v)*(v.length===3&&v[0]===1&&v[1]===2&&v[2]===3?1+Number.EPSILON:1);`:''}
         await import(${JSON.stringify(url.href)});parentPort.postMessage({type:'boot'});`;
       this.worker=new Worker(new URL('data:text/javascript,'+encodeURIComponent(bootstrap)),{type:'module'});workers.add(this.worker);this.waiting=[];
-      this.worker.on('message',data=>{if(data.type==='boot'){this.ready=true;for(const m of this.waiting)this.worker.postMessage(m);this.waiting=[];}else this.onmessage?.({data});});
+      this.worker.on('message',data=>{if(data.type==='boot'){this.ready=true;for(const m of this.waiting)this.worker.postMessage(m);this.waiting=[];}else {onReply(data);delete data.benchmarkCpuUs;this.onmessage?.({data});}});
       this.worker.on('error',error=>this.onerror?.({message:error.message}));
     }
     postMessage(data){if(breakNextInit&&data.type==='init'){breakNextInit=false;data={...data,bytes:new Uint8Array([1,2,3])};}if(this.ready)this.worker.postMessage(data);else this.waiting.push(data);}

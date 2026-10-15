@@ -243,7 +243,7 @@ export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false,
         steps++;completedSteps++;lastBoatTime=boat.t;after();
         if(timings){timings.boatFinishMs=performance.now()-boatFinishStart;timings.physicsWallMs=performance.now()-physicsStart;}
         scenario?.accepted(boat);metrics.accepted(dt,profile?{modelTimeS:boat.t,gennakerUp:true,wakeSlice:boat.o.wakeSlice,
-          timings,attempts:result.attempts,frames:{...commandFrames,received:renderFrame}}:undefined);
+          timings,attempts:result.attempts,solverProfiles:result.solverProfiles,frames:{...commandFrames,received:renderFrame}}:undefined);
         if(scenario?.done)metrics.state('complete');
         history.push({side:fixture.side,step:steps,timeS:boat.t,pose:gennakerPose(boat),controls:{...boat.o},forceN:load.forceN,momentNm:load.momentNm,
           frames:{...commandFrames,received:renderFrame},partsMs:result.partsMs,audits:result.audits,lengthM:result.lengthM,nodalAirForceN:Array.from(forceN),waterInput});
@@ -255,7 +255,7 @@ export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false,
       });
       if(!replayInput)await checkpoint(input);
     } catch(error) {
-      failed=true;failure={message:error.message,timeS:boat.t,attempts:error.attempts,timings};metrics.state('failed');display.textContent='Новая ткань остановлена: '+error.message+'. Уберите и поднимите генакер для нового запуска.';
+      failed=true;failure={message:error.message,timeS:boat.t,attempts:error.attempts,solverProfiles:error.solverProfiles,timings};metrics.state('failed');display.textContent='Новая ткань остановлена: '+error.message+'. Уберите и поднимите генакер для нового запуска.';
       display.dataset.error=error.message;
       if(boat.gennakerEnergy)boat.gennakerEnergy.failure=failure;
     } finally {busy=false;idle();}

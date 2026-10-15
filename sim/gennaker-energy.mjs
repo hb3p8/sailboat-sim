@@ -7,6 +7,7 @@ import {distance} from './cloth/cloth-compliance.mjs';
 import {sv20SailMass} from './cloth/cloth-sv20-mass.mjs';
 import {rotate3,transpose3,cross3} from './cloth/cloth-fluid-inertia.mjs';
 import {boatBodyRotation} from './axes.js';
+import {observeClothSolver} from './cloth/cloth-solver-profile.mjs';
 
 export function gennakerPose(b) {
   return {originM:[b.x,b.y,b.zc],angles:[b.psi,b.phi,b.th],orientation9:boatBodyRotation(b.psi,b.phi,b.th)};
@@ -51,7 +52,7 @@ export function intermediatePose(a,b) {
   return {originM:b.originM.map((v,d)=>(v+a.originM[d])/2),angles,orientation9:boatBodyRotation(...angles)};
 }
 
-export function prescribedGennaker(fixture,pack,pose,factor,materialKernel,{observeAttempt}={}) {
+export function prescribedGennaker(fixture,pack,pose,factor,materialKernel,{observeAttempt,solverProfile}={}) {
   const r=fixture.recipe,n=r.rows*r.cols,anchor=n;
   if(n!==99||!fixture.sheet)throw new Error('Живой перенос требует сетку 11×9 и верёвку');
   // Неподвижное начало инерциальных осей у места подъёма: те же уравнения,
@@ -76,6 +77,7 @@ export function prescribedGennaker(fixture,pack,pose,factor,materialKernel,{obse
   // рабочие буферы материала не несут истории: после загрузки строятся заново.
   const configuration=JSON.stringify({recipe:r,sheet:fixture.sheet,mass:pack.mass,
     gravity:pack.environment.g,material:MODEL_MATERIAL});
+  if(solverProfile)observeClothSolver(motion,solverProfile);
   const calculation={motion,budget,minLengthM,maxLengthM,snapshot() {
     return stateNumbers({schema:'gennaker-prescribed-state-v1',configuration,index,lengthM,
       frameOriginM:frameOriginM.slice(),lastPose:structuredClone(lastPose),

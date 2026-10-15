@@ -1,15 +1,17 @@
 // Два подшага разделены явным continue; момент отправки выбирает адаптер.
 import {loadSparseFactor} from './cloth/cloth-sparse-wasm.mjs';
 import {selectGennakerMaterial} from './gennaker-material.mjs';
-let calculation,job,attempts,profile=false;
+import {ClothSolverProfile} from './cloth/cloth-solver-profile.mjs';
+let calculation,job,attempts,solverProfile,profile=false;
 self.onmessage=async ({data})=>{
   try {
     if(data.type==='init') {
       const {prescribedGennaker}=await import('./gennaker-energy.mjs');
       const factor=await loadSparseFactor(data.bytes),selected=await selectGennakerMaterial(data.materialBytes,data.fixture.recipe);
       profile=data.profile===true;
+      solverProfile=profile?new ClothSolverProfile():undefined;
       calculation=prescribedGennaker(data.fixture,data.pack,data.pose,factor,selected.kernel,
-        profile?{observeAttempt:a=>attempts.push(a)}:{});
+        profile?{observeAttempt:a=>attempts.push(a),solverProfile}:{});
       if(data.state!==undefined)calculation.restore(data.state);
       self.postMessage({type:'ready',minLengthM:calculation.minLengthM,maxLengthM:calculation.maxLengthM,material:selected.material});
     } else if(data.type==='snapshot'||data.type==='restore') {
@@ -18,21 +20,25 @@ self.onmessage=async ({data})=>{
       self.postMessage({type:data.type,state:calculation.snapshot()});
     } else if(data.type==='step') {
       if(job)throw new Error('Предыдущий шаг ткани ещё не окончен');
-      job={...data,parts:[],results:[],attempts:[]};run();
+      job={...data,parts:[],results:[],attempts:[],solverProfiles:[]};run();
     } else if(data.type==='continue') {
       if(!job)throw new Error('Нет приостановленного шага ткани');run();
     } else throw new Error('Неизвестная команда ткани');
-  } catch(error){const details=profile?{attempts:[...(job?.attempts??[]),attempts??[]]}:{};
+  } catch(error){const details=profile?{attempts:[...(job?.attempts??[]),attempts??[]],
+      solverProfiles:[...(job?.solverProfiles??[]),solverProfile?.snapshot()]}:{};
     if(!['snapshot','restore'].includes(data.type))job=undefined;
     self.postMessage({type:'error',message:error.message,...details});}
 };
 function run() {
   const start=performance.now(),part=job.results.length,pose=job.poses[part];attempts=[];
-  const result=calculation.step({forceN:job.forceN,targetPose:pose,sheetLengthM:job.sheetLengthM});
+  const command={forceN:job.forceN,targetPose:pose,sheetLengthM:job.sheetLengthM};
+  solverProfile?.reset();
+  const result=solverProfile?solverProfile.measure('cloth',calculation.step,calculation,[command]):calculation.step(command);
   job.parts.push(performance.now()-start);job.results.push(result);if(profile)job.attempts.push(attempts);
+  if(profile)job.solverProfiles.push(solverProfile.snapshot());
   if(part===0){self.postMessage({type:'progress'});return;}
   const averaged={...result,forceN:result.forceN.map((v,d)=>(v+job.results[0].forceN[d])/2),
     momentNm:result.momentNm.map((v,d)=>(v+job.results[0].momentNm[d])/2),partsMs:job.parts,
-    audits:job.results.flatMap(v=>v.leaves??[v.audit]),...(profile?{attempts:job.attempts}:{})};
+    audits:job.results.flatMap(v=>v.leaves??[v.audit]),...(profile?{attempts:job.attempts,solverProfiles:job.solverProfiles}:{})};
   job=undefined;self.postMessage({type:'step',...averaged},[averaged.positions.buffer,averaged.velocity.buffer]);
 }

@@ -6,7 +6,7 @@ export function gennakerWorkerChannel(onProgress) {
   function finish(error,data){const p=pending;pending=undefined;clearTimeout(timer);if(error)p?.reject(error);else p?.resolve(data);}
   worker.onmessage=({data})=>{
     if(data.type==='progress'){onProgress?.();return;}
-    if(data.type==='error')finish(Object.assign(new Error(data.message),{attempts:data.attempts}));else finish(null,data);
+    if(data.type==='error')finish(Object.assign(new Error(data.message),{attempts:data.attempts,solverProfiles:data.solverProfiles}));else finish(null,data);
   };
   worker.onerror=e=>finish(new Error(e.message));
   return {request(message) {

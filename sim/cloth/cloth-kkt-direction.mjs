@@ -4,6 +4,7 @@ import { sparsePattern } from './cloth-sparse-solve.mjs';
 const sparseDot = (g, x) => g.reduce((sum, [i, v]) => sum + v * x[i], 0);
 
 export function kktDirection(motion, state, h, priorMu) {
+  const profile=motion.solverProfile,structure=profile?.begin('structure');
   const { gradient, soft, hard } = state, n = motion.free.length, total = n + hard.length;
   if (!motion.kktPattern) {
     const base = Array.from(motion.sparseOrder ?? Int32Array.from({ length: motion.coreDofs }, (_, i) => i));
@@ -35,6 +36,8 @@ export function kktDirection(motion, state, h, priorMu) {
     if (entry === undefined) throw new Error('Изменилась структура совместной матрицы');
     target[entry] += v;
   };
+  if(profile)profile.end(structure);
+  const assembly=profile?.begin('matrixAssembly');
   for (let i = 0; i < n; i++) add(i, i, 1 / (motion.w[Math.floor(motion.free[i] / 3)] * h * h));
   for (const {i,j,massKg} of motion.inertiaCouplings) add(i,j,massKg/(h*h));
   for (let k = 0; k < soft.length; k++) {
@@ -45,7 +48,9 @@ export function kktDirection(motion, state, h, priorMu) {
       matrix[plan.entries[entry++]] += g[a][1] * g[b][1] / c.alpha;
   }
   const active = new Set(hard.flatMap((a, i) => a.g.length && (!a.c.unilateral || priorMu[i] > motion.dualToleranceN) ? [i] : []));
+  if(profile)profile.end(assembly);
   for (let qp = 0; qp < 4 * hard.length + 10; qp++) {
+    const activeAssembly=profile?.begin('activeAssembly');
     const coefficients = matrix.slice(), rhs = new Float64Array(total), signs = new Int32Array(total).fill(1);
     for (let i = 0; i < n; i++) rhs[p.inverse[i]] = -gradient[i];
     hard.forEach(({ C, g }, j) => {
@@ -54,6 +59,7 @@ export function kktDirection(motion, state, h, priorMu) {
         rhs[p.inverse[n + j]] = -C; signs[p.inverse[n + j]] = -1;
       } else add(n + j, n + j, 1, coefficients);
     });
+    if(profile)profile.end(activeAssembly);
     const solve = motion.kktFactor(coefficients, p, signs);
     let result;
     try { result = solve(rhs); } finally { solve.release?.(); }

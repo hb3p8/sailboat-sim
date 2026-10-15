@@ -197,6 +197,7 @@ export class ImplicitEnergyMotion extends EnergyMotion {
       const meritJ = state.objectiveJ + penaltyN * state.violationL1M;
       const derivativeJ = dot(state.gradient, step) - penaltyN * state.violationL1M;
       let accepted = false;
+      const search=this.solverProfile?.begin('lineSearch');
       for (let line = 0; line < 24; line++) {
         const fraction = 2 ** -line, trialMu = mu.map((v, j) => v + fraction * (nextMu[j] - v));
         this.pos.set(old);
@@ -212,6 +213,7 @@ export class ImplicitEnergyMotion extends EnergyMotion {
         }
         lineSearchReductions++;
       }
+      if(search)this.solverProfile.end(search);
       if (!accepted) { this.pos.set(old); throw new Error(`Не найден убывающий шаг полного уравнения: ${state.maxForceN} Н, ${state.violationM} м`); }
     }
     throw new Error(`Полное уравнение не доведено за ${passes} итераций: ${state.maxForceN} Н, ${state.violationM} м`);

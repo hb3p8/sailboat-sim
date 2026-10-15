@@ -4,7 +4,7 @@ import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {SupportImpulseLedger} from '../tests/lib/cloth-support-impulse.mjs';
-import {IMPLICIT_TOLERANCES} from '../tests/lib/cloth-implicit-motion.mjs';
+import {IMPLICIT_TOLERANCES} from '../sim/cloth/cloth-implicit-motion.mjs';
 
 const args=process.argv.slice(2),option=args.filter(a=>a.startsWith('--'));
 assert(option.length<=1 && option.every(a=>/^--boat-hz=(30|60)$/.test(a)),'Допустим только --boat-hz=30/60');

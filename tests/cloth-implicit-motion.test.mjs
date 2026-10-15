@@ -1,11 +1,11 @@
 // Известные решения полного неявного уравнения; физические остатки не подменены податливостью.
 import assert from 'node:assert/strict';
-import { ImplicitEnergyMotion, bandFactor } from './lib/cloth-implicit-motion.mjs';
-import { materialSurface } from './lib/cloth-material.mjs';
-import { distance } from './cloth-compliance.mjs';
-import { borderedBandFactor } from './lib/cloth-linear-solve.mjs';
+import { ImplicitEnergyMotion, bandFactor } from '../sim/cloth/cloth-implicit-motion.mjs';
+import { materialSurface } from '../sim/cloth/cloth-material.mjs';
+import { distance } from '../sim/cloth/cloth-compliance.mjs';
+import { borderedBandFactor } from '../sim/cloth/cloth-linear-solve.mjs';
 import { readFileSync } from 'node:fs';
-import { loadSparseFactor } from './lib/cloth-sparse-wasm.mjs';
+import { loadSparseFactor } from '../sim/cloth/cloth-sparse-wasm.mjs';
 
 const close = (a, b, tolerance = 2e-10) => assert.ok(Math.abs(a - b) < tolerance * Math.max(1, Math.abs(b)), `${a} != ${b}`);
 const args = process.argv.slice(2), backendArg = args.find(a => a.startsWith('--linear-backend=')), wasmArg = args.find(a => a.startsWith('--wasm='));

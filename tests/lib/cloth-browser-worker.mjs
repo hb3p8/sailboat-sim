@@ -1,6 +1,6 @@
 // Один последовательный шаг ткани за сообщение. Воздух/лодка не добавляются.
 import { browserMotion } from './cloth-browser-motion.mjs';
-import { loadSparseFactor } from './cloth-sparse-wasm.mjs';
+import { loadSparseFactor } from '../../sim/cloth/cloth-sparse-wasm.mjs';
 import { observeSparseFactor } from './cloth-worker-timing.mjs';
 
 // Та же обработка используется настоящим Worker и независимой проверкой Node.

@@ -23,8 +23,8 @@ const serial=v=>ArrayBuffer.isView(v)?Array.from(v):Array.isArray(v)?v.map(seria
 const contexts={},times={baseline:[],candidate:[]},states={baseline:[],candidate:[]},preparation={};
 for(const variant of pair%2?['baseline','candidate']:['candidate','baseline']){
   const url=pathToFileURL(sources+'/'+variant+'/tests/lib/cloth-fluid-sail-motion.mjs'),start=performance.now(),
-    {fluidSailMotion}=await import(url),{loadSparseFactor}=await import(new URL('./cloth-sparse-wasm.mjs',url)),
-    {loadMaterialKernel}=await import(new URL('../probes/cloth-material-wasm.mjs',url)),{verifyMaterialKernel}=await import(new URL('../probes/cloth-material-engine-check.mjs',url)),
+    {fluidSailMotion}=await import(url),{loadSparseFactor}=await import(new URL('../../sim/cloth/cloth-sparse-wasm.mjs',url)),
+    {loadMaterialKernel}=await import(new URL('../../sim/cloth/cloth-material-wasm.mjs',url)),{verifyMaterialKernel}=await import(new URL('../../sim/cloth/cloth-material-engine-check.mjs',url)),
     {loadAssemblyKernel}=await import(new URL('../probes/cloth-assembly-wasm.mjs',url)),{verifyAssemblyKernel}=await import(new URL('../probes/cloth-assembly-engine-check.mjs',url));
   const factor=await loadSparseFactor(readFileSync(variant==='candidate'&&candidate!=='-'?candidate:f.wasm.path)),
     materialKernel=await loadMaterialKernel(readFileSync(f.materialWasm.path)),assemblyKernel=await loadAssemblyKernel(readFileSync(f.assemblyWasm.path));

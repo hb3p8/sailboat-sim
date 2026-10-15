@@ -2,7 +2,7 @@
 // Используется прежний Rig/Cloth.forcesAt, без новой поляры и таблицы сил.
 import {Boat} from '../../sim/physics.js';
 import {Cloth} from '../../sim/cloth.js';
-import {checkRotation,rotate3,transpose3,cross3,finiteArray} from './cloth-fluid-inertia.mjs';
+import {checkRotation,rotate3,transpose3,cross3,finiteArray} from '../../sim/cloth/cloth-fluid-inertia.mjs';
 
 export function createClothLiveWind(pack,recipe,{geometryCGM,hS=recipe.hS,pressureClock}={}) {
   if(!(hS>0)||!Number.isFinite(hS)||pressureClock!==undefined&&pressureClock!=='sampled-60hz-v1')

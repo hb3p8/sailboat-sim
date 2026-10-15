@@ -14,11 +14,11 @@ assert(!existsSync(output)&&!existsSync(copies),'Нельзя перезапис
 function copy(path){if(sourceSha256[path])return;const b=readFileSync(resolve(root,path));sourceSha256[path]=hash(b);const target=resolve(copies,path);mkdirSync(dirname(target),{recursive:true});writeFileSync(target,b,{flag:'wx'});
  for(const m of b.toString().matchAll(/\b(?:from\s*|import\s*)['"](\.{1,2}\/[^'"]+)['"]/g))copy(relative(root,resolve(root,dirname(path),m[1])));}
 const live=inputs.some(p=>JSON.parse(readFileSync(p)).fixture.liveWind);
-for(const p of ['tests/lib/cloth-fluid-sail-motion.mjs',...(live?['tests/lib/cloth-live-wind-sail-motion.mjs']:[]),'tests/lib/cloth-sparse-wasm.mjs','tests/probes/cloth-material-wasm.mjs','tests/probes/cloth-material-wasm.c','tests/probes/cloth-material-engine-check.mjs','tests/probes/cloth-assembly-wasm.mjs','tests/probes/cloth-assembly-wasm.c','tests/probes/cloth-assembly-engine-check.mjs',relative(root,fileURLToPath(import.meta.url))])copy(p);
+for(const p of ['tests/lib/cloth-fluid-sail-motion.mjs',...(live?['tests/lib/cloth-live-wind-sail-motion.mjs']:[]),'sim/cloth/cloth-sparse-wasm.mjs','sim/cloth/cloth-material-wasm.mjs','tests/probes/cloth-material-wasm.c','sim/cloth/cloth-material-engine-check.mjs','tests/probes/cloth-assembly-wasm.mjs','tests/probes/cloth-assembly-wasm.c','tests/probes/cloth-assembly-engine-check.mjs',relative(root,fileURLToPath(import.meta.url))])copy(p);
 const direction='tests/lib/cloth-fluid-schur-direction.mjs',original=readFileSync(resolve(root,direction),'utf8');
 const instrumented=instrumentDirection(original);
 writeFileSync(resolve(copies,direction+'.original'),original,{flag:'wx'});writeFileSync(resolve(copies,direction),instrumented);
-const linearPath='tests/lib/cloth-sparse-wasm.mjs',linearOriginal=readFileSync(resolve(root,linearPath),'utf8'),linearInstrumented=instrumentSparse(linearOriginal);
+const linearPath='sim/cloth/cloth-sparse-wasm.mjs',linearOriginal=readFileSync(resolve(root,linearPath),'utf8'),linearInstrumented=instrumentSparse(linearOriginal);
 writeFileSync(resolve(copies,linearPath+'.original'),linearOriginal,{flag:'wx'});writeFileSync(resolve(copies,linearPath),linearInstrumented);
 const fixtures=inputs.map(path=>{const b=readFileSync(path),r=JSON.parse(b),f=r.fixture;assert.equal(r.steps.length,180);assert.equal(r.shownStep,180);assert.equal(f.dirty,false);assert(f.materialWasm);
  for(const [p,h] of Object.entries(f.sourceSha256))assert.equal(hash(execFileSync('git',['show',f.revision+':'+p],{maxBuffer:16*1024*1024})),h);
@@ -29,10 +29,10 @@ assert.equal(new Set(fixtures.map(f=>f.side)).size,2);
 const runner=String.raw`
 import assert from 'node:assert/strict';import {readFileSync,writeFileSync} from 'node:fs';import {pathToFileURL} from 'node:url';import {cpus} from 'node:os';
 const [source,input,out]=process.argv.slice(1),record=JSON.parse(readFileSync(input)),f=record.fixture;
-const {fluidSailMotion}=await import(pathToFileURL(source)),{loadSparseFactor,sparseProfile}=await import(new URL('./cloth-sparse-wasm.mjs',pathToFileURL(source))),
+const {fluidSailMotion}=await import(pathToFileURL(source)),{loadSparseFactor,sparseProfile}=await import(new URL('../../sim/cloth/cloth-sparse-wasm.mjs',pathToFileURL(source))),
 {directionProfile}=await import(new URL('./cloth-fluid-schur-direction.mjs',pathToFileURL(source))),
-{loadMaterialKernel}=await import(new URL('../probes/cloth-material-wasm.mjs',pathToFileURL(source))),
-{verifyMaterialKernel}=await import(new URL('../probes/cloth-material-engine-check.mjs',pathToFileURL(source))),
+{loadMaterialKernel}=await import(new URL('../../sim/cloth/cloth-material-wasm.mjs',pathToFileURL(source))),
+{verifyMaterialKernel}=await import(new URL('../../sim/cloth/cloth-material-engine-check.mjs',pathToFileURL(source))),
 {loadAssemblyKernel}=await import(new URL('../probes/cloth-assembly-wasm.mjs',pathToFileURL(source))),
 {verifyAssemblyKernel}=await import(new URL('../probes/cloth-assembly-engine-check.mjs',pathToFileURL(source)));
 const factor=await loadSparseFactor(readFileSync(f.wasm.path)),materialKernel=await loadMaterialKernel(readFileSync(f.materialWasm.path)),validation=verifyMaterialKernel(materialKernel,f.recipe);

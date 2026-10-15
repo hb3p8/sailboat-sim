@@ -1,6 +1,6 @@
 // Независимый баланс всех физических масс по двум положениям и входным
 // силам. Не читает предсказание решателя или его измеритель реакции.
-import {IMPLICIT_TOLERANCES as tol} from './cloth-implicit-motion.mjs';
+import {IMPLICIT_TOLERANCES as tol} from '../../sim/cloth/cloth-implicit-motion.mjs';
 const point=(p,i)=>Array.from(p.slice(3*i,3*i+3));
 const sub=(a,b)=>a.map((v,d)=>v-b[d]);
 const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];

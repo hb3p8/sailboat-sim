@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
-import * as current from './lib/cloth-fluid-inertia.mjs';
+import * as current from '../sim/cloth/cloth-fluid-inertia.mjs';
 const args=process.argv.slice(2),out=args.find(a=>a.startsWith('--out='))?.slice(6);assert(args.length===1&&out&&!existsSync(out));
 const oldSource=execFileSync('git',['show','63f0225:tests/lib/cloth-fluid-inertia.mjs'],{encoding:'utf8'}),old=await import('data:text/javascript,'+encodeURIComponent(oldSource)),
   hash=b=>createHash('sha256').update(b).digest('hex');let cases=0,elements=0;
@@ -22,7 +22,7 @@ const a=current.matrixVector([1,0,0,1],[2,3]),b=current.matrixVector([1,0,0,1],[
 const state={origin:[1,-2,3],rotation:[0,-1,0,1,0,0,0,0,1],velocity:[.2,-.3,.4,.7,-.8,.9]};
 for(const h of [1/60,1/120,1/240])for(const sign of [1,-1]){const v=state.velocity.map(x=>x*sign);const p=current.cayleyBodyPose(state.origin,state.rotation,v,h),q=old.cayleyBodyPose(state.origin,state.rotation,v,h);assert.deepEqual(p,q);cases++;elements+=27;}
 const report={schema:'cloth-fluid-matrix-loops-check-v1',phase:'complete',revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),
-  baselineRevision:'63f0225',baselineSha256:hash(oldSource),candidateSha256:hash(readFileSync('tests/lib/cloth-fluid-inertia.mjs')),cases,elements,
+  baselineRevision:'63f0225',baselineSha256:hash(oldSource),candidateSha256:hash(readFileSync('sim/cloth/cloth-fluid-inertia.mjs')),cases,elements,
   rule:'Все элементы Object.is, включая знак нуля/NaN. Известные числа/неизменность/самостоятельные ответы, Array/Float64Array, пустые/неполные/с пропусками, конечные позы Кэли обоих знаков.'};
-writeFileSync(out,JSON.stringify(report,null,2)+'\n',{flag:'wx'});writeFileSync(out+'.baseline.mjs',oldSource,{flag:'wx'});writeFileSync(out+'.candidate.mjs',readFileSync('tests/lib/cloth-fluid-inertia.mjs'),{flag:'wx'});
+writeFileSync(out,JSON.stringify(report,null,2)+'\n',{flag:'wx'});writeFileSync(out+'.baseline.mjs',oldSource,{flag:'wx'});writeFileSync(out+'.candidate.mjs',readFileSync('sim/cloth/cloth-fluid-inertia.mjs'),{flag:'wx'});
 console.log(`Малые матричные операции: ${cases} случаев/${elements} элементов и известные движения совпали строго.`);

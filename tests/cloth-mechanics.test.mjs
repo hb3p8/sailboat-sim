@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Cloth } from '../sim/cloth.js';
 import { Boat } from '../sim/physics.js';
-import { distance, solveConstraint } from './cloth-compliance.mjs';
+import { distance, solveConstraint } from '../sim/cloth/cloth-compliance.mjs';
 import { observeClothMechanics, kineticOf, constraintErrorsOf } from './lib/cloth-mechanics.mjs';
 const close = (a, b) => assert.ok(Math.abs(a - b) < 2e-12 * Math.max(1, Math.abs(b)), `${a} != ${b}`);
 

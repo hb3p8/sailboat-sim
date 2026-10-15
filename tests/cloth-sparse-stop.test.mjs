@@ -5,12 +5,12 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {resolve,dirname,relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {sparsePattern} from './lib/cloth-sparse-solve.mjs';
+import {sparsePattern} from '../sim/cloth/cloth-sparse-solve.mjs';
 import {compareLDLFactors} from './probes/cloth-sparse-factor-audit.mjs';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 import {fluidSailMotion} from './lib/cloth-fluid-sail-motion.mjs';
-import {loadMaterialKernel} from './probes/cloth-material-wasm.mjs';
-import {verifyMaterialKernel} from './probes/cloth-material-engine-check.mjs';
+import {loadMaterialKernel} from '../sim/cloth/cloth-material-wasm.mjs';
+import {verifyMaterialKernel} from '../sim/cloth/cloth-material-engine-check.mjs';
 import {loadAssemblyKernel} from './probes/cloth-assembly-wasm.mjs';
 import {verifyAssemblyKernel} from './probes/cloth-assembly-engine-check.mjs';
 const args=process.argv.slice(2),inputs=args.filter(a=>a.startsWith('--input=')).map(a=>a.slice(8)),
@@ -46,7 +46,7 @@ assert.equal(new Set(inputs.map(path=>JSON.parse(readFileSync(path)).fixture.sid
 for(const path of inputs){const bytes=readFileSync(path),record=JSON.parse(bytes),f=record.fixture;
   assert.equal(record.steps.length,180);assert.equal(record.shownStep,180);assert.equal(f.dirty,false);assert.equal(f.wasm.sha256,hash(aBytes));
   for(const [p,h] of Object.entries(f.sourceSha256)){assert.equal(hash(execFileSync('git',['show',f.revision+':'+p],{maxBuffer:16*1024*1024})),h);
-    if(hash(readFileSync(p))!==h)assert.equal(p,'tests/lib/cloth-sparse-wasm.mjs','Изолированный опыт может менять только оболочку');}
+    if(hash(readFileSync(p))!==h)assert.equal(p,'sim/cloth/cloth-sparse-wasm.mjs','Изолированный опыт может менять только оболочку');}
   for(const part of [f.input,f.scene,f.wasm,f.materialWasm,f.assemblyWasm,f.sheetProof])assert.equal(hash(readFileSync(part.path)),part.sha256);
   assert.equal(hash(readFileSync('out/export/physics.json')),f.physicsSha256);
   const factor=await loadSparseFactor(aBytes),audit=compareLDLFactors(aModule,bModule),original=factor.ldl;

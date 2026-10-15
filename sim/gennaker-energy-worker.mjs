@@ -1,5 +1,5 @@
 // Два подшага разделены явным continue; момент отправки выбирает адаптер.
-import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from './cloth/cloth-sparse-wasm.mjs';
 import {selectGennakerMaterial} from './gennaker-material.mjs';
 let calculation,job,attempts,profile=false;
 self.onmessage=async ({data})=>{

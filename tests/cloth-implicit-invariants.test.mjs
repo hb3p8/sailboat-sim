@@ -1,10 +1,10 @@
 // Форма и движение при смене координат; прямые натянутые кромки — отдельный отрицательный контроль.
 import assert from 'node:assert/strict';
-import { ImplicitEnergyMotion, IMPLICIT_TOLERANCES } from './lib/cloth-implicit-motion.mjs';
-import { materialSurface, gridTriangles, MODEL_MATERIAL } from './lib/cloth-material.mjs';
-import { distance } from './cloth-compliance.mjs';
+import { ImplicitEnergyMotion, IMPLICIT_TOLERANCES } from '../sim/cloth/cloth-implicit-motion.mjs';
+import { materialSurface, gridTriangles, MODEL_MATERIAL } from '../sim/cloth/cloth-material.mjs';
+import { distance } from '../sim/cloth/cloth-compliance.mjs';
 import { readFileSync } from 'node:fs';
-import { loadSparseFactor } from './lib/cloth-sparse-wasm.mjs';
+import { loadSparseFactor } from '../sim/cloth/cloth-sparse-wasm.mjs';
 
 const args = process.argv.slice(2);
 const backendArg = args.find(a => a.startsWith('--linear-backend=')), wasmArg = args.find(a => a.startsWith('--wasm='));

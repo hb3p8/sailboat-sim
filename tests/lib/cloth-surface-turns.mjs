@@ -1,5 +1,5 @@
 // Изломы измеряем по координатам, независимо от света и сглаживания нормалей.
-import {gridTriangles} from './cloth-material.mjs';
+import {gridTriangles} from '../../sim/cloth/cloth-material.mjs';
 
 const point=(p,i)=>Array.from(p.slice(3*i,3*i+3));
 const sub=(a,b)=>a.map((v,d)=>v-b[d]);

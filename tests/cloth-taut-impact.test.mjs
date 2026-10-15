@@ -1,9 +1,9 @@
 // Известное резкое натяжение нерастяжимой нити: важен импульс, пик растёт 1/h.
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {ImplicitEnergyMotion} from './lib/cloth-implicit-motion.mjs';
-import {distance} from './cloth-compliance.mjs';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
+import {ImplicitEnergyMotion} from '../sim/cloth/cloth-implicit-motion.mjs';
+import {distance} from '../sim/cloth/cloth-compliance.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 const args=process.argv.slice(2),backend=args.find(s=>s.startsWith('--linear-backend='))?.split('=')[1] ?? 'band-js';
 const path=args.find(s=>s.startsWith('--wasm='))?.slice(7);
 assert(args.every(s=>/^--(linear-backend|wasm)=.+$/.test(s)) && ['band-js','kkt-wasm'].includes(backend));

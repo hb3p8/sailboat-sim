@@ -1,5 +1,5 @@
 // Жёсткое движение не должно создавать работу внутренних связей ткани.
-import { area3d, dihedral, dihedralAngle, shear } from './cloth-compliance.mjs';
+import { area3d, dihedral, dihedralAngle, shear } from '../sim/cloth/cloth-compliance.mjs';
 
 const p = Float64Array.from([
   0, 0, 0,

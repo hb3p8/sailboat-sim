@@ -1,7 +1,7 @@
 // Разреженный блок ткани и малое дополнение шести скоростей тела/воды.
 // Приближена только матрица направления (Gauss–Newton), не общий остаток.
-import {gridDissection,sparsePattern} from './cloth-sparse-solve.mjs';
-import {cross3,rotate3,transpose3,denseSolve} from './cloth-fluid-inertia.mjs';
+import {gridDissection,sparsePattern} from '../../sim/cloth/cloth-sparse-solve.mjs';
+import {cross3,rotate3,transpose3,denseSolve} from '../../sim/cloth/cloth-fluid-inertia.mjs';
 import {gradientLayout,gradientValues} from './cloth-gradient-layout.mjs';
 
 const coordinates=grad=>{

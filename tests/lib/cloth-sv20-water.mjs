@@ -2,7 +2,7 @@
 // Формулы корпуса/крыльев/демпфирования читаются из общих модулей симулятора.
 import {Buoyancy} from '../../sim/buoyancy.js';
 import {appendageForces,waterDamping,hullResistance,hullLateral,hullHeelYaw,displacementSpeedLimit} from '../../sim/hydro.js';
-import {checkRotation,rotate3,cross3,finiteArray} from './cloth-fluid-inertia.mjs';
+import {checkRotation,rotate3,cross3,finiteArray} from '../../sim/cloth/cloth-fluid-inertia.mjs';
 
 export function sv20BodyAngles(R) {
   checkRotation(R);

@@ -12,10 +12,10 @@ import { Cloth } from '../sim/cloth.js';
 import { gennakerClew } from '../sim/aero.js';
 import { constraintFamily, constraintErrorsOf, observeClothMechanics } from './lib/cloth-mechanics.mjs';
 import { installEnergyExperiment } from './lib/cloth-energy-experiment.mjs';
-import { IMPLICIT_TOLERANCES } from './lib/cloth-implicit-motion.mjs';
-import { loadSparseFactor } from './lib/cloth-sparse-wasm.mjs';
+import { IMPLICIT_TOLERANCES } from '../sim/cloth/cloth-implicit-motion.mjs';
+import { loadSparseFactor } from '../sim/cloth/cloth-sparse-wasm.mjs';
 import { wrenchOf } from './lib/gennaker-observables.mjs';
-import { sharedInputFromCloth, installSharedInput } from './lib/cloth-shared-input.mjs';
+import { sharedInputFromCloth, installSharedInput } from '../sim/cloth/cloth-shared-input.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packPath = resolve(root, 'out/export/physics.json'), packBytes = readFileSync(packPath);
@@ -23,12 +23,12 @@ const pack = JSON.parse(packBytes);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const sourcePaths = [...readdirSync(resolve(root, 'sim')).filter(f => f.endsWith('.js')).map(f => `sim/${f}`),
   'tests/cloth-frozen-aero-grid.mjs', 'tests/lib/cloth-mechanics.mjs',
-  'tests/lib/cloth-energy-experiment.mjs', 'tests/lib/cloth-energy-motion.mjs',
-  'tests/lib/cloth-material.mjs', 'tests/cloth-compliance.mjs', 'tests/lib/cloth-implicit-motion.mjs', 'tests/lib/cloth-linear-solve.mjs',
-  'tests/lib/cloth-sparse-solve.mjs',
-  'tests/lib/cloth-sparse-wasm.mjs', 'tests/lib/cloth-sparse-kernel.c',
-  'tests/lib/cloth-kkt-direction.mjs',
-  'tests/lib/gennaker-observables.mjs', 'tests/lib/cloth-shared-input.mjs'];
+  'tests/lib/cloth-energy-experiment.mjs', 'sim/cloth/cloth-energy-motion.mjs',
+  'sim/cloth/cloth-material.mjs', 'sim/cloth/cloth-compliance.mjs', 'sim/cloth/cloth-implicit-motion.mjs', 'sim/cloth/cloth-linear-solve.mjs',
+  'sim/cloth/cloth-sparse-solve.mjs',
+  'sim/cloth/cloth-sparse-wasm.mjs', 'tests/lib/cloth-sparse-kernel.c',
+  'sim/cloth/cloth-kkt-direction.mjs',
+  'tests/lib/gennaker-observables.mjs', 'sim/cloth/cloth-shared-input.mjs'];
 const sourceSha256 = Object.fromEntries(sourcePaths.map(p => [p, hash(readFileSync(resolve(root, p)))]));
 const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
 const dirty = Boolean(execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim());

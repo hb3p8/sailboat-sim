@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { IMPLICIT_TOLERANCES } from '../tests/lib/cloth-implicit-motion.mjs';
+import { IMPLICIT_TOLERANCES } from '../sim/cloth/cloth-implicit-motion.mjs';
 
 const hash = b => createHash('sha256').update(b).digest('hex');
 const sourceCache = new Map();

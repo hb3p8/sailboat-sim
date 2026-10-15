@@ -1,7 +1,7 @@
 // Совместимость обычного симулятора: прежний JS-закон при другом округлении.
 // Исследовательские стенды по-прежнему требуют строгого совпадения WASM/JS.
-import {loadMaterialKernel,MaterialEngineMismatchError} from '../tests/probes/cloth-material-wasm.mjs';
-import {verifyMaterialKernel} from '../tests/probes/cloth-material-engine-check.mjs';
+import {loadMaterialKernel,MaterialEngineMismatchError} from './cloth/cloth-material-wasm.mjs';
+import {verifyMaterialKernel} from './cloth/cloth-material-engine-check.mjs';
 
 export async function selectGennakerMaterial(bytes,recipe) {
   const start=performance.now();

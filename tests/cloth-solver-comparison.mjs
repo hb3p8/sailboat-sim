@@ -5,12 +5,12 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { IMPLICIT_TOLERANCES } from './lib/cloth-implicit-motion.mjs';
+import { IMPLICIT_TOLERANCES } from '../sim/cloth/cloth-implicit-motion.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const hash = b => createHash('sha256').update(b).digest('hex');
 const computational = new Set(['tests/cloth-frozen-aero-grid.mjs', 'tests/lib/cloth-energy-experiment.mjs',
-  'tests/lib/cloth-implicit-motion.mjs', 'tests/lib/cloth-linear-solve.mjs', 'tests/lib/cloth-kkt-direction.mjs',
-  'tests/lib/cloth-sparse-solve.mjs', 'tests/lib/cloth-sparse-wasm.mjs', 'tests/lib/cloth-sparse-kernel.c']);
+  'sim/cloth/cloth-implicit-motion.mjs', 'sim/cloth/cloth-linear-solve.mjs', 'sim/cloth/cloth-kkt-direction.mjs',
+  'sim/cloth/cloth-sparse-solve.mjs', 'sim/cloth/cloth-sparse-wasm.mjs', 'tests/lib/cloth-sparse-kernel.c']);
 const omitBackend = c => Object.fromEntries(Object.entries(c).filter(([k]) => k !== 'linearBackend'));
 export const REPRODUCTION_LIMITS = Object.freeze({ positionsM: 1e-8, energyJ: 1e-7 });
 

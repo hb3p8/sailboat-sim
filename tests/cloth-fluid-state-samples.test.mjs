@@ -2,8 +2,8 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {FluidBodyEnergyMotion} from './lib/cloth-fluid-body-motion.mjs';
-import {fluidInertia} from './lib/cloth-fluid-inertia.mjs';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
+import {fluidInertia} from '../sim/cloth/cloth-fluid-inertia.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 import {loadAssemblyKernel} from './probes/cloth-assembly-wasm.mjs';
 const args=process.argv.slice(2),wasm=args.find(a=>a.startsWith('--wasm='))?.slice(7),assembly=args.find(a=>a.startsWith('--assembly-wasm='))?.slice(16);
 assert(wasm&&args.length===1+Number(Boolean(assembly))&&args.every(a=>/^--(wasm|assembly-wasm)=.+$/.test(a)),'Нужен --wasm=модуль, необязательный --assembly-wasm=сборщик');

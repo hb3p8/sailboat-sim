@@ -3,21 +3,28 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {materialSurface,gridTriangles,MODEL_MATERIAL} from './lib/cloth-material.mjs';
+import {resolve,dirname,relative} from 'node:path';
+import {materialSurface,gridTriangles,MODEL_MATERIAL} from '../sim/cloth/cloth-material.mjs';
 const args=process.argv.slice(2);
 assert(args.every(v=>/^--(baseline|out)=.+$/.test(v))&&new Set(args.map(v=>v.split('=')[0])).size===args.length);
 const baseline=args.find(v=>v.startsWith('--baseline='))?.slice(11),output=args.find(v=>v.startsWith('--out='))?.slice(6);
 assert(baseline,'Нужна --baseline=прежняя-ревизия');
 const hash=b=>createHash('sha256').update(b).digest('hex');
-const path='tests/lib/cloth-material.mjs',baseBytes=execFileSync('git',['show',`${baseline}:${path}`]);
-const baseUrl=new URL('./lib/cloth-material.mjs',import.meta.url);
-const imports=[];
-const source=baseBytes.toString().replace(/\bfrom\s*(['"])(\.{1,2}\/[^'"]+)\1/g,(_,quote,relative)=>{
-  const url=new URL(relative,baseUrl),repoPath='tests/'+url.pathname.split('/tests/')[1];
-  assert.equal(hash(readFileSync(url)),hash(execFileSync('git',['show',`${baseline}:${repoPath}`])),`Изменился общий импорт ${repoPath}`);
-  imports.push(repoPath);return `from ${quote}${url.href}${quote}`;
-});
-const old=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const path='sim/cloth/cloth-material.mjs',root=process.cwd();
+let baselinePath=path;
+try{execFileSync('git',['cat-file','-e',`${baseline}:${path}`],{stdio:'ignore'});}
+catch{baselinePath='tests/lib/cloth-material.mjs';}
+// Прежняя модель получает собственные зависимости из той же ревизии,
+// включая формулы до переноса каталогов, а не текущие совместимые обёртки.
+const baselineSources={},urls=new Map();
+function baselineModule(p) {
+  if(urls.has(p))return urls.get(p);
+  const bytes=execFileSync('git',['show',`${baseline}:${p}`]);baselineSources[p]=hash(bytes);
+  const source=bytes.toString().replace(/\bfrom\s*(['"])(\.{1,2}\/[^'"]+)\1/g,(_,q,spec)=>
+    `from ${q}${baselineModule(relative(root,resolve(root,dirname(p),spec)))}${q}`);
+  const url='data:text/javascript;base64,'+Buffer.from(source).toString('base64');urls.set(p,url);return url;
+}
+const old=await import(baselineModule(baselinePath));
 const fixturePath='out/acceptance/rigid-sail-60321b9-plus-five.json',fixtureBytes=readFileSync(fixturePath),recipe=JSON.parse(fixtureBytes).recipe;
 const reference=Array.from({length:20},(_,i)=>{
   const x=(i%5)*.37,y=Math.floor(i/5)*.31;return [x,y,.09*Math.sin(x*1.3)*Math.cos(y*.7)];
@@ -25,8 +32,8 @@ const reference=Array.from({length:20},(_,i)=>{
 const deformed=reference.map((v,k)=>v*(k%3===0?1.03:k%3===1?.98:1)+.02*Math.sin(k*.47));
 const record={schema:'cloth-material-buffers-v1',revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
   dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),baselineRevision:execFileSync('git',['rev-parse',baseline],{encoding:'utf8'}).trim(),
-  baselineMaterialSha256:hash(baseBytes),sourceSha256:{},input:{path:fixturePath,sha256:hash(fixtureBytes)},checkedValues:0,checkedGradientComponents:0};
-for(const p of ['tests/cloth-material-buffers.test.mjs',path,...imports])record.sourceSha256[p]=hash(readFileSync(p));
+  baselineMaterialPath:baselinePath,baselineMaterialSha256:baselineSources[baselinePath],baselineSources,sourceSha256:{},input:{path:fixturePath,sha256:hash(fixtureBytes)},checkedValues:0,checkedGradientComponents:0};
+for(const p of ['tests/cloth-material-buffers.test.mjs',path,'sim/cloth/cloth-compliance.mjs'])record.sourceSha256[p]=hash(readFileSync(p));
 for(const setup of [
   {rows:4,cols:5,reference,current:deformed,bending:'curvature',side:1},
   {rows:4,cols:5,reference,current:deformed,bending:'curvature',side:-1},

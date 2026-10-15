@@ -7,9 +7,9 @@ import {execFileSync} from 'node:child_process';
 import {relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {FluidBodyEnergyMotion} from './lib/cloth-fluid-body-motion.mjs';
-import {fluidInertia} from './lib/cloth-fluid-inertia.mjs';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
-import {distance} from './cloth-compliance.mjs';
+import {fluidInertia} from '../sim/cloth/cloth-fluid-inertia.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
+import {distance} from '../sim/cloth/cloth-compliance.mjs';
 
 const args=process.argv.slice(2),wasmPath=args.find(a=>a.startsWith('--wasm='))?.slice(7),
   output=args.find(a=>a.startsWith('--out='))?.slice(6);

@@ -1,11 +1,11 @@
 // Отдельный диагностический Worker; не выбирается интерактивным симулятором.
 import {requireProbe as check,equalProbe,serialProbe,shaProbe,fetchProbe,captureViews,prepareProbeLDL,compareProbeLDL} from './cloth-sparse-browser-probe.mjs';
-import {loadSparseFactor} from '../lib/cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from '../../sim/cloth/cloth-sparse-wasm.mjs';
 import {fluidSailMotion} from '../lib/cloth-fluid-sail-motion.mjs';
 import {observeSparseFactor} from '../lib/cloth-worker-timing.mjs';
 import {observeFluidStages,stageDifference} from '../lib/cloth-fluid-timing.mjs';
-import {loadMaterialKernel} from './cloth-material-wasm.mjs';
-import {verifyMaterialKernel} from './cloth-material-engine-check.mjs';
+import {loadMaterialKernel} from '../../sim/cloth/cloth-material-wasm.mjs';
+import {verifyMaterialKernel} from '../../sim/cloth/cloth-material-engine-check.mjs';
 import {loadAssemblyKernel} from './cloth-assembly-wasm.mjs';
 import {verifyAssemblyKernel} from './cloth-assembly-engine-check.mjs';
 let used=false;

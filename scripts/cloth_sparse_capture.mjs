@@ -5,10 +5,10 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {resolve,dirname,relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 import {fluidSailMotion} from '../tests/lib/cloth-fluid-sail-motion.mjs';
-import {loadMaterialKernel} from '../tests/probes/cloth-material-wasm.mjs';
-import {verifyMaterialKernel} from '../tests/probes/cloth-material-engine-check.mjs';
+import {loadMaterialKernel} from '../sim/cloth/cloth-material-wasm.mjs';
+import {verifyMaterialKernel} from '../sim/cloth/cloth-material-engine-check.mjs';
 import {loadAssemblyKernel} from '../tests/probes/cloth-assembly-wasm.mjs';
 import {verifyAssemblyKernel} from '../tests/probes/cloth-assembly-engine-check.mjs';
 const args=process.argv.slice(2),inputs=args.filter(a=>a.startsWith('--input=')).map(a=>a.slice(8)),

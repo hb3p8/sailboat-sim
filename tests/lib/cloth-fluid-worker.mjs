@@ -1,11 +1,11 @@
 // Браузер и проверка Node используют тот же обработчик общего шага.
 import {fluidSailMotion} from './cloth-fluid-sail-motion.mjs';
-import {loadSparseFactor} from './cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from '../../sim/cloth/cloth-sparse-wasm.mjs';
 import {observeSparseFactor} from './cloth-worker-timing.mjs';
 import {observeFluidStages,stageDifference} from './cloth-fluid-timing.mjs';
 import {createExecutionProbe} from './cloth-execution-probe.mjs';
-import {loadMaterialKernel} from '../probes/cloth-material-wasm.mjs';
-import {verifyMaterialKernel} from '../probes/cloth-material-engine-check.mjs';
+import {loadMaterialKernel} from '../../sim/cloth/cloth-material-wasm.mjs';
+import {verifyMaterialKernel} from '../../sim/cloth/cloth-material-engine-check.mjs';
 import {loadAssemblyKernel} from '../probes/cloth-assembly-wasm.mjs';
 import {verifyAssemblyKernel} from '../probes/cloth-assembly-engine-check.mjs';
 

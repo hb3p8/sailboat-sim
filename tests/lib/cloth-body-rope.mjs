@@ -1,6 +1,6 @@
 // Нерастяжимая верёвка между узлом ткани и точкой в осях тела.
 // Длина задаётся командой шага; реакция не может толкать ткань.
-import {finiteArray,rotate3} from './cloth-fluid-inertia.mjs';
+import {finiteArray,rotate3} from '../../sim/cloth/cloth-fluid-inertia.mjs';
 
 export function bodyRopes(ropes,nodeCount) {
   if(!Array.isArray(ropes)||ropes.some(r=>!Number.isInteger(r?.node)||r.node<0||r.node>=nodeCount||

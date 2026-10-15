@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {createClothLiveWind} from './lib/cloth-live-wind.mjs';
-import {rotate3,cross3} from './lib/cloth-fluid-inertia.mjs';
+import {rotate3,cross3} from '../sim/cloth/cloth-fluid-inertia.mjs';
 const args=process.argv.slice(2),out=args.find(a=>a.startsWith('--out='))?.slice(6);assert(args.length===1&&out&&!existsSync(out));
 const pack=JSON.parse(readFileSync('out/export/physics.json')),f=JSON.parse(readFileSync('out/acceptance/fluid-live-snapshots-old-20261008-plus.json')),r=f.recipe;
 const I=[1,0,0,0,1,0,0,0,1],Z=[0,-1,0,1,0,0,0,0,1],v=[2,-1,.3],omega=[.1,-.05,.07];

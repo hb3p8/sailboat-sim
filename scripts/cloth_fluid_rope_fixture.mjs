@@ -7,7 +7,7 @@ import {createHash} from 'node:crypto';
 import {relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {fluidSailMotion} from '../tests/lib/cloth-fluid-sail-motion.mjs';
-import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 
 const [input,output,countText='60',...extra]=process.argv.slice(2),count=Number(countText);
 const wasmPath=extra.find(v=>v.startsWith('--wasm='))?.slice(7),hz=Number(extra.find(v=>v.startsWith('--hz='))?.slice(5)??60);

@@ -8,7 +8,7 @@ import {relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createFluidWorker} from './lib/cloth-fluid-client.mjs';
 import {fluidSailMotion} from './lib/cloth-fluid-sail-motion.mjs';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 const args=process.argv.slice(2),inputs=args.filter(v=>v.startsWith('--input=')).map(v=>v.slice(8)),
   expected=args.filter(v=>v.startsWith('--expected=')).map(v=>v.slice(11)),wasm=args.find(v=>v.startsWith('--wasm='))?.slice(7),out=args.find(v=>v.startsWith('--out='))?.slice(6);
 assert(inputs.length===2&&expected.length===2&&wasm&&args.length===(out?6:5));assert(!out||!existsSync(out),'Доказательства нельзя перезаписывать');

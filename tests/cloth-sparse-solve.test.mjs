@@ -1,9 +1,9 @@
 // Независимые положительные матрицы, разреженное заполнение и пакет SIMD.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { sparsePattern, sparseFactor, gridDissection } from './lib/cloth-sparse-solve.mjs';
-import { loadSparseFactor } from './lib/cloth-sparse-wasm.mjs';
-import { borderedBandFactor } from './lib/cloth-linear-solve.mjs';
+import { sparsePattern, sparseFactor, gridDissection } from '../sim/cloth/cloth-sparse-solve.mjs';
+import { loadSparseFactor } from '../sim/cloth/cloth-sparse-wasm.mjs';
+import { borderedBandFactor } from '../sim/cloth/cloth-linear-solve.mjs';
 const wasmArg = process.argv.find(a => a.startsWith('--wasm='));
 if (process.argv.slice(2).some(a => a !== wasmArg) || !wasmArg?.slice(7))
   throw new Error('Нужен --wasm=путь');

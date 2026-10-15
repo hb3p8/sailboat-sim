@@ -1,6 +1,6 @@
 // Обычная сцена и UI; новый генакер не создаёт вторую лодку.
 import {gennakerPose,worldPoint,localPoint,gennakerBodyPack,energyCloth,intermediatePose} from './gennaker-energy.mjs';
-import {rotate3} from '../tests/lib/cloth-fluid-inertia.mjs';
+import {rotate3} from './cloth/cloth-fluid-inertia.mjs';
 import {GennakerMetrics} from './gennaker-metrics.mjs';
 import {gennakerScenario,restoredGennakerScenario} from './gennaker-scenario.mjs';
 import {GENNAKER_SESSION_SCHEMA,SESSION_DERIVED,captureSessionModel,prepareSessionModel,verifySessionSolver,sessionDataEqual} from './gennaker-session.mjs';

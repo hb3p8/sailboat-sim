@@ -1,8 +1,8 @@
 // Независимые работа/инерция многоточечного градиента и известные движения.
 import assert from 'node:assert/strict';
-import { EnergyMotion } from './lib/cloth-energy-motion.mjs';
-import { materialSurface } from './lib/cloth-material.mjs';
-import { distance } from './cloth-compliance.mjs';
+import { EnergyMotion } from '../sim/cloth/cloth-energy-motion.mjs';
+import { materialSurface } from '../sim/cloth/cloth-material.mjs';
+import { distance } from '../sim/cloth/cloth-compliance.mjs';
 
 const close = (a, b, tolerance = 2e-11) => assert.ok(Math.abs(a - b) <= tolerance * Math.max(1, Math.abs(b)), `${a} != ${b}`);
 const board = { head: 0, end: 4, nodes: [0, 1, 2, 3, 4], fractions: [0, .25, .5, .75, 1] };

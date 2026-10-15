@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gridTriangles, materialSurface, MODEL_MATERIAL } from './lib/cloth-material.mjs';
+import { gridTriangles, materialSurface, MODEL_MATERIAL } from '../sim/cloth/cloth-material.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..'), args = process.argv.slice(2);
 if (!args.length || args.some(a => !a.startsWith('--input=') && !a.startsWith('--out='))
@@ -17,7 +17,7 @@ if (!inputs.length || new Set(inputs).size !== inputs.length) throw new Error('�
 const out = args.find(a => a.startsWith('--out='))?.slice(6), outPath = out ? resolve(root, out) : null;
 if (inputs.includes(outPath)) throw new Error('Результат не должен перезаписывать входную запись');
 const hash = value => createHash('sha256').update(value).digest('hex');
-const paths = ['tests/cloth-material-audit.mjs', 'tests/lib/cloth-material.mjs', 'tests/cloth-compliance.mjs'];
+const paths = ['tests/cloth-material-audit.mjs', 'sim/cloth/cloth-material.mjs', 'sim/cloth/cloth-compliance.mjs'];
 const sourceSha256 = Object.fromEntries(paths.map(p => [p, hash(readFileSync(resolve(root, p)))]));
 const results = [], inputSha256 = {};
 for (const path of inputs) {

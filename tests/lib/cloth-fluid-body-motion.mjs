@@ -1,7 +1,7 @@
 // Общий проверочный шаг: декартовы узлы ткани и шесть скоростей тела/воды.
 // Newton решает все реакции внутри шага. Прежние решатели не изменяются.
-import {IMPLICIT_TOLERANCES} from './cloth-implicit-motion.mjs';
-import {finiteArray,checkRotation,cayleyBodyPose,cross3,dotN,rotate3,transpose3,denseSolve} from './cloth-fluid-inertia.mjs';
+import {IMPLICIT_TOLERANCES} from '../../sim/cloth/cloth-implicit-motion.mjs';
+import {finiteArray,checkRotation,cayleyBodyPose,cross3,dotN,rotate3,transpose3,denseSolve} from '../../sim/cloth/cloth-fluid-inertia.mjs';
 import {fluidSchurDirection} from './cloth-fluid-schur-direction.mjs';
 import {bodyRopes,ropeValue} from './cloth-body-rope.mjs';
 const add=(a,b)=>a.map((v,d)=>v+b[d]),sub=(a,b)=>a.map((v,d)=>v-b[d]);

@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gridTriangles, materialSurface, MODEL_MATERIAL } from './lib/cloth-material.mjs';
+import { gridTriangles, materialSurface, MODEL_MATERIAL } from '../sim/cloth/cloth-material.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2), gate = args.includes('--gate');
@@ -16,7 +16,7 @@ if (args.some(a => a !== '--gate' && !a.startsWith('--out=') && !a.startsWith('-
 const bendingModel = args.find(a => a.startsWith('--bending='))?.slice(10) ?? 'curvature';
 if (!['hinge', 'curvature'].includes(bendingModel)) throw new Error('Неизвестная модель изгиба');
 const hash = value => createHash('sha256').update(value).digest('hex');
-const paths = ['tests/cloth-material-refinement.mjs', 'tests/lib/cloth-material.mjs', 'tests/cloth-compliance.mjs'];
+const paths = ['tests/cloth-material-refinement.mjs', 'sim/cloth/cloth-material.mjs', 'sim/cloth/cloth-compliance.mjs'];
 const sourceSha256 = Object.fromEntries(paths.map(p => [p, hash(readFileSync(resolve(root, p)))]));
 const results = [], radiusM = 3, areaM2 = 2;
 // Для изотропного листа: E = B A κ² / 2, κ=1/R. Заранее заданная опора.

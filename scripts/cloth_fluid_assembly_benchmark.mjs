@@ -11,7 +11,7 @@ const root=fileURLToPath(new URL('../',import.meta.url)),output=resolve(out),cop
 assert(!existsSync(output)&&!existsSync(copies),'Нельзя перезаписывать опыт/копии');const sourceSha256={};
 function copy(path){if(sourceSha256[path])return;const b=readFileSync(resolve(root,path));sourceSha256[path]=hash(b);const p=resolve(copies,path);mkdirSync(dirname(p),{recursive:true});writeFileSync(p,b,{flag:'wx'});
  for(const m of b.toString().matchAll(/\b(?:from\s*|import\s*)['"](\.{1,2}\/[^'"]+)['"]/g))copy(relative(root,resolve(root,dirname(path),m[1])));}
-for(const p of ['tests/lib/cloth-fluid-sail-motion.mjs','tests/lib/cloth-sparse-wasm.mjs','tests/probes/cloth-material-wasm.mjs','tests/probes/cloth-material-wasm.c','tests/probes/cloth-material-engine-check.mjs','tests/probes/cloth-assembly-wasm.mjs','tests/probes/cloth-assembly-wasm.c',relative(root,fileURLToPath(import.meta.url))])copy(p);
+for(const p of ['tests/lib/cloth-fluid-sail-motion.mjs','sim/cloth/cloth-sparse-wasm.mjs','sim/cloth/cloth-material-wasm.mjs','tests/probes/cloth-material-wasm.c','sim/cloth/cloth-material-engine-check.mjs','tests/probes/cloth-assembly-wasm.mjs','tests/probes/cloth-assembly-wasm.c',relative(root,fileURLToPath(import.meta.url))])copy(p);
 const direction='tests/lib/cloth-fluid-schur-direction.mjs',original=readFileSync(resolve(root,direction),'utf8');
 const ordinary=`} else for(let k=0;k<soft.length;k++) {
     const {c,g}=soft[k],plan=m.fluidAssembly.soft[k];checkPlan(g,plan);let entry=0;
@@ -37,8 +37,8 @@ assert.equal(new Set(fixtures.map(f=>f.side)).size,2);
 const runner=String.raw`
 import assert from 'node:assert/strict';import {readFileSync,writeFileSync} from 'node:fs';import {pathToFileURL} from 'node:url';import {cpus} from 'node:os';
 const [source,input,assemblyPath,version,out]=process.argv.slice(1),r=JSON.parse(readFileSync(input)),f=r.fixture;
-const {fluidSailMotion}=await import(pathToFileURL(source)),{loadSparseFactor}=await import(new URL('./cloth-sparse-wasm.mjs',pathToFileURL(source))),
-{loadMaterialKernel}=await import(new URL('../probes/cloth-material-wasm.mjs',pathToFileURL(source))),{verifyMaterialKernel}=await import(new URL('../probes/cloth-material-engine-check.mjs',pathToFileURL(source))),
+const {fluidSailMotion}=await import(pathToFileURL(source)),{loadSparseFactor}=await import(new URL('../../sim/cloth/cloth-sparse-wasm.mjs',pathToFileURL(source))),
+{loadMaterialKernel}=await import(new URL('../../sim/cloth/cloth-material-wasm.mjs',pathToFileURL(source))),{verifyMaterialKernel}=await import(new URL('../../sim/cloth/cloth-material-engine-check.mjs',pathToFileURL(source))),
 {loadAssemblyKernel}=await import(new URL('../probes/cloth-assembly-wasm.mjs',pathToFileURL(source)));
 const before=performance.now(),cpuBefore=process.cpuUsage(),factor=await loadSparseFactor(readFileSync(f.wasm.path)),materialKernel=await loadMaterialKernel(readFileSync(f.materialWasm.path));
 assert.deepEqual(verifyMaterialKernel(materialKernel,f.recipe),r.preparation.material.validation);

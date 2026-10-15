@@ -1,8 +1,8 @@
 // Подключение исследовательской энергии к замороженному стенду, не к Boat.
-import { materialSurface, gridTriangles, MODEL_MATERIAL } from './cloth-material.mjs';
-import { EnergyMotion } from './cloth-energy-motion.mjs';
-import { ImplicitEnergyMotion } from './cloth-implicit-motion.mjs';
-import { distance } from '../cloth-compliance.mjs';
+import { materialSurface, gridTriangles, MODEL_MATERIAL } from '../../sim/cloth/cloth-material.mjs';
+import { EnergyMotion } from '../../sim/cloth/cloth-energy-motion.mjs';
+import { ImplicitEnergyMotion } from '../../sim/cloth/cloth-implicit-motion.mjs';
+import { distance } from '../../sim/cloth/cloth-compliance.mjs';
 import { constraintFamily } from './cloth-mechanics.mjs';
 
 export function installEnergyExperiment(cloth, { implicit = false, linearBackend = 'band-js', wasmSparseFactor } = {}) {

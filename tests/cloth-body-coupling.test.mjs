@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {ImplicitEnergyMotion,IMPLICIT_TOLERANCES} from './lib/cloth-implicit-motion.mjs';
-import {EnergyMotion} from './lib/cloth-energy-motion.mjs';
-import {distance} from './cloth-compliance.mjs';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
-import {materialSurface} from './lib/cloth-material.mjs';
+import {ImplicitEnergyMotion,IMPLICIT_TOLERANCES} from '../sim/cloth/cloth-implicit-motion.mjs';
+import {EnergyMotion} from '../sim/cloth/cloth-energy-motion.mjs';
+import {distance} from '../sim/cloth/cloth-compliance.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
+import {materialSurface} from '../sim/cloth/cloth-material.mjs';
 import {browserMotion} from './lib/cloth-browser-motion.mjs';
 const args=process.argv.slice(2),backend=args.find(a=>a.startsWith('--linear-backend='))?.split('=')[1]??'band-js';
 const wasm=args.find(a=>a.startsWith('--wasm='))?.slice(7),output=args.find(a=>a.startsWith('--out='))?.slice(6);
@@ -274,10 +274,10 @@ for(const path of legacyInputs) {
 result.verification={maxBodyResidualN,maxWorkCancellationJ,maxDiscreteBalanceJ,maxEnergyLimitRatio,maxBalanceIdentityErrorJ};
 if(output) {
   const hash=b=>createHash('sha256').update(b).digest('hex');
-  const sourcePaths=['tests/cloth-body-coupling.test.mjs','tests/lib/cloth-energy-motion.mjs',
-    'tests/lib/cloth-implicit-motion.mjs','tests/lib/cloth-linear-solve.mjs','tests/lib/cloth-kkt-direction.mjs',
-    'tests/lib/cloth-sparse-solve.mjs','tests/cloth-compliance.mjs','tests/lib/cloth-sparse-wasm.mjs',
-    'tests/lib/cloth-material.mjs','tests/lib/cloth-browser-motion.mjs','tests/lib/cloth-shared-input.mjs'];
+  const sourcePaths=['tests/cloth-body-coupling.test.mjs','sim/cloth/cloth-energy-motion.mjs',
+    'sim/cloth/cloth-implicit-motion.mjs','sim/cloth/cloth-linear-solve.mjs','sim/cloth/cloth-kkt-direction.mjs',
+    'sim/cloth/cloth-sparse-solve.mjs','sim/cloth/cloth-compliance.mjs','sim/cloth/cloth-sparse-wasm.mjs',
+    'sim/cloth/cloth-material.mjs','tests/lib/cloth-browser-motion.mjs','sim/cloth/cloth-shared-input.mjs'];
   writeFileSync(output,JSON.stringify({schema:1,createdAt:new Date().toISOString(),
     revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
     dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),

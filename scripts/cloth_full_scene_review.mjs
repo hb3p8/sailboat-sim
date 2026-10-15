@@ -1,6 +1,6 @@
 // Ткань Worker в существующей сцене. Лодка и нагрузка неподвижны;
 // координаты полотна не сглаживаются и не дополняются другой анимацией.
-import { gridTriangles } from '../tests/lib/cloth-material.mjs';
+import { gridTriangles } from '../sim/cloth/cloth-material.mjs';
 import { mountClothReview } from './cloth_browser_review.mjs';
 
 const digest = async bytes => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)), b => b.toString(16).padStart(2,'0')).join('');

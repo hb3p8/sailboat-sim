@@ -1,8 +1,8 @@
 // Только измерительный стенд: основная физика Boat не переключается.
 import { browserMotion } from '../tests/lib/cloth-browser-motion.mjs';
-import { loadSparseFactor } from '../tests/lib/cloth-sparse-wasm.mjs';
-import { gridTriangles } from '../tests/lib/cloth-material.mjs';
-import { IMPLICIT_TOLERANCES } from '../tests/lib/cloth-implicit-motion.mjs';
+import { loadSparseFactor } from '../sim/cloth/cloth-sparse-wasm.mjs';
+import { gridTriangles } from '../sim/cloth/cloth-material.mjs';
+import { IMPLICIT_TOLERANCES } from '../sim/cloth/cloth-implicit-motion.mjs';
 import { createMotionWorker } from '../tests/lib/cloth-browser-client.mjs';
 
 const $ = id => document.getElementById(id);

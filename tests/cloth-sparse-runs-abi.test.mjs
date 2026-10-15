@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,mkdirSync,existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
-import {sparsePattern} from './lib/cloth-sparse-solve.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
+import {sparsePattern} from '../sim/cloth/cloth-sparse-solve.mjs';
 const [arg]=process.argv.slice(2);assert(process.argv.length===3&&arg?.startsWith('--out='));const out=arg.slice(6);
 assert(out&&!existsSync(out)&&!existsSync(out+'.cases'));mkdirSync(out+'.cases',{recursive:true});
 const hash=b=>createHash('sha256').update(b).digest('hex'),leb=n=>{const a=[];do{let b=n&127;n>>>=7;if(n)b|=128;a.push(b);}while(n);return a;},
@@ -27,5 +27,5 @@ for(const [label,abi,prepare] of [['нет-версии',undefined,true],['чу�
   cases.push({label,path,sha256:hash(bytes)});
 }
 writeFileSync(out,JSON.stringify({schema:'cloth-sparse-runs-abi-v1',test:{path:fileURLToPath(import.meta.url),sha256:hash(readFileSync(fileURLToPath(import.meta.url)))},
-  loader:{path:'tests/lib/cloth-sparse-wasm.mjs',sha256:hash(readFileSync('tests/lib/cloth-sparse-wasm.mjs'))},cases,phase:'complete'},null,2)+'\n',{flag:'wx'});
+  loader:{path:'sim/cloth/cloth-sparse-wasm.mjs',sha256:hash(readFileSync('sim/cloth/cloth-sparse-wasm.mjs'))},cases,phase:'complete'},null,2)+'\n',{flag:'wx'});
 console.log('ок: три несовместимых ABI участков LDL отклонены до чтения памяти; входы сохранены');

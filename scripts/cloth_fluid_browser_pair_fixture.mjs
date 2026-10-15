@@ -42,12 +42,12 @@ function tool(url){const p=relative(root,fileURLToPath(url));if(manifest.sourceS
   for(const m of b.toString().matchAll(/\b(?:from\s*|import\s*)['"](\.{1,2}\/[^'"]+)['"]/g))tool(new URL(m[1],url));}
 tool(new URL(import.meta.url));tool(new URL('../tests/probes/cloth-fluid-browser-pair-worker.mjs',import.meta.url));tool(new URL('../tests/probes/cloth-fluid-browser-pair-review.html',import.meta.url));
 tool(new URL('./cloth_fluid_browser_pair_report.mjs',import.meta.url));
-const entries=['tests/lib/cloth-fluid-sail-motion.mjs',...(live?['tests/lib/cloth-live-wind-sail-motion.mjs']:[]),'tests/lib/cloth-sparse-wasm.mjs','tests/lib/cloth-worker-timing.mjs','tests/lib/cloth-fluid-timing.mjs',
-  'tests/probes/cloth-material-wasm.mjs','tests/probes/cloth-material-engine-check.mjs','tests/probes/cloth-assembly-wasm.mjs','tests/probes/cloth-assembly-engine-check.mjs'];
+const entries=['tests/lib/cloth-fluid-sail-motion.mjs',...(live?['tests/lib/cloth-live-wind-sail-motion.mjs']:[]),'sim/cloth/cloth-sparse-wasm.mjs','tests/lib/cloth-worker-timing.mjs','tests/lib/cloth-fluid-timing.mjs',
+  'sim/cloth/cloth-material-wasm.mjs','sim/cloth/cloth-material-engine-check.mjs','tests/probes/cloth-assembly-wasm.mjs','tests/probes/cloth-assembly-engine-check.mjs'];
 for(const variant of ['baseline','candidate']){
   const graph={revision:variant==='baseline'?baseRevision:revision,originalSha256:{},sourceSha256:{},instrumented:[]};manifest.graphs[variant]=graph;
   function copy(path){if(graph.sourceSha256[path])return;const original=variant==='baseline'?execFileSync('git',['show',baseRevision+':'+path],{maxBuffer:16*1024*1024}):readFileSync(path);graph.originalSha256[path]=hash(original);
-    let b=original;if(profile&&(['tests/lib/cloth-fluid-schur-direction.mjs','tests/lib/cloth-sparse-wasm.mjs'].includes(path)||(correctionProfile||materialProfile)&&path==='tests/probes/cloth-material-wasm.mjs'||materialProfile&&path==='tests/lib/cloth-fluid-body-motion.mjs')){
+    let b=original;if(profile&&(['tests/lib/cloth-fluid-schur-direction.mjs','sim/cloth/cloth-sparse-wasm.mjs'].includes(path)||(correctionProfile||materialProfile)&&path==='sim/cloth/cloth-material-wasm.mjs'||materialProfile&&path==='tests/lib/cloth-fluid-body-motion.mjs')){
       save(variant+'/'+path+'.original',original);b=Buffer.from(path.includes('schur')?instrumentDirection(original.toString(),{correction:correctionProfile}):path.includes('body-motion')?instrumentReadSoft(original.toString()):path.includes('material')?(materialProfile?instrumentMaterialValues(original.toString()):instrumentMaterialHessian(original.toString())):instrumentSparse(original.toString()));graph.instrumented.push(path);}
     graph.sourceSha256[path]=save(variant+'/'+path,b);
     for(const m of original.toString().matchAll(/\b(?:from\s*|import\s*)['"](\.{1,2}\/[^'"]+)['"]/g))copy(relative(root,resolve(root,dirname(path),m[1])));}

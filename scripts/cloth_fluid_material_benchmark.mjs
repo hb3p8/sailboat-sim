@@ -29,7 +29,7 @@ function copyModule(path) {
   imports(current).forEach(copyModule);
 }
 copyModule('scripts/cloth_fluid_sail_fixture.mjs');
-const allowed=['tests/lib/cloth-fluid-body-motion.mjs','tests/lib/cloth-fluid-schur-direction.mjs','tests/lib/cloth-material.mjs'];
+const allowed=['tests/lib/cloth-fluid-body-motion.mjs','tests/lib/cloth-fluid-schur-direction.mjs','sim/cloth/cloth-material.mjs'];
 assert(changed.length>0&&changed.every(p=>allowed.includes(p)),
   'Сравнение ограничено материалом и его чтением в общем остатке/направлении');
 const input='out/acceptance/rigid-sail-60321b9-plus-five.json',wasm='out/acceptance/cloth-sparse-20261002-simd.wasm';

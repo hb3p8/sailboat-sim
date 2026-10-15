@@ -9,11 +9,11 @@ import {fileURLToPath} from 'node:url';
 import {cpus} from 'node:os';
 import {Boat} from '../sim/physics.js';
 import {Cloth} from '../sim/cloth.js';
-import {installSharedInput,integrateDensity} from '../tests/lib/cloth-shared-input.mjs';
+import {installSharedInput,integrateDensity} from '../sim/cloth/cloth-shared-input.mjs';
 import {constraintFamily} from '../tests/lib/cloth-mechanics.mjs';
 import {browserMotion} from '../tests/lib/cloth-browser-motion.mjs';
 import {fluidSailMotion} from '../tests/lib/cloth-fluid-sail-motion.mjs';
-import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 import {surfaceTurns} from '../tests/lib/cloth-surface-turns.mjs';
 import {commonNodeDistances} from '../tests/cloth-motion-refinement.mjs';
 

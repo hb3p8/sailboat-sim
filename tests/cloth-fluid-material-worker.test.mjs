@@ -8,8 +8,8 @@ import {relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createFluidWorker} from './lib/cloth-fluid-client.mjs';
 import {fluidWorkerHandler} from './lib/cloth-fluid-worker.mjs';
-import {loadMaterialKernel} from './probes/cloth-material-wasm.mjs';
-import {verifyMaterialKernel} from './probes/cloth-material-engine-check.mjs';
+import {loadMaterialKernel} from '../sim/cloth/cloth-material-wasm.mjs';
+import {verifyMaterialKernel} from '../sim/cloth/cloth-material-engine-check.mjs';
 const args=process.argv.slice(2),inputs=args.filter(v=>v.startsWith('--input=')).map(v=>v.slice(8)),
  wasm=args.find(v=>v.startsWith('--wasm='))?.slice(7),materialWasm=args.find(v=>v.startsWith('--material-wasm='))?.slice(16),out=args.find(v=>v.startsWith('--out='))?.slice(6);
 assert(inputs.length===2&&wasm&&materialWasm&&out&&args.length===5&&args.every(v=>/^--(input|wasm|material-wasm|out)=.+$/.test(v))&&!existsSync(out));

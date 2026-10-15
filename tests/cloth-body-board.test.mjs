@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {ImplicitEnergyMotion,IMPLICIT_TOLERANCES} from './lib/cloth-implicit-motion.mjs';
-import {distance} from './cloth-compliance.mjs';
-import {materialSurface} from './lib/cloth-material.mjs';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
+import {ImplicitEnergyMotion,IMPLICIT_TOLERANCES} from '../sim/cloth/cloth-implicit-motion.mjs';
+import {distance} from '../sim/cloth/cloth-compliance.mjs';
+import {materialSurface} from '../sim/cloth/cloth-material.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 
 const args=process.argv.slice(2),backend=args.find(a=>a.startsWith('--linear-backend='))?.slice(17)??'band-js';
 const wasm=args.find(a=>a.startsWith('--wasm='))?.slice(7),output=args.find(a=>a.startsWith('--out='))?.slice(6);
@@ -225,9 +225,9 @@ assert.throws(()=>make(positions([0,0,0],add(offset,[2,0,0])),[],{board:{...boar
 result.verification=maxima;
 if(output) {
   const hash=b=>createHash('sha256').update(b).digest('hex');
-  const paths=['tests/cloth-body-board.test.mjs','tests/lib/cloth-energy-motion.mjs','tests/lib/cloth-implicit-motion.mjs',
-    'tests/lib/cloth-linear-solve.mjs','tests/lib/cloth-kkt-direction.mjs','tests/lib/cloth-sparse-solve.mjs',
-    'tests/lib/cloth-sparse-wasm.mjs','tests/cloth-compliance.mjs','tests/lib/cloth-material.mjs'];
+  const paths=['tests/cloth-body-board.test.mjs','sim/cloth/cloth-energy-motion.mjs','sim/cloth/cloth-implicit-motion.mjs',
+    'sim/cloth/cloth-linear-solve.mjs','sim/cloth/cloth-kkt-direction.mjs','sim/cloth/cloth-sparse-solve.mjs',
+    'sim/cloth/cloth-sparse-wasm.mjs','sim/cloth/cloth-compliance.mjs','sim/cloth/cloth-material.mjs'];
   writeFileSync(output,JSON.stringify({schema:1,createdAt:new Date().toISOString(),
     revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
     dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),

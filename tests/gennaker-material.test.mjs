@@ -6,8 +6,8 @@ import {once} from 'node:events';
 import {Boat} from '../sim/physics.js';
 import {gennakerPose} from '../sim/gennaker-energy.mjs';
 import {selectGennakerMaterial} from '../sim/gennaker-material.mjs';
-import {loadMaterialKernel,MaterialEngineMismatchError} from './probes/cloth-material-wasm.mjs';
-import {verifyMaterialKernel} from './probes/cloth-material-engine-check.mjs';
+import {loadMaterialKernel,MaterialEngineMismatchError} from '../sim/cloth/cloth-material-wasm.mjs';
+import {verifyMaterialKernel} from '../sim/cloth/cloth-material-engine-check.mjs';
 const bytes=readFileSync('out/acceptance/cloth-material-20261005-probe-v3.wasm'),
   recipe=JSON.parse(readFileSync('out/acceptance/fluid-live-main-20261010-plus.json')).recipe;
 const native=await selectGennakerMaterial(bytes,recipe);

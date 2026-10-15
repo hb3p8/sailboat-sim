@@ -40,7 +40,7 @@ writeFileSync(resolve(folder,'stdout.txt'),output,{flag:'wx'});
 const line=output.split('\n').find(v=>v.startsWith('SV20_ENGINE_REPORT='));
 const result=line?JSON.parse(line.slice('SV20_ENGINE_REPORT='.length)):{phase:'failed',failure:{message:executionFailure??'Нет отчёта движка'}};
 const paths=[test,'scripts/gennaker_engine_check.mjs','sim/gennaker-energy.mjs','sim/gennaker-material.mjs',
-  'tests/probes/cloth-material-wasm.mjs','tests/probes/cloth-material-engine-check.mjs','sim/physics.js',
+  'sim/cloth/cloth-material-wasm.mjs','sim/cloth/cloth-material-engine-check.mjs','sim/physics.js',
   'out/export/physics.json','out/acceptance/cloth-sparse-20261002-simd.wasm','out/acceptance/cloth-material-20261005-probe-v3.wasm',
   ...['plus','minus'].map(side=>`out/acceptance/fluid-live-main-20261010-${side}.json`)];
 const report={schema:'gennaker-engine-check-v1',model:'boat-prescribed-energy-v1',

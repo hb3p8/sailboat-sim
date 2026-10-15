@@ -1,7 +1,7 @@
 // Живой лабораторный режим общей ткани/опоры. Вид читает принятый шаг Worker.
 import {createFluidWorker} from '../tests/lib/cloth-fluid-client.mjs';
-import {gridTriangles} from '../tests/lib/cloth-material.mjs';
-import {rotate3,transpose3} from '../tests/lib/cloth-fluid-inertia.mjs';
+import {gridTriangles} from '../sim/cloth/cloth-material.mjs';
+import {rotate3,transpose3} from '../sim/cloth/cloth-fluid-inertia.mjs';
 import {bodyPointLocalX,bodyPointLocalY,bodyPointLocalZ,bodyPoseSceneMatrix,rudderRotY} from '../sim/axes.js';
 import {liveWindCycleControls,sv20WindCycleControls} from '../tests/lib/cloth-live-wind-controls.mjs';
 import {sv20BodyAngles} from '../tests/lib/cloth-sv20-water.mjs';

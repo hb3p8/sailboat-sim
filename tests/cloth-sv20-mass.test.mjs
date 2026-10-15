@@ -2,8 +2,8 @@
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
-import {sv20SailMass,shiftAddedInertia} from './lib/cloth-sv20-mass.mjs';
-import {fluidInertia,cross3,dotN,rotate3,product3,transpose3,matrixVector} from './lib/cloth-fluid-inertia.mjs';
+import {sv20SailMass,shiftAddedInertia} from '../sim/cloth/cloth-sv20-mass.mjs';
+import {fluidInertia,cross3,dotN,rotate3,product3,transpose3,matrixVector} from '../sim/cloth/cloth-fluid-inertia.mjs';
 import {boatBodyRotation} from '../sim/axes.js';
 import {FluidBodyEnergyMotion} from './lib/cloth-fluid-body-motion.mjs';
 const [out]=process.argv.slice(2);assert(out&&process.argv.length===3&&!existsSync(out));
@@ -48,6 +48,6 @@ for(const side of ['plus','minus']) {
 }
 assert.deepEqual(results[0].audit,results[1].audit);
 writeFileSync(out,JSON.stringify({schema:'cloth-sv20-mass-check-v1',phase:'complete',physicsSha256:hash(packBytes),
-  sources:Object.fromEntries(['tests/cloth-sv20-mass.test.mjs','tests/lib/cloth-sv20-mass.mjs','tests/lib/cloth-fluid-inertia.mjs'].map(p=>[p,hash(readFileSync(p))])),
+  sources:Object.fromEntries(['tests/cloth-sv20-mass.test.mjs','sim/cloth/cloth-sv20-mass.mjs','sim/cloth/cloth-fluid-inertia.mjs'].map(p=>[p,hash(readFileSync(p))])),
   tensorSteps:30,results,scope:'Принят учёт назначенной массы/энергии и двух зеркал, не измеренная доля генакера в рангоуте или гидросилы.'},null,2)+'\n',{flag:'wx'});
 console.log('Бюджет SV20: оба борта, масса/ЦТ/полная инерция, энергия переноса воды и 30 общих шагов — пройдены.');

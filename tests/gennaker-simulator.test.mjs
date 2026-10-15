@@ -6,8 +6,8 @@ import {execFileSync} from 'node:child_process';
 import {Boat} from '../sim/physics.js';
 import {applyDump} from '../sim/trace.js';
 import {energyCloth,prescribedGennaker,gennakerPose,intermediatePose,gennakerBodyPack,localPoint,worldPoint} from '../sim/gennaker-energy.mjs';
-import {rotate3} from './lib/cloth-fluid-inertia.mjs';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
+import {rotate3} from '../sim/cloth/cloth-fluid-inertia.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 import {selectGennakerMaterial} from '../sim/gennaker-material.mjs';
 const pack=JSON.parse(readFileSync('out/export/physics.json'));
 const factor=await loadSparseFactor(readFileSync('out/acceptance/cloth-sparse-20261002-simd.wasm'));
@@ -87,4 +87,4 @@ for(const side of ['plus','minus'])for(const wind of [4,6])for(const course of (
   console.log(`Борт ${side==='plus'?'+':'−'}, ${course==='broad'?'полный курс':'более острый курс'}, ветер ${wind}: ${count} шагов, ${result.wallMs.toFixed(0)} мс; сила ${maxForce}, длина ${maxLength}`);
 }
 if(out)writeFileSync(out,JSON.stringify({schema:'gennaker-simulator-check-v1',phase:'complete',model:'boat-prescribed-energy-v1',material:selected.material,revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),
-  sources:Object.fromEntries(['sim/gennaker-energy.mjs','sim/gennaker-live.mjs','sim/gennaker-energy-worker.mjs','sim/gennaker-material.mjs','tests/probes/cloth-material-wasm.mjs','tests/probes/cloth-material-engine-check.mjs','sim/physics.js','tests/gennaker-simulator.test.mjs'].map(p=>[p,createHash('sha256').update(readFileSync(p)).digest('hex')])),results},null,2)+'\n',{flag:'wx'});
+  sources:Object.fromEntries(['sim/gennaker-energy.mjs','sim/gennaker-live.mjs','sim/gennaker-energy-worker.mjs','sim/gennaker-material.mjs','sim/cloth/cloth-material-wasm.mjs','sim/cloth/cloth-material-engine-check.mjs','sim/physics.js','tests/gennaker-simulator.test.mjs'].map(p=>[p,createHash('sha256').update(readFileSync(p)).digest('hex')])),results},null,2)+'\n',{flag:'wx'});

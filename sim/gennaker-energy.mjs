@@ -1,11 +1,11 @@
 // Новая энергия ткани на заданных креплениях обычного Boat.
 // Это последовательная связь двух моделей, не общий неявный шаг тела и ткани.
 import {Cloth} from './cloth.js';
-import {ImplicitEnergyMotion} from '../tests/lib/cloth-implicit-motion.mjs';
-import {materialSurface,gridTriangles,MODEL_MATERIAL} from '../tests/lib/cloth-material.mjs';
-import {distance} from '../tests/cloth-compliance.mjs';
-import {sv20SailMass} from '../tests/lib/cloth-sv20-mass.mjs';
-import {rotate3,transpose3,cross3} from '../tests/lib/cloth-fluid-inertia.mjs';
+import {ImplicitEnergyMotion} from './cloth/cloth-implicit-motion.mjs';
+import {materialSurface,gridTriangles,MODEL_MATERIAL} from './cloth/cloth-material.mjs';
+import {distance} from './cloth/cloth-compliance.mjs';
+import {sv20SailMass} from './cloth/cloth-sv20-mass.mjs';
+import {rotate3,transpose3,cross3} from './cloth/cloth-fluid-inertia.mjs';
 import {boatBodyRotation} from './axes.js';
 
 export function gennakerPose(b) {

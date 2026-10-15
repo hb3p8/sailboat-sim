@@ -1,7 +1,7 @@
 // Модельная 3D-поверхность с заранее заданной кривизной и вертикальной
 // нагрузкой. Это контроль совместимости связей, не крой генакера SV20.
 import { area3d, dihedral, dihedralAngle, distance, shear,
-  solveConstraint } from './cloth-compliance.mjs';
+  solveConstraint } from '../sim/cloth/cloth-compliance.mjs';
 
 const opt = (name, fallback) => process.argv.find(s => s.startsWith(`--${name}=`))?.split('=')[1] ?? fallback;
 const n = Number(opt('n', '5'));

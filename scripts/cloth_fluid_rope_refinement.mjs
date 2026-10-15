@@ -6,7 +6,7 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {rotate3,transpose3} from '../tests/lib/cloth-fluid-inertia.mjs';
+import {rotate3,transpose3} from '../sim/cloth/cloth-fluid-inertia.mjs';
 const args=process.argv.slice(2),inputs=args.filter(v=>v.startsWith('--input=')).map(v=>v.slice(8)),output=args.find(v=>v.startsWith('--out='))?.slice(6);
 assert(inputs.length===6&&output&&args.length===7,'Нужны шесть --input и новый --out');
 assert(!existsSync(output),'Отчёт нельзя перезаписывать');
@@ -24,7 +24,7 @@ const hash=b=>createHash('sha256').update(b).digest('hex'),records=inputs.map(pa
   return {path,sha256:hash(bytes),r};
 });
 const first=records[0].r;
-const helper='tests/lib/cloth-fluid-inertia.mjs';assert.equal(hash(readFileSync(helper)),first.sourceSha256[helper]);
+const helper='sim/cloth/cloth-fluid-inertia.mjs';assert.equal(hash(readFileSync(helper)),first.sourceSha256[helper]);
 for(const {r} of records) {
   assert.deepEqual(r.sourceSha256,first.sourceSha256);assert.deepEqual(r.parameters.material,first.parameters.material);
   assert.deepEqual(r.parameters.bodyInput,first.parameters.bodyInput);assert.deepEqual(r.parameters.addedMass6,first.parameters.addedMass6);

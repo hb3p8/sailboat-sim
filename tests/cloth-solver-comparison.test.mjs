@@ -1,7 +1,7 @@
 // Независимый контроль измерителя; его пределы не принимают физическую модель.
 import assert from 'node:assert/strict';
 import { compareResults } from './cloth-solver-comparison.mjs';
-import { IMPLICIT_TOLERANCES } from './lib/cloth-implicit-motion.mjs';
+import { IMPLICIT_TOLERANCES } from '../sim/cloth/cloth-implicit-motion.mjs';
 const energy = { parameters: { K: 1000 }, softEnergyJ: 2, solver: { ...IMPLICIT_TOLERANCES,
   converged: true, maxForceResidualN: 1e-7, maxHardViolationM: 1e-12, complementarityJ: 1e-10 },
   totals: { maxPhysicalResidualN: 2e-7, maxHardViolationM: 1e-12, appliedWorkJ: 3 } };

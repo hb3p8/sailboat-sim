@@ -1,5 +1,5 @@
 // Строгая проверка арифметики сборки в исполняющем движке до живого шага.
-import {materialSurface,gridTriangles,MODEL_MATERIAL} from '../lib/cloth-material.mjs';
+import {materialSurface,gridTriangles,MODEL_MATERIAL} from '../../sim/cloth/cloth-material.mjs';
 import {gradientLayout,gradientValues} from '../lib/cloth-gradient-layout.mjs';
 export function verifyAssemblyKernel(kernel,recipe) {
   if(recipe.rows!==11||recipe.cols!==9||recipe.reference?.length!==297||recipe.positions?.length<297)

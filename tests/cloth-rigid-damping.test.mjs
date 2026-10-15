@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {writeFileSync,readFileSync,existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {FluidBodyEnergyMotion} from './lib/cloth-fluid-body-motion.mjs';
-import {fluidInertia,rotate3} from './lib/cloth-fluid-inertia.mjs';
+import {fluidInertia,rotate3} from '../sim/cloth/cloth-fluid-inertia.mjs';
 import {boatBodyRotation} from '../sim/axes.js';
 const [out]=process.argv.slice(2);assert(out&&process.argv.length===3&&!existsSync(out));
 const cases=[];

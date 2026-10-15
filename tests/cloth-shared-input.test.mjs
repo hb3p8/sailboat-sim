@@ -1,6 +1,6 @@
 // Независимые интегралы силы, момента и виртуальной работы заданного поля.
 import assert from 'node:assert/strict';
-import { densityFromNodalIntegrals, integrateDensity, installSharedInput } from './lib/cloth-shared-input.mjs';
+import { densityFromNodalIntegrals, integrateDensity, installSharedInput } from '../sim/cloth/cloth-shared-input.mjs';
 import { wrenchOf } from './lib/gennaker-observables.mjs';
 
 const close = (a,b,tolerance=2e-12) => assert.ok(Math.abs(a-b) <= tolerance, `${a} ≠ ${b}`);

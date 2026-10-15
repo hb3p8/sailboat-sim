@@ -5,10 +5,10 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { Boat } from '../sim/physics.js';
 import { Cloth } from '../sim/cloth.js';
-import { installSharedInput, sharedInputFromCloth } from '../tests/lib/cloth-shared-input.mjs';
+import { installSharedInput, sharedInputFromCloth } from '../sim/cloth/cloth-shared-input.mjs';
 import { installEnergyExperiment } from '../tests/lib/cloth-energy-experiment.mjs';
 import { constraintFamily } from '../tests/lib/cloth-mechanics.mjs';
-import { loadSparseFactor } from '../tests/lib/cloth-sparse-wasm.mjs';
+import { loadSparseFactor } from '../sim/cloth/cloth-sparse-wasm.mjs';
 import { browserMotion } from '../tests/lib/cloth-browser-motion.mjs';
 
 const hash = x => createHash('sha256').update(x).digest('hex');
@@ -40,7 +40,7 @@ const browserGuard = s => s.replace("import { pathToFileURL } from 'node:url';\n
   .replace("// Командные примеры доступны в Node; сами ограничения работают и в браузере.\nif (typeof process !== 'undefined' && process.argv[1] &&\n    import.meta.url === (await import('node:url')).pathToFileURL(process.argv[1]).href) {", '');
 for (const [path, sha] of Object.entries(original.sourceSha256)) {
   const bytes = readFileSync(path);
-  if (path === 'tests/cloth-compliance.mjs') {
+  if (path === 'sim/cloth/cloth-compliance.mjs') {
     const prior = execFileSync('git', ['show', `${original.revision}:${path}`], { encoding: 'utf8' });
     assert.equal(hash(prior), sha); assert.equal(browserGuard(bytes.toString()), browserGuard(prior));
   } else assert.equal(hash(bytes), sha, `Изменился исходник ${path}`);

@@ -19,8 +19,8 @@ self.addEventListener('message',async({data})=>{
     const bytes={};for(const name of ['linear','material','assembly'])bytes[name]=await fetchProbe(f.modules[name]);
     const api={};for(const v of ['baseline','candidate']){
       const url=new URL(v+'/tests/lib/cloth-fluid-sail-motion.mjs',graphRoot);
-      api[v]={...await import(url),...await import(new URL('./cloth-sparse-wasm.mjs',url)),...await import(new URL('./cloth-worker-timing.mjs',url)),...await import(new URL('./cloth-fluid-timing.mjs',url)),
-        ...await import(new URL('../probes/cloth-material-wasm.mjs',url)),...await import(new URL('../probes/cloth-material-engine-check.mjs',url)),
+      api[v]={...await import(url),...await import(new URL('../../sim/cloth/cloth-sparse-wasm.mjs',url)),...await import(new URL('./cloth-worker-timing.mjs',url)),...await import(new URL('./cloth-fluid-timing.mjs',url)),
+        ...await import(new URL('../../sim/cloth/cloth-material-wasm.mjs',url)),...await import(new URL('../../sim/cloth/cloth-material-engine-check.mjs',url)),
         ...await import(new URL('../probes/cloth-assembly-wasm.mjs',url)),...await import(new URL('../probes/cloth-assembly-engine-check.mjs',url)),
         ...(f.liveWind?await import(new URL('./cloth-live-wind-sail-motion.mjs',url)):{}),
         ...(f.profile?await import(new URL('./cloth-fluid-schur-direction.mjs',url)):{}),

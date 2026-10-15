@@ -18,7 +18,7 @@ assert.deepEqual(Object.keys(f.graphs.baseline.originalSha256).sort(),Object.key
 assert.deepEqual(f.changedSources,Object.entries(f.graphs.baseline.originalSha256).filter(([p,h])=>f.graphs.candidate.originalSha256[p]!==h).map(([p])=>p));
 const correctionProfile=f.correctionProfile??false;assert.equal(typeof correctionProfile,'boolean');assert.equal(Boolean(r.correctionProfile),correctionProfile);assert(!correctionProfile||f.profile);
 const materialProfile=f.materialProfile??false;assert.equal(typeof materialProfile,'boolean');assert.equal(Boolean(r.materialProfile),materialProfile);assert(!materialProfile||f.profile&&!correctionProfile);
-for(const g of Object.values(f.graphs))assert.deepEqual(g.instrumented,f.profile?[...(materialProfile?['tests/lib/cloth-fluid-body-motion.mjs']:[]),'tests/lib/cloth-fluid-schur-direction.mjs','tests/lib/cloth-sparse-wasm.mjs',...(correctionProfile||materialProfile?['tests/probes/cloth-material-wasm.mjs']:[])]:[]);
+for(const g of Object.values(f.graphs))assert.deepEqual(g.instrumented,f.profile?[...(materialProfile?['tests/lib/cloth-fluid-body-motion.mjs']:[]),'tests/lib/cloth-fluid-schur-direction.mjs','sim/cloth/cloth-sparse-wasm.mjs',...(correctionProfile||materialProfile?['sim/cloth/cloth-material-wasm.mjs']:[])]:[]);
 for(const [p,h] of Object.entries(f.sourceSha256)){assert.equal(hash(readFileSync(resolve(copies,p))),h);assert.equal(hash(execFileSync('git',['show',f.revision+':'+p],{maxBuffer:16*1024*1024})),h);}
 for(const [v,g] of Object.entries(f.graphs))for(const [p,h] of Object.entries(g.originalSha256)){
   const original=execFileSync('git',['show',g.revision+':'+p],{maxBuffer:16*1024*1024});assert.equal(hash(original),h);let expected=original;

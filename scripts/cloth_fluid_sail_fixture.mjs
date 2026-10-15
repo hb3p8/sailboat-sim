@@ -8,7 +8,7 @@ import {relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {cpus} from 'node:os';
 import {fluidSailMotion} from '../tests/lib/cloth-fluid-sail-motion.mjs';
-import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 
 const [input,output,countText='1',...extra]=process.argv.slice(2),count=Number(countText);
 assert(input&&output&&Number.isInteger(count)&&count>=1&&count<=1800&&

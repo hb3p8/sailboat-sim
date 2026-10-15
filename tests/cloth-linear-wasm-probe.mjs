@@ -4,7 +4,7 @@ import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {resolve,dirname} from 'node:path';
-import {bandFactor} from './lib/cloth-linear-solve.mjs';
+import {bandFactor} from '../sim/cloth/cloth-linear-solve.mjs';
 import {loadBandFactor} from './probes/cloth-linear-wasm.mjs';
 
 const args=process.argv.slice(2);
@@ -49,7 +49,7 @@ const median=values=>values.toSorted((a,b)=>a-b)[Math.floor(values.length/2)];
 const warmed=variants.map(([name])=>({name,medianMs:median(stats.filter(s=>s.pass && s.name===name).map(s=>s.factorMs+s.solveMs))}));
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const sources=['tests/probes/cloth-linear-wasm.c','tests/probes/cloth-linear-wasm.mjs',
-  'tests/cloth-linear-wasm-probe.mjs','tests/lib/cloth-linear-solve.mjs'];
+  'tests/cloth-linear-wasm-probe.mjs','sim/cloth/cloth-linear-solve.mjs'];
 const result={schema:1,createdAt:new Date().toISOString(),
   revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
   dirty:!!execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim(),

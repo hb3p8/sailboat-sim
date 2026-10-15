@@ -10,7 +10,7 @@ import {gennakerScenario} from '../sim/gennaker-scenario.mjs';
 import {startGennakerSimulator} from '../sim/gennaker-live.mjs';
 import {prescribedGennaker,gennakerPose} from '../sim/gennaker-energy.mjs';
 import {Boat} from '../sim/physics.js';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 let time=0;const clock=new GennakerMetrics({now:()=>time,profile:true});
 time=100;clock.state('running');time=1100;clock.accepted(.5);
 assert.equal(clock.snapshot().tempo,.5);assert.equal(clock.snapshot().lagS,.5);

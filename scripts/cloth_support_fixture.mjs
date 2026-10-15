@@ -5,8 +5,8 @@ import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {browserMotion} from '../tests/lib/cloth-browser-motion.mjs';
-import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
-import {IMPLICIT_TOLERANCES} from '../tests/lib/cloth-implicit-motion.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
+import {IMPLICIT_TOLERANCES} from '../sim/cloth/cloth-implicit-motion.mjs';
 import {supportBalance} from '../tests/lib/cloth-support-balance.mjs';
 
 const args=process.argv.slice(2);

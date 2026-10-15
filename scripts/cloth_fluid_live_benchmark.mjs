@@ -32,15 +32,15 @@ copyModule('tests/lib/cloth-fluid-sail-motion.mjs');
 const live=inputs.some(p=>JSON.parse(readFileSync(p)).fixture.liveWind);
 if(live)copyModule('tests/lib/cloth-live-wind-sail-motion.mjs');
 // Загрузчик вызывается динамически в дочернем повторе, вне графа фабрики.
-copyModule('tests/lib/cloth-sparse-wasm.mjs');
+copyModule('sim/cloth/cloth-sparse-wasm.mjs');
 copyModule('tests/lib/cloth-sparse-kernel.c');
 // Сам измеритель не входит в сравниваемый граф физики, но остаётся в записи.
 mkdirSync(copies,{recursive:true});
 writeFileSync(resolve(copies,'benchmark-tool.mjs'),readFileSync(fileURLToPath(import.meta.url)),{flag:'wx'});
-for(const path of ['tests/probes/cloth-material-wasm.mjs','tests/probes/cloth-material-engine-check.mjs',
+for(const path of ['sim/cloth/cloth-material-wasm.mjs','sim/cloth/cloth-material-engine-check.mjs',
   'tests/probes/cloth-assembly-wasm.mjs','tests/probes/cloth-assembly-engine-check.mjs'])copyModule(path);
 assert((changed.length>0||candidateWasm)&&changed.every(p=>['tests/lib/cloth-fluid-schur-direction.mjs','tests/lib/cloth-fluid-body-motion.mjs',
-  'tests/lib/cloth-material.mjs','tests/lib/cloth-sparse-wasm.mjs','tests/lib/cloth-fluid-inertia.mjs','tests/probes/cloth-assembly-wasm.mjs'].includes(p)),
+  'sim/cloth/cloth-material.mjs','sim/cloth/cloth-sparse-wasm.mjs','sim/cloth/cloth-fluid-inertia.mjs','tests/probes/cloth-assembly-wasm.mjs'].includes(p)),
   'Опыт ограничен материалом, направлением, малыми матричными операциями и оболочкой общего расчёта');
 const linearCandidate=candidateWasm?{path:candidateWasm,sha256:hash(readFileSync(candidateWasm))}:undefined;
 const fixtures=inputs.map(path=>{
@@ -68,9 +68,9 @@ const runner=String.raw`
 import assert from 'node:assert/strict';import {readFileSync,writeFileSync} from 'node:fs';import {pathToFileURL} from 'node:url';import {cpus} from 'node:os';
 const [modulePath,input,output,linearPath]=process.argv.slice(1),r=JSON.parse(readFileSync(input)),f=r.fixture;
 const {fluidSailMotion}=await import(pathToFileURL(modulePath));
-const {loadSparseFactor}=await import(new URL('./cloth-sparse-wasm.mjs',pathToFileURL(modulePath)));
-const {loadMaterialKernel}=await import(new URL('../probes/cloth-material-wasm.mjs',pathToFileURL(modulePath))),
-{verifyMaterialKernel}=await import(new URL('../probes/cloth-material-engine-check.mjs',pathToFileURL(modulePath))),
+const {loadSparseFactor}=await import(new URL('../../sim/cloth/cloth-sparse-wasm.mjs',pathToFileURL(modulePath)));
+const {loadMaterialKernel}=await import(new URL('../../sim/cloth/cloth-material-wasm.mjs',pathToFileURL(modulePath))),
+{verifyMaterialKernel}=await import(new URL('../../sim/cloth/cloth-material-engine-check.mjs',pathToFileURL(modulePath))),
 {loadAssemblyKernel}=await import(new URL('../probes/cloth-assembly-wasm.mjs',pathToFileURL(modulePath))),
 {verifyAssemblyKernel}=await import(new URL('../probes/cloth-assembly-engine-check.mjs',pathToFileURL(modulePath)));
 const linearBytes=readFileSync(linearPath),{createHash}=await import('node:crypto'),

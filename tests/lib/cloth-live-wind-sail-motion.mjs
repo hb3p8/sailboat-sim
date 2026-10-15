@@ -1,6 +1,6 @@
 // Общий шаг с пересчитываемым ветром; профиль SV20 включает массу и воду.
 import {fluidSailMotion} from './cloth-fluid-sail-motion.mjs';
-import {integrateDensity} from './cloth-shared-input.mjs';
+import {integrateDensity} from '../../sim/cloth/cloth-shared-input.mjs';
 import {createClothLiveWind} from './cloth-live-wind.mjs';
 import {createSV20Water} from './cloth-sv20-water.mjs';
 import {rudderAngleAfter} from '../../sim/rudder.js';

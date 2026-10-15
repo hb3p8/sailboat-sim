@@ -4,15 +4,15 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {loadMaterialKernel} from './probes/cloth-material-wasm.mjs';
-import {materialSurface,gridTriangles,MODEL_MATERIAL} from './lib/cloth-material.mjs';
+import {loadMaterialKernel} from '../sim/cloth/cloth-material-wasm.mjs';
+import {materialSurface,gridTriangles,MODEL_MATERIAL} from '../sim/cloth/cloth-material.mjs';
 const args=process.argv.slice(2),wasm=args.find(v=>v.startsWith('--wasm='))?.slice(7),out=args.find(v=>v.startsWith('--out='))?.slice(6);
 assert(wasm&&args.length===(out?2:1)&&args.every(v=>/^--(wasm|out)=.+$/.test(v)));
 const bytes=readFileSync(wasm),kernel=await loadMaterialKernel(bytes),hash=b=>createHash('sha256').update(b).digest('hex');
 await assert.rejects(loadMaterialKernel(Uint8Array.from([0,97,115,109,1,0,0,0])),/Несовместимая/);
 const report={schema:'cloth-material-wasm-check-v1',revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
  dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),runtime:process.version,v8:process.versions.v8,
- wasm:{path:wasm,sha256:hash(bytes)},sourceSha256:Object.fromEntries(['tests/cloth-material-wasm.test.mjs','tests/probes/cloth-material-wasm.c','tests/probes/cloth-material-wasm.mjs','tests/lib/cloth-material.mjs','tests/cloth-compliance.mjs'].map(p=>[p,hash(readFileSync(p))])),
+ wasm:{path:wasm,sha256:hash(bytes)},sourceSha256:Object.fromEntries(['tests/cloth-material-wasm.test.mjs','tests/probes/cloth-material-wasm.c','sim/cloth/cloth-material-wasm.mjs','sim/cloth/cloth-material.mjs','sim/cloth/cloth-compliance.mjs'].map(p=>[p,hash(readFileSync(p))])),
  values:0,gradientComponents:0,hessianComponents:0,hypotCases:0,rejected:1};
 process.once('uncaughtException',e=>{report.phase='failed';report.failure={message:e.message,stack:e.stack};if(out)writeFileSync(out,JSON.stringify(report,null,2)+'\n',{flag:'wx'});console.error('Проверка материала WASM остановлена: '+e.message);process.exitCode=1;});
 for(let i=0;i<2048;i++) {

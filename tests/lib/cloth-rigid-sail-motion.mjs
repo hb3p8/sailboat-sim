@@ -1,9 +1,9 @@
 // Полный парус на известном свободном теле. Поле задано в неподвижных
 // лабораторных осях: это замороженная нагрузка, не живой расчёт воздуха.
-import {materialSurface,gridTriangles,MODEL_MATERIAL} from './cloth-material.mjs';
+import {materialSurface,gridTriangles,MODEL_MATERIAL} from '../../sim/cloth/cloth-material.mjs';
 import {RigidBodyEnergyMotion} from './cloth-rigid-body-motion.mjs';
-import {distance} from '../cloth-compliance.mjs';
-import {installSharedInput} from './cloth-shared-input.mjs';
+import {distance} from '../../sim/cloth/cloth-compliance.mjs';
+import {installSharedInput} from '../../sim/cloth/cloth-shared-input.mjs';
 
 export function rigidSailMotion(recipe,wasmSparseFactor) {
   const {rows,cols,reference,positions,previous,mass,board,hard,field,boat,rigidBody}=recipe;

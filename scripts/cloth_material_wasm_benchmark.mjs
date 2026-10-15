@@ -17,7 +17,7 @@ function copy(path) {
  const target=resolve(copies,path);mkdirSync(dirname(target),{recursive:true});writeFileSync(target,b,{flag:'wx'});
  for(const m of b.toString().matchAll(/\b(?:from\s*|import\s*)['"](\.{1,2}\/[^'"]+)['"]/g))copy(relative(root,resolve(root,dirname(path),m[1])));
 }
-for(const p of ['tests/lib/cloth-fluid-sail-motion.mjs','tests/lib/cloth-sparse-wasm.mjs','tests/probes/cloth-material-wasm.mjs','tests/probes/cloth-material-wasm.c'])copy(p);
+for(const p of ['tests/lib/cloth-fluid-sail-motion.mjs','sim/cloth/cloth-sparse-wasm.mjs','sim/cloth/cloth-material-wasm.mjs','tests/probes/cloth-material-wasm.c'])copy(p);
 copy(relative(root,fileURLToPath(import.meta.url)));
 const fixtures=inputs.map(path=>{
  const b=readFileSync(path),r=JSON.parse(b),f=r.fixture;assert.equal(r.schema,'cloth-fluid-live-result-v1');assert.equal(r.steps.length,180);assert.equal(r.shownStep,180);assert.equal(f.dirty,false);assert(f.sheet&&f.sheetProof);
@@ -30,8 +30,8 @@ assert.equal(new Set(fixtures.map(f=>f.side)).size,2);
 const runner=String.raw`
 import assert from 'node:assert/strict';import {readFileSync,writeFileSync} from 'node:fs';import {pathToFileURL} from 'node:url';import {cpus} from 'node:os';
 const [source,input,materialWasm,version,out]=process.argv.slice(1),r=JSON.parse(readFileSync(input)),f=r.fixture;
-const {fluidSailMotion}=await import(pathToFileURL(source));const {loadSparseFactor}=await import(new URL('./cloth-sparse-wasm.mjs',pathToFileURL(source)));
-const {loadMaterialKernel}=await import(new URL('../probes/cloth-material-wasm.mjs',pathToFileURL(source)));
+const {fluidSailMotion}=await import(pathToFileURL(source));const {loadSparseFactor}=await import(new URL('../../sim/cloth/cloth-sparse-wasm.mjs',pathToFileURL(source)));
+const {loadMaterialKernel}=await import(new URL('../../sim/cloth/cloth-material-wasm.mjs',pathToFileURL(source)));
 const start=performance.now(),cpuBefore=process.cpuUsage(),factor=await loadSparseFactor(readFileSync(f.wasm.path));
 const materialKernel=version==='wasm'?await loadMaterialKernel(readFileSync(materialWasm)):undefined;
 assert.equal(typeof process.threadCpuUsage,'function','Нужен Node с CPU текущего потока');

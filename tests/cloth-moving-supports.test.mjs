@@ -1,11 +1,11 @@
 // Независимые движения, реакции и работа предписанных закреплений.
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {ImplicitEnergyMotion,IMPLICIT_TOLERANCES} from './lib/cloth-implicit-motion.mjs';
-import {EnergyMotion} from './lib/cloth-energy-motion.mjs';
-import {distance} from './cloth-compliance.mjs';
-import {materialSurface,gridTriangles,MODEL_MATERIAL} from './lib/cloth-material.mjs';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
+import {ImplicitEnergyMotion,IMPLICIT_TOLERANCES} from '../sim/cloth/cloth-implicit-motion.mjs';
+import {EnergyMotion} from '../sim/cloth/cloth-energy-motion.mjs';
+import {distance} from '../sim/cloth/cloth-compliance.mjs';
+import {materialSurface,gridTriangles,MODEL_MATERIAL} from '../sim/cloth/cloth-material.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 
 const args=process.argv.slice(2), backendArg=args.find(a=>a.startsWith('--linear-backend=')), wasmArg=args.find(a=>a.startsWith('--wasm='));
 if(args.some(a=>a!==backendArg && a!==wasmArg) || new Set(args).size!==args.length) throw new Error('Допустимы --linear-backend=способ и --wasm=путь');

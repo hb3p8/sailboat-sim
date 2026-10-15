@@ -6,8 +6,8 @@ import {execFileSync} from 'node:child_process';
 import {Boat} from '../sim/physics.js';
 import {dumpCore} from '../sim/trace.js';
 import {energyCloth,prescribedGennaker,gennakerPose,intermediatePose,gennakerBodyPack,localPoint,worldPoint} from '../sim/gennaker-energy.mjs';
-import {rotate3} from './lib/cloth-fluid-inertia.mjs';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
+import {rotate3} from '../sim/cloth/cloth-fluid-inertia.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 import {selectGennakerMaterial} from '../sim/gennaker-material.mjs';
 const pack=JSON.parse(readFileSync('out/export/physics.json')),
   factor=await loadSparseFactor(readFileSync('out/acceptance/cloth-sparse-20261002-simd.wasm')),

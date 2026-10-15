@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { supportBodyResponse } from '../tests/lib/cloth-support-body.mjs';
-import { integrateDensity } from '../tests/lib/cloth-shared-input.mjs';
+import { integrateDensity } from '../sim/cloth/cloth-shared-input.mjs';
 
 const [output,...inputs]=process.argv.slice(2);
 assert(output && inputs.length,'Нужны новый путь результата и сводки полных пакетов');
@@ -101,7 +101,7 @@ const summaries=inputs.map(path=>{
 const result={schema:1,createdAt:new Date().toISOString(),revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
   dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),
   toolSha256:hash(readFileSync(new URL(import.meta.url))),receiverSha256:hash(readFileSync('tests/lib/cloth-support-body.mjs')),
-  fieldIntegratorSha256:hash(readFileSync('tests/lib/cloth-shared-input.mjs')),physicsSha256:hash(physicsBytes),arithmeticRelative:relative,
+  fieldIntegratorSha256:hash(readFileSync('sim/cloth/cloth-shared-input.mjs')),physicsSha256:hash(physicsBytes),arithmeticRelative:relative,
   scope:'Известная масса и диагональная инерция, замороженные оси и ЦТ. Только ответ скорости и дискретная работа пакета; не движение Boat, работа живых креплений или приёмка G4.',
   body:{massKg,inertiaKgM2,velocityMS,angularVelocityRadS},summaries};
 writeFileSync(output,JSON.stringify(result,null,2)+'\n',{flag:'wx'});

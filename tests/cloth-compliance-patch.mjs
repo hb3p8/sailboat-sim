@@ -1,6 +1,6 @@
 // Модельная плоская панель: совместная работа нерастяжимых нитей,
 // сдвиговой энергии и углового изгиба. Не крой и не материал SV20.
-import { area, bend, distance, shear, solveConstraint } from './cloth-compliance.mjs';
+import { area, bend, distance, shear, solveConstraint } from '../sim/cloth/cloth-compliance.mjs';
 
 const opt = (name, fallback) => process.argv.find(s => s.startsWith(`--${name}=`))?.split('=')[1] ?? fallback;
 const n = Number(opt('n', '5'));

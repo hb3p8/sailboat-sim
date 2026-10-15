@@ -4,9 +4,9 @@ import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {browserMotion} from '../tests/lib/cloth-browser-motion.mjs';
-import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 import {observeSparseFactor} from '../tests/lib/cloth-worker-timing.mjs';
-import {IMPLICIT_TOLERANCES} from '../tests/lib/cloth-implicit-motion.mjs';
+import {IMPLICIT_TOLERANCES} from '../sim/cloth/cloth-implicit-motion.mjs';
 const args=process.argv.slice(2);
 assert(args.length===3 || (args.length===4 && args[3]==='--profile-worker'),
   'Нужны полный опыт движения угла, чистый снимок сборки, новый путь входа и необязательный --profile-worker');

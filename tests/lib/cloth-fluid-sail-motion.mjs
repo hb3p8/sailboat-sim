@@ -1,11 +1,11 @@
 // Общая постановка лабораторного паруса: CLI и браузер считают одно уравнение.
 // Давление/момент и необязательная верёвка; поле воздуха остаётся замороженным.
 import {FluidBodyEnergyMotion} from './cloth-fluid-body-motion.mjs';
-import {fluidInertia} from './cloth-fluid-inertia.mjs';
-import {materialSurface,gridTriangles,MODEL_MATERIAL} from './cloth-material.mjs';
-import {installSharedForces} from './cloth-shared-input.mjs';
-import {distance} from '../cloth-compliance.mjs';
-import {sv20SailMass} from './cloth-sv20-mass.mjs';
+import {fluidInertia} from '../../sim/cloth/cloth-fluid-inertia.mjs';
+import {materialSurface,gridTriangles,MODEL_MATERIAL} from '../../sim/cloth/cloth-material.mjs';
+import {installSharedForces} from '../../sim/cloth/cloth-shared-input.mjs';
+import {distance} from '../../sim/cloth/cloth-compliance.mjs';
+import {sv20SailMass} from '../../sim/cloth/cloth-sv20-mass.mjs';
 
 export function fluidSailMotion(r,bodyInput,wasmSparseFactor,{linearBackend='schur-wasm',hS=r.hS,allowRefinementGrid=false,sheet,materialKernel,assemblyKernel,sv20Pack}={}) {
   const n=r.rows*r.cols;

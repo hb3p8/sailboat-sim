@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
-import {sparsePattern} from './lib/cloth-sparse-solve.mjs';
+import {sparsePattern} from '../sim/cloth/cloth-sparse-solve.mjs';
 import {captureViews,prepareProbeLDL,compareProbeLDL,equalProbe} from './probes/cloth-sparse-browser-probe.mjs';
 const args=process.argv.slice(2);assert(args.length===1&&args[0].startsWith('--input='));
 const capture=JSON.parse(readFileSync(args[0].slice(8))),b=readFileSync(capture.binary.path),hash=x=>createHash('sha256').update(x).digest('hex');

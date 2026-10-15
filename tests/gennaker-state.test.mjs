@@ -7,7 +7,7 @@ import {Worker} from 'node:worker_threads';
 import {once} from 'node:events';
 import {Boat} from '../sim/physics.js';
 import {prescribedGennaker,gennakerPose} from '../sim/gennaker-energy.mjs';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 import {selectGennakerMaterial} from '../sim/gennaker-material.mjs';
 import {boatBodyRotation} from '../sim/axes.js';
 

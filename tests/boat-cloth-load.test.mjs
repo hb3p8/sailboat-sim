@@ -8,8 +8,8 @@ import {fileURLToPath} from 'node:url';
 import {Boat} from '../sim/physics.js';
 import {boatLoadPose,headingLoadToWorld,worldLoadAtOrigin,rigLoadWithoutGennaker,rigidBodyLoadForces} from './lib/boat-cloth-load.mjs';
 import {fourPointBody,RigidBodyEnergyMotion} from './lib/cloth-rigid-body-motion.mjs';
-import {IMPLICIT_TOLERANCES} from './lib/cloth-implicit-motion.mjs';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
+import {IMPLICIT_TOLERANCES} from '../sim/cloth/cloth-implicit-motion.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 import {stripLoadOf} from './lib/gennaker-observables.mjs';
 
 const args=process.argv.slice(2);

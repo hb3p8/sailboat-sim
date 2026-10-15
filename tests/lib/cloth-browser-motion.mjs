@@ -1,8 +1,8 @@
 // Браузерный повтор сохранённой постановки. Те же энергия, силы и решатель.
-import { materialSurface, gridTriangles, MODEL_MATERIAL } from './cloth-material.mjs';
-import { ImplicitEnergyMotion } from './cloth-implicit-motion.mjs';
-import { distance } from '../cloth-compliance.mjs';
-import { installSharedInput } from './cloth-shared-input.mjs';
+import { materialSurface, gridTriangles, MODEL_MATERIAL } from '../../sim/cloth/cloth-material.mjs';
+import { ImplicitEnergyMotion } from '../../sim/cloth/cloth-implicit-motion.mjs';
+import { distance } from '../../sim/cloth/cloth-compliance.mjs';
+import { installSharedInput } from '../../sim/cloth/cloth-shared-input.mjs';
 import { rigidSailMotion } from './cloth-rigid-sail-motion.mjs';
 
 export function browserMotion(recipe, wasmSparseFactor) {

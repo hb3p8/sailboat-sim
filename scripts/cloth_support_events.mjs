@@ -4,7 +4,7 @@ import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {browserMotion} from '../tests/lib/cloth-browser-motion.mjs';
-import {loadSparseFactor} from '../tests/lib/cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 const [input,output]=process.argv.slice(2);
 assert(input && output && process.argv.length===4,'Нужны сохранённое движение угла и новый путь событий');
 assert(!existsSync(output),'Сохранённые события нельзя перезаписывать');

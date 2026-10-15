@@ -1,6 +1,6 @@
 // Энергия проверяется по известной деформации, работе и силам, не по силуэту.
 import assert from 'node:assert/strict';
-import { gridTriangles, materialSurface, MODEL_MATERIAL } from './lib/cloth-material.mjs';
+import { gridTriangles, materialSurface, MODEL_MATERIAL } from '../sim/cloth/cloth-material.mjs';
 
 const close = (a, b, tol = 3e-10) => assert.ok(Math.abs(a - b) <= tol * Math.max(1, Math.abs(b)),
   `${a} != ${b}`);

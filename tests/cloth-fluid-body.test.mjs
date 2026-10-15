@@ -7,11 +7,11 @@ import {relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {cpus} from 'node:os';
 import {FluidBodyEnergyMotion} from './lib/cloth-fluid-body-motion.mjs';
-import {fluidInertia,denseSolve} from './lib/cloth-fluid-inertia.mjs';
-import {distance} from './cloth-compliance.mjs';
-import {materialSurface,gridTriangles,MODEL_MATERIAL} from './lib/cloth-material.mjs';
+import {fluidInertia,denseSolve} from '../sim/cloth/cloth-fluid-inertia.mjs';
+import {distance} from '../sim/cloth/cloth-compliance.mjs';
+import {materialSurface,gridTriangles,MODEL_MATERIAL} from '../sim/cloth/cloth-material.mjs';
 import {boatBodyRotation} from '../sim/axes.js';
-import {loadSparseFactor} from './lib/cloth-sparse-wasm.mjs';
+import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 import {loadAssemblyKernel} from './probes/cloth-assembly-wasm.mjs';
 
 const args=process.argv.slice(2);

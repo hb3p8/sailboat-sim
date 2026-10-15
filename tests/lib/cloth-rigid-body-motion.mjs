@@ -1,7 +1,7 @@
 // Проверочный общий расчёт свободного тела и ткани в физических координатах.
 // Четыре массы задают инерцию тела; связи не добавляют скрытой жёсткости.
-import {ImplicitEnergyMotion} from './cloth-implicit-motion.mjs';
-import {distance} from '../cloth-compliance.mjs';
+import {ImplicitEnergyMotion} from '../../sim/cloth/cloth-implicit-motion.mjs';
+import {distance} from '../../sim/cloth/cloth-compliance.mjs';
 const point=(p,i)=>Array.from(p.slice(3*i,3*i+3));
 const sub=(a,b)=>a.map((v,d)=>v-b[d]);
 const dot=(a,b)=>a.reduce((s,v,d)=>s+v*b[d],0);

@@ -2341,7 +2341,7 @@ let sessionWaterHeld=false;
 
 async function captureDump() {
   if(!liveGennaker)return dumpState();
-  return liveGennaker.capture(session=>Object.assign(dumpState(),{gennakerSession:session,inputState:captureSessionUI()}));
+  return liveGennaker.capture((session,replay)=>Object.assign(dumpState(),{gennakerSession:session,gennakerReplay:replay,inputState:captureSessionUI()}));
 }
 
 function dumpState() {
@@ -3733,6 +3733,16 @@ window.sv20ocean = async (n = 12) => {
 // copy(JSON.stringify(sv20dump()))
 window.sv20dump = dumpState;
 window.sv20snapshot = captureDump;
+// Точный повтор записанных входов. Операция заменяет текущую сессию;
+// обычные органы и GPU-вода не подмешиваются к шагам воспроизведения.
+window.sv20replay = async dump => {
+  if(!liveGennaker||!dump?.gennakerReplay)throw new Error('Нет записи новой ткани');
+  const applyInput=prepareSessionUI(dump.inputState);
+  const result=await liveGennaker.replay(dump.gennakerReplay);
+  applyInput();sessionWaterHeld=true;recorder=new Recorder(TRACE_SECONDS,HZ);
+  prev.x=boat.x;prev.y=boat.y;prev.psi=boat.psi;prev.phi=boat.phi;prev.zc=boat.zc;prev.th=boat.th;acc=0;
+  wake.clear();trackN=0;return result;
+};
 // Тайминги наружу — тем же способом, что и дамп состояния: на телефоне консоли
 // нет, а на настольной машине по ним удобно собирать замеры не глазами с экрана.
 //   copy(JSON.stringify(sv20perf()))

@@ -11,6 +11,9 @@ export function sessionDataEqual(a,b) {
 }
 const BODY_NUMBERS='x y psi u v r phi p_ t zc w th q hike rigRate waveZ waveSE waveSN windK shelter gustK chanRot shoalK sog'.split(' ');
 const BODY_VECTORS=['cur','curB','shoreN','chanAxis'];
+export function sessionBody(boat) {
+  return sessionNumbers(Object.fromEntries([...BODY_NUMBERS,...BODY_VECTORS,'rigSide','shoreM','aground'].map(k=>[k,boat[k]])));
+}
 export const SESSION_DERIVED=['gustG','planing','fetchField','fetchM','seaHs','wavesN','vertN'];
 const CONTROL_BOOL=['fetchOverride','mainUp','jibUp','gennakerUp','freeWake','wakeForces','localPressure'];
 const CONTROL_NULL=['jibSheet','jibTwist','jibDraft','rudderTarget'];
@@ -40,7 +43,7 @@ export function captureSessionModel(boat,adapterSnapshot) {
   const known=new Set([...BODY_NUMBERS,...BODY_VECTORS,...SESSION_DERIVED,'rigSide','shoreM','aground',
     'p','terrain','mass','o','wind','rig','buoy','telemetry','gennakerEnergy']);
   for(const k of Object.keys(boat))if(!known.has(k))fail('не описано поле лодки '+k);
-  const body=Object.fromEntries([...BODY_NUMBERS,...BODY_VECTORS,'rigSide','shoreM','aground'].map(k=>[k,boat[k]]));
+  const body=sessionBody(boat);
   const cl=boat.rig.cloth;
   return {local:sessionNumbers({body,derived:Object.fromEntries(SESSION_DERIVED.filter(k=>Object.hasOwn(boat,k)).map(k=>[k,boat[k]])),controls:boat.o,wind:boat.wind.o,
     cloth:cl?.energyGennaker?{pos:cl.pos,prev:cl.prev,prevDt:cl.prevDt}:null,
@@ -64,14 +67,7 @@ export function prepareSessionModel(boat,originalPack,fixture,model) {
   for(const k of BODY_VECTORS){fields(v.body[k],['x','y'],k);finite(v.body[k].x,k);finite(v.body[k].y,k);}
   if(v.body.t<0||typeof v.body.aground!=='boolean')fail('время/берег');
   for(const k of ['rigSide','shoreM'])if(v.body[k]!==null)finite(v.body[k],k);
-  const o=v.controls;fields(o,[...CONTROL_BOOL,...CONTROL_NULL,...CONTROL_NUMBER],'управление');
-  for(const k of CONTROL_NUMBER)finite(o[k],k);
-  for(const k of CONTROL_NULL)if(o[k]!==null)finite(o[k],k);
-  for(const k of CONTROL_BOOL)if(k!=='localPressure'||Object.hasOwn(o,k))if(typeof o[k]!=='boolean')fail(k);
-  if(o.localPressure||!Number.isSafeInteger(o.wakeSlice)||o.wakeSlice<1||o.wakeSlice>3||o.crewMass<0||o.windSpeed<0)fail('режим управления');
-  fields(v.wind,['speed','dir','gust','shift','gradient','z0','zRef'],'ветер');
-  for(const k of ['speed','dir','gust','shift','z0','zRef'])finite(v.wind[k],'ветер '+k);
-  if(typeof v.wind.gradient!=='boolean'||v.wind.z0<=0||v.wind.zRef<=v.wind.z0)fail('профиль ветра');
+  const o=v.controls;validateSessionInput(o,v.wind);
   if(o.gennakerUp!==!!fixture)fail('состояние генакера');
   if(fixture) {
     fields(v.cloth,['pos','prev','prevDt'],'ткань');vector(v.cloth.pos,297,'узлы');vector(v.cloth.prev,297,'история узлов');
@@ -91,6 +87,16 @@ export function prepareSessionModel(boat,originalPack,fixture,model) {
   candidate.telemetry=v.telemetry;
   if(candidate.telemetry)candidate.telemetry.strips=candidate.rig.stripState;
   return {boat:candidate,snapshot:v.accepted};
+}
+export function validateSessionInput(o,wind) {
+  fields(o,[...CONTROL_BOOL,...CONTROL_NULL,...CONTROL_NUMBER],'управление');
+  for(const k of CONTROL_NUMBER)finite(o[k],k);
+  for(const k of CONTROL_NULL)if(o[k]!==null)finite(o[k],k);
+  for(const k of CONTROL_BOOL)if(k!=='localPressure'||Object.hasOwn(o,k))if(typeof o[k]!=='boolean')fail(k);
+  if(o.localPressure||!Number.isSafeInteger(o.wakeSlice)||o.wakeSlice<1||o.wakeSlice>3||o.crewMass<0||o.windSpeed<0)fail('режим управления');
+  fields(wind,['speed','dir','gust','shift','gradient','z0','zRef'],'ветер');
+  for(const k of ['speed','dir','gust','shift','z0','zRef'])finite(wind[k],'ветер '+k);
+  if(typeof wind.gradient!=='boolean'||wind.z0<=0||wind.zRef<=wind.z0)fail('профиль ветра');
 }
 export function verifySessionSolver(model,solver) {
   const v=sessionNumbers(model.local,true),s=sessionNumbers(solver,true);

@@ -107,7 +107,9 @@ try {
   assert.equal(failedSim.performance().failure.attempts[0][0].accepted,false);
   failedUI.genup.checked=false;failedBoat.setGennaker(false);await delay(35);
   assert(failedSim.canAdvance(1/30,1/30),'После отказа UI должен прочитать уборку генакера');
-  failedSim.advance(1/30,()=>{},()=>{});assert.equal(failedSim.performance().steps,1);assert.equal(failedSim.performance().phase,'running');failedSim.restart();
+  failedSim.advance(1/30,()=>{},()=>{});assert.equal(failedSim.performance().steps,1);assert.equal(failedSim.performance().phase,'running');
+  const recoveredStart=performance.now();while(failedSim.busy&&performance.now()-recoveredStart<5000){failedSim.frame();await delay(1);}
+  assert.equal(failedSim.busy,false);failedSim.restart();
   console.log('Отказ настоящего Worker записан; уборка паруса через обычный UI возобновляет физику.');
   const waterBoat=new Boat(pack,null,{windSpeed:4,windDir:140*Math.PI/180,twist:8*Math.PI/180,crewMass:220}),
     waterUI=Object.fromEntries(['genpressure','wind','winddir','gensheet','genup','jibup','mainup'].map(k=>[k,element(k)])),

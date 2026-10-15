@@ -1,4 +1,4 @@
-// Проиграть дамп симулятора без браузера:
+// Проиграть дамп симулятора:
 //
 //     node scripts/replay.mjs a3f9c2               — по имени с сервера
 //     node scripts/replay.mjs дамп.json            — или путём к файлу
@@ -13,6 +13,9 @@
 // запись последних двадцати секунд по шагам физики.
 //
 // Скрипт делает две разные вещи, и обе нужны.
+// Для новой ткани действует отдельный точный повтор через обычный Chrome:
+// сервер и SV20_PLAYWRIGHT_MODULE должны быть доступны; --after запрещён.
+// Дальнейшее описание относится к прежней округлённой записи без Worker.
 //
 // Первая: берёт первый кадр записи, восстанавливает по нему лодку, подаёт
 // записанные положения руля и шкота — и сравнивает, что получилось, с тем, что
@@ -69,6 +72,17 @@ const b = dump.build || {};
 console.log('\nДамп от ' + (dump.saved || '?') + ', сборка ' +
   (b.commit || '?') + (b.dirty ? ' (с несохранёнными правками)' : '') +
   ', ветка ' + (b.branch || '?'));
+
+if(dump.gennakerSession) {
+  try {
+    if(!dump.gennakerReplay)throw new Error('Этот снимок сохраняет состояние, но не содержит истории новой ткани');
+    const {replayGennakerBrowser}=await import('./gennaker_replay_browser.mjs');
+    const origin=args.find(a=>a.startsWith('--origin='))?.slice(9);
+    const r=await replayGennakerBrowser(dump,{origin,after});
+    console.log(`Новая ткань: ${r.steps} шагов, ${r.startS.toFixed(3)}–${r.endS.toFixed(3)} с. Состояния шагов и полный конечный снимок совпали точно.`);
+  } catch(error){console.error('Повтор новой ткани отклонён: '+error.message);process.exit(1);}
+  process.exit(0);
+}
 
 const tr = dump.trace || {};
 const F = fieldIndex(tr.fields);

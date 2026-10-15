@@ -61,6 +61,19 @@ export class SmallStepsMotion extends EnergyMotion {
     }
     return energy;
   }
+  projectLocal(c,h,apply) {
+    const {C,grad}=c.value(this.pos),reduced=this.reduce(grad),scaled=c.alpha/(h*h);
+    if(!Number.isFinite(C)||grad.some(([i,g])=>!Number.isInteger(i)||i<0||i>=this.mass.length||!vector(g)))
+      throw new Error('Неконечное значение или градиент Small Steps');
+    let denominator=scaled;
+    for(const [i,g] of reduced)denominator+=this.w[i]*g.reduce((s,v)=>s+v*v,0);
+    if(!(denominator>0))return;
+    const raw=(-C-scaled*c.lambda)/denominator,next=c.unilateral?Math.min(0,c.lambda+raw):c.lambda+raw,delta=next-c.lambda;
+    c.lambda=next;apply(c,grad,reduced,delta);
+  }
+  projectConstraints(h,apply) {
+    for(const c of this.constraints)this.projectLocal(c,h,apply);
+  }
   advanceStep(force,h,passes,targets,old,prior) {
     if(this.board)for(const field of [old,prior])for(let j=0;j<this.board.nodes.length;j++)for(let d=0;d<3;d++) {
       const {head,end,nodes,fractions}=this.board,value=field[3*nodes[j]+d],expected=field[3*head+d]+fractions[j]*(field[3*end+d]-field[3*head+d]);
@@ -81,24 +94,28 @@ export class SmallStepsMotion extends EnergyMotion {
     const constraintImpulse=new Float64Array(this.pos.length),softImpulse=new Float64Array(this.pos.length);
     const projectionMoment=[0,0,0];
     for(const c of this.constraints)c.lambda=0;
-    for(const c of this.constraints) {
-      const {C,grad}=c.value(this.pos),reduced=this.reduce(grad),scaled=c.alpha/(h*h);
-      if(!Number.isFinite(C)||grad.some(([i,g])=>!Number.isInteger(i)||i<0||i>=this.mass.length||!vector(g)))
-        throw new Error('Неконечное значение или градиент Small Steps');
-      let denominator=scaled;
-      for(const [i,g] of reduced)denominator+=this.w[i]*g.reduce((s,v)=>s+v*v,0);
-      if(!(denominator>0))continue;
-      const raw=(-C-scaled*c.lambda)/denominator,next=c.unilateral?Math.min(0,c.lambda+raw):c.lambda+raw,delta=next-c.lambda;
-      c.lambda=next;
+    const record=(c,grad,delta)=>{
       // Импульс вычисляется с тем же градиентом, который двигал координаты,
       // до следующей поправки. Последний градиент шага его не заменяет.
       for(const [i,g] of grad) {
         const impulse=g.map(v=>v*delta/h),torque=cross(Array.from(this.pos.slice(3*i,3*i+3)),impulse);
         for(let d=0;d<3;d++){constraintImpulse[3*i+d]+=impulse[d];if(c.alpha>0)softImpulse[3*i+d]+=impulse[d];projectionMoment[d]+=torque[d];}
       }
+      this.observeProjection?.(c,grad,delta,h);
+    };
+    const apply=(c,grad,reduced,delta)=>{
+      record(c,grad,delta);
       for(const [i,g] of reduced)for(let d=0;d<3;d++)this.pos[3*i+d]+=this.w[i]*delta*g[d];
       if(this.board&&delta&&reduced.some(([i])=>i===this.board.end))this.reconstruct();
-    }
+    };
+    const applyBatch=changes=>{
+      // Все направления взяты в одной форме: моменты импульсов тоже
+      // записываются до одновременного перемещения связанных точек.
+      for(const {c,grad,delta} of changes)record(c,grad,delta);
+      for(const {reduced,delta} of changes)for(const [i,g] of reduced)for(let d=0;d<3;d++)this.pos[3*i+d]+=this.w[i]*delta*g[d];
+      this.reconstruct();
+    };
+    const projection=this.projectConstraints(h,apply,applyBatch);
     if(!Array.from(this.pos).every(Number.isFinite))throw new Error('Неконечное положение Small Steps');
     const velocity=this.pos.map((v,k)=>(v-old[k])/h),residual=new Float64Array(this.pos.length),support=new Float64Array(this.pos.length);
     let initialKineticJ=0,kineticJ=0,kineticIncrementJ=0,appliedWorkJ=0,projectionWorkJ=0;
@@ -133,7 +150,8 @@ export class SmallStepsMotion extends EnergyMotion {
     this.prev.set(old);this.prevDt=h;
     return {hS:h,passes:1,initialKineticJ,kineticJ,initialSoftEnergyJ,softEnergyJ,kineticIncrementJ,
       appliedWorkJ,projectionWorkJ,supportWorkJ,supportImpulseNs:support,supportMomentImpulseNms:supportMoment,
-      constraintImpulseNs:constraintImpulse,projectionMomentImpulseNms:projectionMoment,maxFreeImpulseResidualNs,
+      constraintImpulseNs:constraintImpulse,softConstraintImpulseNs:softImpulse,projection,
+      projectionMomentImpulseNms:projectionMoment,maxFreeImpulseResidualNs,
       linearMomentumResidualNs:momentumResidual,angularMomentumResidualNms:angularResidual,
       impulseWorkResidualJ:kineticJ-initialKineticJ+kineticIncrementJ-appliedWorkJ-projectionWorkJ-supportWorkJ,
       energyDefectJ:kineticJ-initialKineticJ+softEnergyJ-initialSoftEnergyJ-appliedWorkJ-supportWorkJ,

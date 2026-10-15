@@ -9,6 +9,7 @@ import {boatBodyRotation} from '../../sim/axes.js';
 import {energyCloth,prescribedGennaker,gennakerPose,gennakerBodyPack,worldPoint} from '../../sim/gennaker-energy.mjs';
 import {createGennakerStep} from '../../sim/gennaker-step.mjs';
 import {SmallStepsMotion} from '../../sim/cloth/cloth-small-steps.mjs';
+import {JointSmallStepsMotion,JOINT_HARD_LIMITS} from '../../sim/cloth/cloth-small-steps-joint.mjs';
 import {ImplicitEnergyMotion,IMPLICIT_TOLERANCES} from '../../sim/cloth/cloth-implicit-motion.mjs';
 import {distance} from '../../sim/cloth/cloth-compliance.mjs';
 import {loadSparseFactor} from '../../sim/cloth/cloth-sparse-wasm.mjs';
@@ -16,8 +17,11 @@ import {selectGennakerMaterial} from '../../sim/gennaker-material.mjs';
 import {cross3} from '../../sim/cloth/cloth-fluid-inertia.mjs';
 
 const args=Object.fromEntries(process.argv.slice(2).map(v=>v.slice(2).split('='))),out=args.out;
+const jointHard=Object.hasOwn(args,'joint-hard');
 assert(out&&!existsSync(out)&&!existsSync(out+'.probe.mjs'),'Нужен новый --out=путь.json и свободное имя снимка исходника');
-const spec={schema:'small-steps-s2-spec-v2',dtS:1/30,substeps:8,hS:1/240,
+const substeps=Number(args.substeps??8);assert([2,4,8].includes(substeps),'Допускаются 2, 4 или 8 подшагов');
+const spec={schema:'small-steps-s2-spec-v4',dtS:1/30,substeps,hS:1/(30*substeps),substepStudy:[2,4,8],
+  candidate:jointHard?'block-hard-xpbd-v1':'small-steps-impulse-v1',jointLimits:jointHard?JOINT_HARD_LIMITS:undefined,
   cases:args.case?[args.case]:['hold','sheet','takeup','supports'],windMPS:4,awaDeg:140,
   sheet:{startS:.5,easeEndS:1,returnStartS:1.5,returnEndS:2,deltaM:.25,rateMPS:.5,seconds:4},
   takeup:{startS:0,easeEndS:.04,returnStartS:.08,returnEndS:.12,deltaM:.02,rateMPS:.5,seconds:2},
@@ -32,6 +36,7 @@ const fixtures=['plus','minus'].map(s=>read(manifest.inputs[s].path));
 const selected=await selectGennakerMaterial(readFileSync(manifest.materialWasm.path),fixtures[0].recipe);
 const norm=a=>Math.hypot(...a),difference=(a,b)=>norm(a.map((v,d)=>v-b[d]));
 const maxAbs=a=>Math.max(0,...a.map(Math.abs));
+const cpu=()=>{const t=process.threadCpuUsage();return t.user+t.system;};
 const family=(m,j)=>j===m.constraints.length-1?'sheet':m.constraints[j].family??'hard';
 function supportWeight(m,i) {
   const j=m.board?.nodes.indexOf(i)??-1;
@@ -43,6 +48,7 @@ function contribution(m,grad,scale) {
   return force;
 }
 function families(m,h,gradients) {
+  if(m.usedFamilyForces)return m.usedFamilyForces;
   const result={};
   for(let j=0;j<m.constraints.length;j++) {
     const c=m.constraints[j],name=family(m,j),grad=gradients?gradients[j]:c.value(m.pos).grad;
@@ -61,6 +67,17 @@ class ObservedSmallSteps extends SmallStepsMotion {
     return a;
   }
 }
+class ObservedJointSteps extends JointSmallStepsMotion {
+  observeProjection(c,grad,delta,h) {
+    const j=this.constraintIds.get(c),name=family(this,j),f=contribution(this,grad,delta/(h*h)),sum=this.usedFamilyForces[name]??=[0,0,0];
+    for(let d=0;d<3;d++)sum[d]+=f[d];
+  }
+  advanceStep(...args) {
+    this.constraintIds??=new Map(this.constraints.map((c,j)=>[c,j]));this.usedFamilyForces={};
+    return super.advanceStep(...args);
+  }
+}
+const CandidateMotion=jointHard?ObservedJointSteps:ObservedSmallSteps;
 function state(m) {
   return {pos:Array.from(m.pos),prev:Array.from(m.prev),prevDt:m.prevDt,lambda:m.constraints.map(c=>c.lambda),
     lastMu:m.lastMu?Array.from(m.lastMu):null,supportMotionActive:m.supportMotionActive,
@@ -108,29 +125,35 @@ function observation(m,a,old,length,previousLength,pose,cg,frameOrigin,gradients
   for(const f of Object.values(parts))for(let d=0;d<3;d++)sum[d]+=f[d];
   const sheet=m.constraints.at(-1),tensionN=Math.max(0,-sheet.lambda/(h*h));
   return {...r,familyForceN:parts,externalAndInertiaN:base,decompositionResidualN:difference(sum,r.forceN),
-    tensionN,sheetGapM:sheet.value(m.pos).C,nominalSheetWorkJ:-tensionN*(length-previousLength),
+    tensionN,sheetImpulseForceN:norm(parts.sheet??[0,0,0]),sheetGapM:sheet.value(m.pos).C,nominalSheetWorkJ:-tensionN*(length-previousLength),
     hardLambda:m.constraints.filter(c=>c.alpha===0).map(c=>c.lambda),
     hardViolationM:a.maxHardViolationM,forceResidualN:a.maxForceResidualN??a.solver.maxForceResidualN,
     supportWorkJ:a.supportWorkJ,
     energyDefectJ:a.kineticJ-a.initialKineticJ+a.softEnergyJ-a.initialSoftEnergyJ-a.appliedWorkJ-a.supportWorkJ,
     workResidualJ:a.impulseWorkResidualJ??a.discreteBalanceResidualJ,
-    angularMomentumResidualNms:a.angularMomentumResidualNms};
+    angularMomentumResidualNms:a.angularMomentumResidualNms,freeImpulseResidualNs:a.maxFreeImpulseResidualNs,
+    linearMomentumResidualNs:a.linearMomentumResidualNs,projection:a.projection,hardGradientResidualN:a.maxHardGradientResidualN,
+    materialForceResidualN:a.materialForceResidualN,cpuMs:a.observedCpuMs};
 }
 function aggregate(parts) {
   const result={forceN:[0,0,0],momentNm:[0,0,0],sheetWorkJ:0,supportWorkJ:0,energyDefectJ:0,
-    maxTensionN:0,maxHardViolationM:0,maxForceResidualN:0,maxWorkResidualJ:0,maxDecompositionResidualN:0};
+    maxTensionN:0,maxHardViolationM:0,maxForceResidualN:0,maxWorkResidualJ:0,maxDecompositionResidualN:0,cpuMs:0};
   for(const p of parts) {
     for(const k of ['forceN','momentNm'])for(let d=0;d<3;d++)result[k][d]+=p[k][d]/parts.length;
     result.sheetWorkJ+=p.nominalSheetWorkJ;result.supportWorkJ+=p.supportWorkJ;result.energyDefectJ+=p.energyDefectJ;
+    result.cpuMs+=p.cpuMs??0;
     for(const [to,from] of [['maxTensionN','tensionN'],['maxHardViolationM','hardViolationM'],['maxForceResidualN','forceResidualN'],
       ['maxWorkResidualJ','workResidualJ'],['maxDecompositionResidualN','decompositionResidualN']])result[to]=Math.max(result[to],Math.abs(p[from]));
   }
   return result;
 }
-const report={schema:'small-steps-s2-probe-v3',spec,material:selected.material,node:process.version,results:[]};
+const report={schema:'small-steps-s2-probe-v4',spec,material:selected.material,node:process.version,results:[]};
 let fullLoad;
 try {
+  console.log('Выбранный кандидат: '+spec.candidate);
   for(const f of fixtures)for(const scenario of spec.cases) {
+    const result={side:f.side,scenario,frames:[]};report.results.push(result);
+    try {
     const b=new Boat(pack,null,{gennakerUp:true,mainUp:true,jibUp:false,localPressure:false}),r=f.recipe;
     b.o.windSpeed=spec.windMPS;b.o.windDir=(f.side==='plus'?1:-1)*spec.awaDeg*Math.PI/180;b.o.twist=8*Math.PI/180;b.o.crewMass=220;
     const body=gennakerBodyPack(pack,r);b.p=body.pack;b.mass=body.pack.mass.total_kg;b.rig.p=b.p;b.rig.cloth=energyCloth(r,pack);
@@ -138,12 +161,12 @@ try {
     const originalStep=calc.motion.step;let strictAudit;
     calc.motion.step=function(...values){const a=originalStep.apply(this,values);strictAudit=a;return a;};
     const prepared=createGennakerStep({boat:b,cloth:b.rig.cloth,snapshot:{targetPose:pose},dt:spec.dtS}).prepare();
-    const forceN=prepared.command.forceN,initial=state(calc.motion),m=makeMotion(ObservedSmallSteps,calc.motion,initial);
+    const forceN=prepared.command.forceN,initial=state(calc.motion),m=makeMotion(CandidateMotion,calc.motion,initial);
     fullLoad=new Float64Array(m.pos.length);fullLoad.set(forceN);
     for(let i=0;i<99;i++)fullLoad[3*i+2]-=calc.budget.dryNodalKg[i]*pack.environment.g;
     const supportLocal=new Map(Array.from(m.fixed,i=>[i,i===99?f.sheet.localM:r.positions.slice(3*i,3*i+3)]));
-    const result={side:f.side,scenario,frames:[],maxPositionErrorM:0,maxReactionErrorN:0,maxMomentErrorNm:0,maxTensionErrorN:0,
-      impulseErrorNs:[0,0,0],angularImpulseErrorNms:[0,0,0]};report.results.push(result);
+    Object.assign(result,{maxPositionErrorM:0,maxReactionErrorN:0,maxMomentErrorNm:0,maxTensionErrorN:0,
+      impulseErrorNs:[0,0,0],angularImpulseErrorNms:[0,0,0]});
     const seconds=scenario==='hold'?spec.holdSeconds:spec[scenario].seconds;
     let length=f.sheet.lengthM,peak;
     function commands(j,part) {
@@ -156,11 +179,15 @@ try {
       const before={strict:state(calc.motion),small:state(m),lengthM:length},strict=[],small=[],inputs=[];
       for(let k=0;k<spec.substeps;k++) {
         const c=commands(j,k),oldStrict=state(calc.motion),oldSmall=state(m);
+        result.lastAttempt={frame:j+1,part:k+1,command:c,initialSmall:oldSmall};
+        const strictCPU=cpu();
         const s=calc.step({forceN,targetPose:c.pose,sheetLengthM:c.requestedLengthM,hS:spec.hS});
+        strictAudit.observedCpuMs=(cpu()-strictCPU)/1000;
         // Обе ветви получают одну фактически применённую длину, включая
         // действующий ограничитель 0.5 м/с. Второго закона лебёдки здесь нет.
         m.constraints.at(-1).value=distance(f.sheet.node,99,s.lengthM,0,true).value;
-        const a=m.step(fullLoad,spec.hS,1,c.targets);
+        const smallCPU=cpu(),a=m.step(fullLoad,spec.hS,1,c.targets);a.observedCpuMs=(cpu()-smallCPU)/1000;
+        if(jointHard)assert.equal(a.projection?.method,'block-hard-xpbd-v1','Запрошенный совместный метод не выполнялся');
         // Наблюдатель захватил полный аудит; обычный фасад выдаёт сводку.
         strict.push({...s.audit,...observation(calc.motion,strictAudit,oldStrict,s.lengthM,length,c.pose,calc.budget.cgM,pose.originM)});
         small.push(observation(m,a,oldSmall,s.lengthM,length,c.pose,calc.budget.cgM,pose.originM,m.usedGradients));
@@ -181,7 +208,7 @@ try {
     // Непринятая приближённая форма не загружается обычным restore().
     // Создаётся отдельная численная задача с явно сохранённой начальной
     // невязкой; переход из неё — диагностическое исправление истории.
-    const sameSmall=makeMotion(ObservedSmallSteps,calc.motion,peak.before.small);
+    const sameSmall=makeMotion(CandidateMotion,calc.motion,peak.before.small);
     const strictFromSmall=makeMotion(ImplicitEnergyMotion,calc.motion,peak.before.small);
     const strictFromStrict=makeMotion(ImplicitEnergyMotion,calc.motion,peak.before.strict);
     for(const solver of [sameSmall,strictFromSmall,strictFromStrict])solver.constraints.at(-1).value=distance(f.sheet.node,99,peak.before.lengthM,0,true).value;
@@ -214,14 +241,19 @@ try {
         if(scenario==='takeup')assert(slackBeforeReturn&&catchPart>=0,'Короткий цикл не проверил выбор провиса');
       }
     }
-    result.complete=true;
+    result.complete=true;delete result.lastAttempt;
     console.log(`${f.side}, ${scenario}: форма ${(result.maxPositionErrorM*1000).toFixed(3)} мм, реакция ${result.maxReactionErrorN.toFixed(3)} Н, пик на кадре ${peak.frame}; повтор реакций точный.`);
+    } catch(error) {
+      result.complete=false;result.error=error.message;result.jointProjection=error.jointProjection;
+      if(!jointHard)throw error;
+      console.log(`${f.side}, ${scenario}: остановлен — ${error.message}`);
+    }
   }
-  report.complete=true;
+  report.complete=true;report.allCasesComplete=report.results.every(r=>r.complete);
 } catch(error){report.complete=false;report.error=error.message;throw error;}
 finally {
   report.revision=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
-  report.sources=Object.fromEntries(['tests/probes/cloth-small-steps-controls.mjs','sim/cloth/cloth-small-steps.mjs','sim/gennaker-energy.mjs',
+  report.sources=Object.fromEntries(['tests/probes/cloth-small-steps-controls.mjs','sim/cloth/cloth-small-steps.mjs','sim/cloth/cloth-small-steps-joint.mjs','sim/gennaker-energy.mjs',
     manifest.physics.path,manifest.inputs.plus.path,manifest.inputs.minus.path,manifest.wasm.path,manifest.materialWasm.path]
     .map(p=>[p,createHash('sha256').update(readFileSync(p)).digest('hex')]));
   report.probeSource=out+'.probe.mjs';writeFileSync(report.probeSource,readFileSync('tests/probes/cloth-small-steps-controls.mjs'),{flag:'wx'});

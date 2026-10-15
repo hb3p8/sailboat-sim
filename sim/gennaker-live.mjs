@@ -1,6 +1,6 @@
 // Обычная сцена и UI; новый генакер не создаёт вторую лодку.
-import {gennakerPose,worldPoint,localPoint,gennakerBodyPack,energyCloth,intermediatePose} from './gennaker-energy.mjs';
-import {rotate3} from './cloth/cloth-fluid-inertia.mjs';
+import {gennakerPose,worldPoint,gennakerBodyPack,energyCloth} from './gennaker-energy.mjs';
+import {createGennakerStep} from './gennaker-step.mjs';
 import {GennakerMetrics} from './gennaker-metrics.mjs';
 import {gennakerScenario,restoredGennakerScenario} from './gennaker-scenario.mjs';
 import {GENNAKER_SESSION_SCHEMA,SESSION_DERIVED,captureSessionModel,prepareSessionModel,verifySessionSolver,sessionDataEqual} from './gennaker-session.mjs';
@@ -24,7 +24,7 @@ async function runtimeHashes() {
     for(const {path,bytes,code} of loaded) {
       hashes[path]=await digest(bytes);
       // Замыкаем статические относительные импорты рабочего графа, включая
-      // материал/решатель из tests. Исследовательские динамические маршруты
+      // материал/решатель из sim/cloth. Исследовательские динамические маршруты
       // main.js в формат обычной сессии не входят; Worker — явный корень.
       const imports=code.matchAll(/^\s*(?:import|export)\s+(?:[^;]*?\s+from\s*)?['"]([^'"]+)['"]/gm);
       for(const [,relative] of imports)if(relative.startsWith('.')) {
@@ -123,14 +123,6 @@ export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false,
     continueAfterFrame=false;
     if(commandFrames){commandFrames.continued=renderFrame;commandFrames.continuedMs=performance.now();}
     worker?.continue();
-  }
-  function applySnapshot(result) {
-    const old=snapshot;snapshot=result;
-    for(let i=0;i<cloth.n;i++) {
-      cloth.pos.set(localPoint(result.targetPose,Array.from(result.positions.slice(3*i,3*i+3))),3*i);
-      cloth.prev.set(localPoint(old.targetPose,Array.from(old.positions.slice(3*i,3*i+3))),3*i);
-    }
-    cloth.prevDt=1/30;
   }
   async function capture() {
     if(failed)throw new Error('После отказа доступен диагностический дамп; полного принятого состояния нет');
@@ -235,43 +227,32 @@ export async function startGennakerSimulator({boat,ui,manifestPath,gameUI=false,
       const physicsStart=profile?performance.now():0;
       before();
       const input=recordingInput(boat,dt);
-      // Boat захватывает эти три значения до паузы на Worker. Последний
-      // ответ воды после ожидания может быть другим и вход шага не заменяет.
-      const waterInput={zM:boat.waveZ,slopeEast:boat.waveSE,slopeNorth:boat.waveSN};
-      const pose=gennakerPose(boat),work=boat.stepWithGennaker(dt,timings),part=work.next();
-      const beforeLoads=profile?performance.now():0;if(timings)timings.boatPrepareMs=beforeLoads-physicsStart;
-      if(part.done)throw new Error('Обычная лодка не запросила новую ткань');
-      cloth.forcesAt(boat,1/60,boat.rigSide,boat.p.environment);
-      const afterLoads=profile?performance.now():0;if(timings)timings.clothLoadsMs=afterLoads-beforeLoads;
-      const forceN=new Float64Array(cloth.frc.length);
-      for(let i=0;i<cloth.n;i++)forceN.set(rotate3(pose.orientation9,Array.from(cloth.frc.slice(3*i,3*i+3))),3*i);
-      // Два отсчёта креплений: от прошлого принятого положения до текущего.
-      // Поворот середины берётся из средних углов, а не средней матрицы.
-      const mid=intermediatePose(snapshot.targetPose,pose);
+      const step=createGennakerStep({boat,cloth,snapshot,dt,timings,physicsStart});
+      const {command,waterInput}=step.prepare(),{forceN}=command;
       commandFrames={sent:renderFrame};
-      const sendMs=performance.now();if(timings)timings.toWorldMs=sendMs-afterLoads;
-      const result=await request({type:'step',forceN,poses:[mid,pose],sheetLengthM:boat.o.genSheetLen});
+      const sendMs=performance.now();
+      const result=await step.calculate(request);
       const receivedMs=performance.now();
       if(timings){timings.workerRoundTripMs=receivedMs-sendMs;timings.workerComputeMs=result.partsMs.reduce((a,b)=>a+b,0);
         timings.waitAndTransferMs=Math.max(0,timings.workerRoundTripMs-timings.workerComputeMs);
         timings.frameWaitMs=commandFrames.continuedMs-commandFrames.progressMs;}
-      const c=Math.cos(boat.psi),s=Math.sin(boat.psi),heading=v=>[c*v[0]+s*v[1],-s*v[0]+c*v[1],v[2]];
-      const load={forceN:heading(result.forceN),momentNm:heading(result.momentNm),audit:result.audit};
-      applySnapshot(result);
+      const accepted=step.transfer(),{load}=accepted;snapshot=accepted.snapshot;
       const boatFinishStart=profile?performance.now():0;if(timings)timings.applySnapshotMs=boatFinishStart-receivedMs;
-      if(!work.next(load).done)throw new Error('Лодка запросила повторную нагрузку');
-      steps++;completedSteps++;lastBoatTime=boat.t;after();
-      if(timings){timings.boatFinishMs=performance.now()-boatFinishStart;timings.physicsWallMs=performance.now()-physicsStart;}
-      scenario?.accepted(boat);metrics.accepted(dt,profile?{modelTimeS:boat.t,gennakerUp:true,wakeSlice:boat.o.wakeSlice,
-        timings,attempts:result.attempts,frames:{...commandFrames,received:renderFrame}}:undefined);
-      if(scenario?.done)metrics.state('complete');
-      history.push({side:fixture.side,step:steps,timeS:boat.t,pose:gennakerPose(boat),controls:{...boat.o},forceN:load.forceN,momentNm:load.momentNm,
-        frames:{...commandFrames,received:renderFrame},partsMs:result.partsMs,audits:result.audits,lengthM:result.lengthM,nodalAirForceN:Array.from(forceN),waterInput});
-      if(history.length>300)history.shift();
-      // Для дампа сохраняется действительная принятая физика, а не DOM.
-      boat.gennakerEnergy={runtimeSha256,material,active:true,model:'boat-prescribed-energy-v1',grid:[11,9],steps,history,
-        source:manifest.inputs[fixture.side],state:{positions:Array.from(result.positions),velocity:Array.from(result.velocity),targetPose:result.targetPose,lengthM:result.lengthM},wallS:(performance.now()-wallStart)/1000};
-      display.textContent=`Новый генакер 11×9 · ${material.backend==='js'?'режим совместимости · ':''}${steps} шагов · ${boat.t.toFixed(2)} с модели · шкот ${result.lengthM.toFixed(3)} м · ${result.partsMs.reduce((a,b)=>a+b,0).toFixed(0)} мс расчёта`+(scenario?.done?' · Замер окончен':'');
+      step.finish();
+      step.publish(()=>{
+        steps++;completedSteps++;lastBoatTime=boat.t;after();
+        if(timings){timings.boatFinishMs=performance.now()-boatFinishStart;timings.physicsWallMs=performance.now()-physicsStart;}
+        scenario?.accepted(boat);metrics.accepted(dt,profile?{modelTimeS:boat.t,gennakerUp:true,wakeSlice:boat.o.wakeSlice,
+          timings,attempts:result.attempts,frames:{...commandFrames,received:renderFrame}}:undefined);
+        if(scenario?.done)metrics.state('complete');
+        history.push({side:fixture.side,step:steps,timeS:boat.t,pose:gennakerPose(boat),controls:{...boat.o},forceN:load.forceN,momentNm:load.momentNm,
+          frames:{...commandFrames,received:renderFrame},partsMs:result.partsMs,audits:result.audits,lengthM:result.lengthM,nodalAirForceN:Array.from(forceN),waterInput});
+        if(history.length>300)history.shift();
+        // Для дампа сохраняется действительная принятая физика, а не DOM.
+        boat.gennakerEnergy={runtimeSha256,material,active:true,model:'boat-prescribed-energy-v1',grid:[11,9],steps,history,
+          source:manifest.inputs[fixture.side],state:{positions:Array.from(result.positions),velocity:Array.from(result.velocity),targetPose:result.targetPose,lengthM:result.lengthM},wallS:(performance.now()-wallStart)/1000};
+        display.textContent=`Новый генакер 11×9 · ${material.backend==='js'?'режим совместимости · ':''}${steps} шагов · ${boat.t.toFixed(2)} с модели · шкот ${result.lengthM.toFixed(3)} м · ${result.partsMs.reduce((a,b)=>a+b,0).toFixed(0)} мс расчёта`+(scenario?.done?' · Замер окончен':'');
+      });
       if(!replayInput)await checkpoint(input);
     } catch(error) {
       failed=true;failure={message:error.message,timeS:boat.t,attempts:error.attempts,timings};metrics.state('failed');display.textContent='Новая ткань остановлена: '+error.message+'. Уберите и поднимите генакер для нового запуска.';

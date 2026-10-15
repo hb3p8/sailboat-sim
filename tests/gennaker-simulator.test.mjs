@@ -5,8 +5,8 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {Boat} from '../sim/physics.js';
 import {applyDump} from '../sim/trace.js';
-import {energyCloth,prescribedGennaker,gennakerPose,intermediatePose,gennakerBodyPack,localPoint,worldPoint} from '../sim/gennaker-energy.mjs';
-import {rotate3} from '../sim/cloth/cloth-fluid-inertia.mjs';
+import {energyCloth,prescribedGennaker,gennakerPose,gennakerBodyPack,worldPoint} from '../sim/gennaker-energy.mjs';
+import {createGennakerStep} from '../sim/gennaker-step.mjs';
 import {loadSparseFactor} from '../sim/cloth/cloth-sparse-wasm.mjs';
 import {selectGennakerMaterial} from '../sim/gennaker-material.mjs';
 const pack=JSON.parse(readFileSync('out/export/physics.json'));
@@ -30,36 +30,32 @@ for(const side of ['plus','minus'])for(const wind of [4,6])for(const course of (
   assert(Math.abs(b.mass+body.budget.audit.drySailKg-pack.mass.total_kg)<1e-10);
   const c=energyCloth(f.recipe,pack);b.rig.cloth=c;
   const calc=prescribedGennaker(f,pack,gennakerPose(b),factor,material);
-  let priorPose=gennakerPose(b),priorWorld=Float64Array.from(Array.from({length:c.n},(_,i)=>worldPoint(priorPose,Array.from(c.pos.slice(3*i,3*i+3)))).flat()),maxForce=0,maxLength=0,maxWorkRatio=0;
+  const pose=gennakerPose(b);
+  let snapshot={targetPose:pose,positions:Float64Array.from(Array.from({length:c.n},(_,i)=>worldPoint(pose,Array.from(c.pos.slice(3*i,3*i+3)))).flat())},maxForce=0,maxLength=0,maxWorkRatio=0;
   const samples=[],physicalHash=createHash('sha256'),start=performance.now();
   let step=0,resumed;
   try {for(;step<count;step++) {
     b.o.rudderTarget=(step<20?0:side==='plus'?4:-4)*Math.PI/180;
     b.o.genSheetLen=calc.minLengthM+(step>=15&&step<40?.25:0);
-    const pose=gennakerPose(b),work=b.stepWithGennaker(1/30),part=work.next();assert(!part.done);
-    c.forcesAt(b,1/60,b.rigSide,b.p.environment);
-    const forceN=new Float64Array(c.frc.length);
-    for(let i=0;i<c.n;i++)forceN.set(rotate3(pose.orientation9,Array.from(c.frc.slice(3*i,3*i+3))),3*i);
+    const work=createGennakerStep({boat:b,cloth:c,snapshot,dt:1/30}),{command}=work.prepare();
     if(step===Math.floor(count/2)) {
-      resumed=prescribedGennaker(f,pack,pose,factor,material);
+      resumed=prescribedGennaker(f,pack,command.poses[1],factor,material);
       resumed.restore(JSON.parse(JSON.stringify(calc.snapshot())));
     }
-    const halves=[intermediatePose(priorPose,pose),pose].map(targetPose=>{
-      const command={forceN,targetPose,sheetLengthM:b.o.genSheetLen},expected=calc.step(command);
-      if(resumed)assert.deepEqual(resumed.step(command),expected);
-      return expected;
+    let halves;
+    const result=await work.calculate(({forceN,poses,sheetLengthM})=>{
+      halves=poses.map(targetPose=>{
+        const command={forceN,targetPose,sheetLengthM},expected=calc.step(command);
+        if(resumed)assert.deepEqual(resumed.step(command),expected);
+        return expected;
+      });
+      return {...halves[1],forceN:halves[1].forceN.map((v,d)=>(v+halves[0].forceN[d])/2),
+        momentNm:halves[1].momentNm.map((v,d)=>(v+halves[0].momentNm[d])/2)};
     });
-    const result=halves[1],co=Math.cos(b.psi),si=Math.sin(b.psi),heading=v=>[co*v[0]+si*v[1],-si*v[0]+co*v[1],v[2]];
-    const load={forceN:heading(result.forceN.map((v,d)=>(v+halves[0].forceN[d])/2)),
-      momentNm:heading(result.momentNm.map((v,d)=>(v+halves[0].momentNm[d])/2)),audit:result.audit};
     // Сумма остальных парусов сохраняется при замене генакера, включая pitch.
-    const other=structuredClone(part.value.sail.bySail.slice(0,2));
-    for(let i=0;i<c.n;i++) {
-      c.pos.set(localPoint(pose,Array.from(result.positions.slice(3*i,3*i+3))),3*i);
-      c.prev.set(localPoint(priorPose,Array.from(priorWorld.slice(3*i,3*i+3))),3*i);
-    }
-    c.prevDt=1/30;priorPose=pose;priorWorld=result.positions;
-    assert(work.next(load).done);
+    const other=structuredClone(b.rig.sailOut.bySail.slice(0,2));
+    const accepted=work.transfer(),{load}=accepted;snapshot=accepted.snapshot;
+    work.finish();work.publish(()=>{});assert.equal(work.phase,'complete');
     const sail=b.rig.sailOut;
     for(let d=0;d<3;d++) {
       assert(Math.abs(sail[['fx','fy','fz'][d]]-other.reduce((s,p)=>s+p.forceN[d],load.forceN[d]))<1e-9);
@@ -87,4 +83,4 @@ for(const side of ['plus','minus'])for(const wind of [4,6])for(const course of (
   console.log(`Борт ${side==='plus'?'+':'−'}, ${course==='broad'?'полный курс':'более острый курс'}, ветер ${wind}: ${count} шагов, ${result.wallMs.toFixed(0)} мс; сила ${maxForce}, длина ${maxLength}`);
 }
 if(out)writeFileSync(out,JSON.stringify({schema:'gennaker-simulator-check-v1',phase:'complete',model:'boat-prescribed-energy-v1',material:selected.material,revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),dirty:Boolean(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()),
-  sources:Object.fromEntries(['sim/gennaker-energy.mjs','sim/gennaker-live.mjs','sim/gennaker-energy-worker.mjs','sim/gennaker-material.mjs','sim/cloth/cloth-material-wasm.mjs','sim/cloth/cloth-material-engine-check.mjs','sim/physics.js','tests/gennaker-simulator.test.mjs'].map(p=>[p,createHash('sha256').update(readFileSync(p)).digest('hex')])),results},null,2)+'\n',{flag:'wx'});
+  sources:Object.fromEntries(['sim/gennaker-step.mjs','sim/gennaker-energy.mjs','sim/gennaker-live.mjs','sim/gennaker-energy-worker.mjs','sim/gennaker-material.mjs','sim/cloth/cloth-material-wasm.mjs','sim/cloth/cloth-material-engine-check.mjs','sim/physics.js','tests/gennaker-simulator.test.mjs'].map(p=>[p,createHash('sha256').update(readFileSync(p)).digest('hex')])),results},null,2)+'\n',{flag:'wx'});
